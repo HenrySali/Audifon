@@ -1,0 +1,159 @@
+/// @file equalizer.h
+/// @brief EQ paramétrico de 12 bandas con filtros biquad peaking.
+///
+/// Frecuencias: 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+/// Fórmulas de coeficientes: Audio EQ Cookbook (peaking EQ).
+/// ÚNICA etapa del pipeline que amplifica la señal.
+///
+/// Diseño thread-safe:
+/// - Las ganancias se actualizan atómicamente desde el hilo de UI.
+/// - Los coeficientes se recalculan en el hilo de audio al detectar cambio.
+/// - No se usan locks — operación completamente lock-free.
+
+#ifndef HEARING_AID_EQUALIZER_H
+#define HEARING_AID_EQUALIZER_H
+
+#include <atomic>
+#include <cmath>
+#include <cstring>
+
+/// Número de bandas del ecualizador
+static constexpr int kEqBandCount = 12;
+
+/// Frecuencias centrales de las 12 bandas (Hz)
+static constexpr float kEqFrequencies[kEqBandCount] = {
+    250.0f, 500.0f, 750.0f, 1000.0f, 1500.0f, 2000.0f,
+    2500.0f, 3000.0f, 3500.0f, 4000.0f, 6000.0f, 8000.0f
+};
+
+/// Factores Q por banda — ligeramente más anchos para frecuencias bajas,
+/// moderados (~1.4) para la mayoría de bandas.
+static constexpr float kEqQFactors[kEqBandCount] = {
+    1.0f,   // 250 Hz  — ancho para cubrir rango bajo
+    1.2f,   // 500 Hz  — moderadamente ancho
+    1.3f,   // 750 Hz  — transición
+    1.4f,   // 1000 Hz — estándar
+    1.4f,   // 1500 Hz — estándar
+    1.4f,   // 2000 Hz — estándar
+    1.4f,   // 2500 Hz — estándar
+    1.4f,   // 3000 Hz — estándar
+    1.4f,   // 3500 Hz — estándar
+    1.4f,   // 4000 Hz — estándar
+    1.5f,   // 6000 Hz — ligeramente más estrecho
+    1.5f    // 8000 Hz — ligeramente más estrecho (cerca de Nyquist)
+};
+
+/// Coeficientes normalizados de un filtro biquad (Direct Form I).
+/// Todos los coeficientes están normalizados por a0 (a0 = 1.0 implícito).
+struct BiquadCoeffs {
+    float b0 = 1.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+    float a1 = 0.0f;  ///< Nota: signo negado en la fórmula de diferencia
+    float a2 = 0.0f;
+};
+
+/// Estado interno de un filtro biquad (Direct Form I).
+/// Almacena las últimas 2 muestras de entrada y salida.
+struct BiquadState {
+    float x1 = 0.0f;  ///< x[n-1]
+    float x2 = 0.0f;  ///< x[n-2]
+    float y1 = 0.0f;  ///< y[n-1]
+    float y2 = 0.0f;  ///< y[n-2]
+
+    /// Resetea el estado del filtro a cero.
+    void reset() {
+        x1 = x2 = y1 = y2 = 0.0f;
+    }
+};
+
+/// Ecualizador paramétrico de 12 bandas con filtros biquad peaking.
+///
+/// Rango de ganancias: [0, 50] dB por banda.
+/// ÚNICA etapa del pipeline que amplifica la señal.
+///
+/// Uso:
+/// @code
+///   Equalizer eq;
+///   eq.init(16000); // sample rate
+///   float gains[12] = {0, 0, 0, 10, 15, 20, 22, 25, 27, 30, 30, 25};
+///   eq.setGains(gains);
+///   eq.process(buffer, 64);
+/// @endcode
+class Equalizer {
+public:
+    Equalizer();
+    ~Equalizer() = default;
+
+    /// Inicializa el ecualizador con la frecuencia de muestreo dada.
+    /// Debe llamarse antes de process().
+    /// @param sampleRate Frecuencia de muestreo en Hz (típicamente 16000)
+    void init(int sampleRate);
+
+    /// Procesa un bloque de audio aplicando ecualización in-place.
+    /// Aplica los 12 filtros biquad peaking en serie.
+    /// Bandas con ganancia = 0 dB se saltan (optimización).
+    /// @param buffer Puntero al buffer de audio float32 [-1.0, +1.0]
+    /// @param blockSize Número de muestras en el buffer
+    void process(float* buffer, int blockSize);
+
+    /// Actualiza las ganancias de las 12 bandas (en dB, rango [0, 50]).
+    /// Thread-safe: puede llamarse desde el hilo de UI mientras el hilo
+    /// de audio procesa. Los coeficientes se recalculan en el próximo
+    /// llamado a process().
+    /// @param gains Array de 12 valores de ganancia en dB
+    void setGains(const float gains[kEqBandCount]);
+
+    /// Obtiene la ganancia actual de una banda específica.
+    /// @param band Índice de banda [0, 11]
+    /// @return Ganancia en dB, o 0.0 si el índice es inválido
+    float getGain(int band) const;
+
+private:
+    /// Calcula coeficientes biquad peaking EQ usando Audio EQ Cookbook.
+    ///
+    /// Fórmula (Robert Bristow-Johnson):
+    ///   A  = 10^(dBgain/40)
+    ///   w0 = 2*pi*f0/Fs
+    ///   alpha = sin(w0)/(2*Q)
+    ///   b0 =  1 + alpha*A
+    ///   b1 = -2*cos(w0)
+    ///   b2 =  1 - alpha*A
+    ///   a0 =  1 + alpha/A
+    ///   a1 = -2*cos(w0)
+    ///   a2 =  1 - alpha/A
+    ///   (normalizar dividiendo todo por a0)
+    ///
+    /// @param frequencyHz Frecuencia central del filtro (Hz)
+    /// @param gainDb Ganancia en dB (0 = pass-through)
+    /// @param q Factor Q del filtro
+    /// @return Coeficientes normalizados del biquad
+    BiquadCoeffs computePeakingCoeffs(float frequencyHz, float gainDb, float q) const;
+
+    /// Recalcula coeficientes para todas las bandas que cambiaron.
+    void updateCoefficients();
+
+    /// Procesa una muestra a través de un filtro biquad (Direct Form I).
+    /// @param sample Muestra de entrada
+    /// @param coeffs Coeficientes del filtro
+    /// @param state Estado del filtro (modificado in-place)
+    /// @return Muestra de salida filtrada
+    static float processBiquadSample(float sample, const BiquadCoeffs& coeffs,
+                                     BiquadState& state);
+
+    // --- Configuración ---
+    int sampleRate_ = 16000;
+
+    // --- Ganancias atómicas (actualizables desde hilo de UI) ---
+    std::atomic<float> gains_[kEqBandCount];
+
+    // --- Coeficientes y estado (solo accedidos desde hilo de audio) ---
+    BiquadCoeffs coeffs_[kEqBandCount];   ///< Coeficientes actuales por banda
+    BiquadState states_[kEqBandCount];    ///< Estado de filtro por banda
+    float appliedGains_[kEqBandCount];    ///< Ganancias con las que se calcularon los coeficientes
+
+    // --- Flag de cambio pendiente ---
+    std::atomic<bool> gainsChanged_{false};
+};
+
+#endif // HEARING_AID_EQUALIZER_H

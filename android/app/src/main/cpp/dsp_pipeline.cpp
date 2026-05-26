@@ -1,0 +1,169 @@
+/// @file dsp_pipeline.cpp
+/// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
+///
+/// Pipeline: NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+///
+/// Reglas de oro:
+/// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa.
+/// - Medir nivel PRE-EQ para decisiones de WDRC.
+/// - MPO es la última etapa — red de seguridad absoluta.
+/// - Silencio debe producir silencio (expansión activa).
+
+#include "dsp_pipeline.h"
+
+#include <cmath>
+#include <algorithm>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constantes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Piso de nivel para evitar log(0). Equivale a ~-100 dBFS.
+static constexpr float kLevelFloor = 1e-10f;
+
+/// Nivel mínimo reportable en dB SPL (para señales en silencio).
+static constexpr float kMinLevelDbSpl = 0.0f;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constructor / Destructor
+// ─────────────────────────────────────────────────────────────────────────────
+
+DspPipeline::DspPipeline() = default;
+DspPipeline::~DspPipeline() = default;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inicialización
+// ─────────────────────────────────────────────────────────────────────────────
+
+void DspPipeline::init(const AudioConfig& config) {
+    // Configurar offset de calibración SPL
+    splOffset_.store(config.splOffset, std::memory_order_relaxed);
+
+    // Inicializar EQ con sample rate
+    eq_.init(config.sampleRate);
+
+    // Inicializar WDRC con sample rate (para coeficientes attack/release correctos)
+    wdrc_.init(config.sampleRate);
+
+    // Inicializar MPO con sample rate y threshold
+    mpo_.init(config.sampleRate);
+    mpo_.setThreshold(config.mpoThresholdDbSpl, config.splOffset);
+
+    // Volumen inicial: 0 dB (ganancia unitaria)
+    volumeDb_.store(0.0f, std::memory_order_relaxed);
+    volumeLinear_.store(1.0f, std::memory_order_relaxed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Procesamiento principal
+// ─────────────────────────────────────────────────────────────────────────────
+
+void DspPipeline::processBlock(float* buffer, int blockSize) {
+    if (buffer == nullptr || blockSize <= 0) {
+        return;
+    }
+
+    // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
+    nr_.process(buffer, blockSize);
+
+    // ─── 2. Medir nivel PRE-EQ (para WDRC) ──────────────────────────────
+    // Este nivel refleja la señal REAL de entrada, sin amplificación del EQ.
+    // El WDRC usa este valor para decidir en qué región operar.
+    float inputLevelDb = measureRmsDb(buffer, blockSize);
+    lastInputLevelDb_.store(inputLevelDb, std::memory_order_relaxed);
+
+    // ─── 3. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
+    eq_.process(buffer, blockSize);
+
+    // ─── 4. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
+    // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
+    // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
+    // dispare compresión innecesaria.
+    wdrc_.process(buffer, blockSize, inputLevelDb);
+
+    // ─── 5. Volume master ───────────────────────────────────────────────
+    // Rango: -20 a +10 dB. Puede amplificar hasta +10 dB (3.16×).
+    float volLinear = volumeLinear_.load(std::memory_order_relaxed);
+    applyVolume(buffer, blockSize, volLinear);
+
+    // ─── 6. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
+    // Red de seguridad absoluta. Garantiza que ninguna muestra excede
+    // el threshold. Opera muestra-por-muestra, no block-rate.
+    mpo_.process(buffer, blockSize);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Actualización de parámetros (thread-safe, lock-free)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void DspPipeline::setEqGains(const float gains[12]) {
+    eq_.setGains(gains);
+}
+
+void DspPipeline::setVolume(float volumeDb) {
+    // Clamp al rango válido [-20, +10] dB
+    volumeDb = std::max(-20.0f, std::min(10.0f, volumeDb));
+    volumeDb_.store(volumeDb, std::memory_order_relaxed);
+
+    // Pre-calcular factor lineal: 10^(dB/20)
+    float linear = std::pow(10.0f, volumeDb / 20.0f);
+    volumeLinear_.store(linear, std::memory_order_relaxed);
+}
+
+void DspPipeline::setWdrcParams(const WdrcParams& params) {
+    wdrc_.setExpansionKnee(params.expansionKnee);
+    wdrc_.setExpansionRatio(params.expansionRatio);
+    wdrc_.setCompressionKnee(params.compressionKnee);
+    wdrc_.setCompressionRatio(params.compressionRatio);
+    wdrc_.setAttackMs(params.attackMs);
+    wdrc_.setReleaseMs(params.releaseMs);
+}
+
+void DspPipeline::setNrLevel(int level) {
+    // Clamp al rango válido [0, 3]
+    level = std::max(0, std::min(3, level));
+    nr_.setLevel(level);
+}
+
+void DspPipeline::setSplOffset(float offset) {
+    splOffset_.store(offset, std::memory_order_relaxed);
+    // Actualizar threshold del MPO con el nuevo offset
+    // (el threshold en dB SPL no cambia, pero su equivalente lineal sí)
+    mpo_.setThreshold(100.0f, offset);
+}
+
+float DspPipeline::getLastInputLevelDb() const {
+    return lastInputLevelDb_.load(std::memory_order_relaxed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Funciones internas
+// ─────────────────────────────────────────────────────────────────────────────
+
+float DspPipeline::measureRmsDb(const float* buffer, int blockSize) const {
+    // Calcular RMS (Root Mean Square) del buffer
+    float sumSquares = 0.0f;
+    for (int i = 0; i < blockSize; ++i) {
+        sumSquares += buffer[i] * buffer[i];
+    }
+    float rms = std::sqrt(sumSquares / static_cast<float>(blockSize));
+
+    // Evitar log(0)
+    if (rms < kLevelFloor) {
+        return kMinLevelDbSpl;
+    }
+
+    // Convertir a dBFS y luego a dB SPL usando el offset de calibración
+    float rmsDbFs = 20.0f * std::log10(rms);
+    float offset = splOffset_.load(std::memory_order_relaxed);
+    float levelDbSpl = rmsDbFs + offset;
+
+    // No reportar niveles negativos
+    return std::max(kMinLevelDbSpl, levelDbSpl);
+}
+
+void DspPipeline::applyVolume(float* buffer, int blockSize, float volumeLinear) {
+    for (int i = 0; i < blockSize; ++i) {
+        buffer[i] *= volumeLinear;
+    }
+}
