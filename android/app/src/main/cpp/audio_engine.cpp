@@ -427,13 +427,14 @@ bool AudioEngine::initOpenSLES() {
             return false;
         }
 
-        // Configurar preset de grabación para baja latencia
+        // Configurar preset de grabación para usar micrófono del celular
         SLAndroidConfigurationItf recConfig;
         result = (*recorderObject_)->GetInterface(
             recorderObject_, SL_IID_ANDROIDCONFIGURATION, &recConfig);
         if (result == SL_RESULT_SUCCESS) {
-            // VOICE_COMMUNICATION activa la ruta de baja latencia del HAL
-            SLint32 streamType = SL_ANDROID_RECORDING_PRESET_VOICE_COMMUNICATION;
+            // VOICE_RECOGNITION usa el mic principal del celular (no el del BT)
+            // y desactiva el procesamiento de audio del sistema (AGC, NS, EC)
+            SLint32 streamType = SL_ANDROID_RECORDING_PRESET_VOICE_RECOGNITION;
             (*recConfig)->SetConfiguration(
                 recConfig,
                 SL_ANDROID_KEY_RECORDING_PRESET,
@@ -531,12 +532,12 @@ bool AudioEngine::initOpenSLES() {
             return false;
         }
 
-        // Configurar stream type para comunicación (baja latencia)
+        // Configurar stream type para media (salida por A2DP a auriculares BT)
         SLAndroidConfigurationItf playerConfig;
         result = (*playerObject_)->GetInterface(
             playerObject_, SL_IID_ANDROIDCONFIGURATION, &playerConfig);
         if (result == SL_RESULT_SUCCESS) {
-            SLint32 streamType = SL_ANDROID_STREAM_VOICE;
+            SLint32 streamType = SL_ANDROID_STREAM_MEDIA;
             (*playerConfig)->SetConfiguration(
                 playerConfig,
                 SL_ANDROID_KEY_STREAM_TYPE,
