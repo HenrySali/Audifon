@@ -100,6 +100,7 @@ oboe::Result AudioEngine::openOutputStream() {
     builder.setSharingMode(oboe::SharingMode::Exclusive);
     builder.setUsage(oboe::Usage::Media);
     builder.setAudioApi(oboe::AudioApi::Unspecified);
+    builder.setDataCallback(this);
     builder.setErrorCallback(this);
 
     oboe::Result result = builder.openStream(outputStream_);
