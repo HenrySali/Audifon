@@ -47,15 +47,15 @@ AudioEngine::~AudioEngine() {
 oboe::Result AudioEngine::openInputStream() {
     oboe::AudioStreamBuilder builder;
 
-    builder.setDirection(oboe::Direction::Input)
-           .setDeviceId(config_.builtInMicDeviceId)
-           .setSampleRate(config_.sampleRate)
-           .setChannelCount(1)
-           .setFormat(oboe::AudioFormat::Float)
-           .setPerformanceMode(oboe::PerformanceMode::LowLatency)
-           .setSharingMode(oboe::SharingMode::Exclusive)
-           .setAudioApi(oboe::AudioApi::Unspecified)
-           .setErrorCallback(this);
+    builder.setDirection(oboe::Direction::Input);
+    builder.setDeviceId(config_.builtInMicDeviceId);
+    builder.setSampleRate(config_.sampleRate);
+    builder.setChannelCount(1);
+    builder.setFormat(oboe::AudioFormat::Float);
+    builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+    builder.setSharingMode(oboe::SharingMode::Exclusive);
+    builder.setAudioApi(oboe::AudioApi::Unspecified);
+    builder.setErrorCallback(this);
 
     // Use VoicePerformance on API 29+, fallback to Generic on older devices
     if (android_get_device_api_level() >= 29) {
@@ -88,15 +88,15 @@ oboe::Result AudioEngine::openOutputStream() {
 
     // Configure output stream — NO setDeviceId() so system routes to default
     // (A2DP when Bluetooth headphones are connected)
-    builder.setDirection(oboe::Direction::Output)
-           .setSampleRate(config_.sampleRate)
-           .setChannelCount(1)
-           .setFormat(oboe::AudioFormat::Float)
-           .setPerformanceMode(oboe::PerformanceMode::LowLatency)
-           .setSharingMode(oboe::SharingMode::Exclusive)
-           .setUsage(oboe::Usage::Media)
-           .setAudioApi(oboe::AudioApi::Unspecified)
-           .setErrorCallback(this);
+    builder.setDirection(oboe::Direction::Output);
+    builder.setSampleRate(config_.sampleRate);
+    builder.setChannelCount(1);
+    builder.setFormat(oboe::AudioFormat::Float);
+    builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+    builder.setSharingMode(oboe::SharingMode::Exclusive);
+    builder.setUsage(oboe::Usage::Media);
+    builder.setAudioApi(oboe::AudioApi::Unspecified);
+    builder.setErrorCallback(this);
 
     oboe::Result result = builder.openStream(outputStream_);
 
