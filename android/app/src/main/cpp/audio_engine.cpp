@@ -72,10 +72,11 @@ oboe::Result AudioEngine::openInputStream() {
     oboe::Result result = builder.openStream(inputStream_);
 
     if (result == oboe::Result::OK) {
-        LOGI("Input stream opened — API: %s, sampleRate: %d, sharingMode: %s",
+        LOGI("Input stream opened — API: %s, sampleRate: %d, sharingMode: %s, deviceId: %d",
              oboe::convertToText(inputStream_->getAudioApi()),
              inputStream_->getSampleRate(),
-             oboe::convertToText(inputStream_->getSharingMode()));
+             oboe::convertToText(inputStream_->getSharingMode()),
+             inputStream_->getDeviceId());
     } else {
         LOGE("Failed to open input stream: %s", oboe::convertToText(result));
     }
@@ -100,16 +101,23 @@ oboe::Result AudioEngine::openOutputStream() {
     builder.setSharingMode(oboe::SharingMode::Exclusive);
     builder.setUsage(oboe::Usage::Media);
     builder.setAudioApi(oboe::AudioApi::Unspecified);
-    builder.setDataCallback(this);
     builder.setErrorCallback(this);
+
+    // CRITICAL: Do NOT call setDataCallback(this) here!
+    // FullDuplexStream::start() sets itself as the data callback on the output
+    // stream. If we set it here, the output stream's onAudioReady fires directly
+    // without going through FullDuplexStream's internal logic that reads from
+    // the input stream and then calls onBothStreamsReady(). This was the root
+    // cause of the microphone not delivering data to the callback.
 
     oboe::Result result = builder.openStream(outputStream_);
 
     if (result == oboe::Result::OK) {
-        LOGI("Output stream opened — API: %s, sampleRate: %d, sharingMode: %s",
+        LOGI("Output stream opened — API: %s, sampleRate: %d, sharingMode: %s, deviceId: %d",
              oboe::convertToText(outputStream_->getAudioApi()),
              outputStream_->getSampleRate(),
-             oboe::convertToText(outputStream_->getSharingMode()));
+             oboe::convertToText(outputStream_->getSharingMode()),
+             outputStream_->getDeviceId());
     } else {
         LOGE("Failed to open output stream: %s", oboe::convertToText(result));
     }
@@ -198,11 +206,14 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     setSharedInputStream(inputStream_);
     setSharedOutputStream(outputStream_);
 
-    // ─── Step 7: Start the FullDuplexStream ──────────────────────────────
-    oboe::Result startResult = oboe::FullDuplexStream::start();
-    if (startResult != oboe::Result::OK) {
-        LOGE("start() failed: FullDuplexStream::start() returned %s",
-             oboe::convertToText(startResult));
+    // ─── Step 7: Start the input stream first ────────────────────────────
+    // FullDuplexStream reads from the input stream synchronously in the
+    // output callback. The input stream must be started (recording) before
+    // the output stream starts firing callbacks.
+    oboe::Result inputStartResult = inputStream_->requestStart();
+    if (inputStartResult != oboe::Result::OK) {
+        LOGE("start() failed: input stream requestStart() returned %s",
+             oboe::convertToText(inputStartResult));
         outputStream_->close();
         outputStream_.reset();
         inputStream_->close();
@@ -210,7 +221,20 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
         return false;
     }
 
-    // ─── Step 8: Success ─────────────────────────────────────────────────
+    // ─── Step 8: Start the FullDuplexStream (starts output stream) ───────
+    oboe::Result startResult = oboe::FullDuplexStream::start();
+    if (startResult != oboe::Result::OK) {
+        LOGE("start() failed: FullDuplexStream::start() returned %s",
+             oboe::convertToText(startResult));
+        inputStream_->requestStop();
+        outputStream_->close();
+        outputStream_.reset();
+        inputStream_->close();
+        inputStream_.reset();
+        return false;
+    }
+
+    // ─── Step 9: Success ─────────────────────────────────────────────────
     running_.store(true, std::memory_order_release);
     callbackCounter_ = 0;
 
@@ -231,14 +255,15 @@ oboe::Result AudioEngine::stop() {
     // Set running_ to false first so the callback knows to stop processing
     running_.store(false, std::memory_order_release);
 
-    // Stop the FullDuplexStream (base class) — stops both streams' callbacks
+    // Stop the FullDuplexStream (base class) — stops the output stream's callbacks
     oboe::Result stopResult = FullDuplexStream::stop();
     if (stopResult != oboe::Result::OK) {
         LOGW("FullDuplexStream::stop() returned: %s", oboe::convertToText(stopResult));
     }
 
-    // Close input stream if open
+    // Stop and close input stream (we started it manually)
     if (inputStream_) {
+        inputStream_->requestStop();
         inputStream_->close();
         inputStream_.reset();
     }
@@ -287,6 +312,20 @@ float AudioEngine::getLastInputLevel() const {
 
 void AudioEngine::setLevelCallback(LevelCallback cb) {
     levelCallback_ = std::move(cb);
+}
+
+int32_t AudioEngine::getInputDeviceId() const {
+    if (inputStream_) {
+        return inputStream_->getDeviceId();
+    }
+    return -1;
+}
+
+int32_t AudioEngine::getOutputDeviceId() const {
+    if (outputStream_) {
+        return outputStream_->getDeviceId();
+    }
+    return -1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -393,6 +432,19 @@ void AudioEngine::attemptReconnection() {
         // Success — start full-duplex
         setSharedInputStream(inputStream_);
         setSharedOutputStream(outputStream_);
+
+        // Start input stream first (it must be recording for FullDuplexStream to read)
+        auto inputStartResult = inputStream_->requestStart();
+        if (inputStartResult != oboe::Result::OK) {
+            LOGW("Input stream requestStart() failed on attempt %d: %s",
+                 attempt + 1, oboe::convertToText(inputStartResult));
+            outputStream_->close();
+            outputStream_.reset();
+            inputStream_->close();
+            inputStream_.reset();
+            continue;
+        }
+
         auto startResult = FullDuplexStream::start();
         if (startResult == oboe::Result::OK) {
             reconnecting_.store(false, std::memory_order_release);
@@ -403,6 +455,7 @@ void AudioEngine::attemptReconnection() {
         // FullDuplexStream::start() failed — clean up and try again
         LOGW("FullDuplexStream::start() failed on attempt %d: %s",
              attempt + 1, oboe::convertToText(startResult));
+        inputStream_->requestStop();
         outputStream_->close();
         outputStream_.reset();
         inputStream_->close();

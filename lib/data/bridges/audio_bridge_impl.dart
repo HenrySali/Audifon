@@ -220,6 +220,19 @@ class AudioBridgeImpl implements AudioBridge {
     return result ?? 'No debug info available';
   }
 
+  @override
+  Future<Map<String, dynamic>> getDeviceInfo() async {
+    final result = await _methodChannel
+        .invokeMapMethod<String, dynamic>('getDeviceInfo');
+    return result ?? <String, dynamic>{
+      'inputDeviceName': 'Desconocido',
+      'outputDeviceName': 'Desconocido',
+      'bluetoothConnected': false,
+      'bluetoothName': '',
+      'bluetoothIsA2dp': false,
+    };
+  }
+
   /// Convierte un valor dinámico del EventChannel a [AudioEngineState].
   AudioEngineState _parseState(dynamic event) {
     if (event is int) {

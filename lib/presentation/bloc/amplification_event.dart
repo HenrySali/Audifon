@@ -130,3 +130,29 @@ class InputLevelUpdated extends AmplificationEvent {
 class ResumeAmplification extends AmplificationEvent {
   const ResumeAmplification();
 }
+
+/// Solicita actualizar las ganancias del EQ directamente (12 bandas).
+///
+/// Usado desde la pantalla de configuración avanzada para control manual.
+class UpdateEqGains extends AmplificationEvent {
+  /// Ganancias en dB para las 12 bandas [0, 50].
+  final List<double> gains;
+
+  const UpdateEqGains({required this.gains});
+
+  @override
+  List<Object?> get props => [gains];
+}
+
+/// Solicita actualizar el nivel de reducción de ruido.
+///
+/// Usado desde la pantalla de configuración avanzada.
+class UpdateNrLevel extends AmplificationEvent {
+  /// Nivel de NR: 0=off, 1=bajo, 2=medio, 3=alto.
+  final int level;
+
+  const UpdateNrLevel({required this.level});
+
+  @override
+  List<Object?> get props => [level];
+}

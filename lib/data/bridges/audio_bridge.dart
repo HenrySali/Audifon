@@ -108,4 +108,14 @@ abstract class AudioBridge {
   /// Actualiza el offset SPL del micrófono y la compensación EQ
   /// del auricular en el pipeline DSP nativo.
   Future<void> applyCalibration(CalibrationData calibration);
+
+  /// Obtiene información de los dispositivos de audio activos.
+  ///
+  /// Retorna un mapa con:
+  /// - inputDeviceName: nombre del micrófono activo
+  /// - outputDeviceName: nombre del auricular/parlante activo
+  /// - bluetoothConnected: si hay auricular BT conectado
+  /// - bluetoothName: nombre del dispositivo BT
+  /// - bluetoothIsA2dp: si la conexión es A2DP (alta calidad)
+  Future<Map<String, dynamic>> getDeviceInfo();
 }

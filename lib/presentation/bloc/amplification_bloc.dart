@@ -78,6 +78,8 @@ class AmplificationBloc
     on<AudioFocusChanged>(_onAudioFocusChanged);
     on<InputLevelUpdated>(_onInputLevelUpdated);
     on<ResumeAmplification>(_onResumeAmplification);
+    on<UpdateEqGains>(_onUpdateEqGains);
+    on<UpdateNrLevel>(_onUpdateNrLevel);
   }
 
   /// Inicia la amplificación: permisos → auriculares → foco → servicio.
@@ -395,6 +397,34 @@ class AmplificationBloc
         }
       },
     );
+  }
+
+  /// Actualiza las ganancias del EQ directamente (desde configuración avanzada).
+  Future<void> _onUpdateEqGains(
+    UpdateEqGains event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    if (state is! AmplificationActive) return;
+
+    try {
+      await _audioBridge.updateEqGains(event.gains);
+    } catch (_) {
+      // No interrumpir por error de actualización de EQ
+    }
+  }
+
+  /// Actualiza el nivel de reducción de ruido (desde configuración avanzada).
+  Future<void> _onUpdateNrLevel(
+    UpdateNrLevel event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    if (state is! AmplificationActive) return;
+
+    try {
+      await _audioBridge.updateNrLevel(event.level);
+    } catch (_) {
+      // No interrumpir por error de actualización de NR
+    }
   }
 
   /// Cancela suscripciones a streams.

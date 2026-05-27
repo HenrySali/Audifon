@@ -90,7 +90,7 @@ class NativeAudioBridge {
      * @param splOffset Offset de calibración dBFS → dB SPL (default: 120)
      */
     fun start(
-        sampleRate: Int = 44100,
+        sampleRate: Int = 48000,
         bufferSize: Int = 256,
         eqGains: FloatArray = FloatArray(12) { 0f },
         volumeDb: Float = 0f,
@@ -198,6 +198,18 @@ class NativeAudioBridge {
      */
     fun getInputLevel(): Float = nativeGetInputLevel()
 
+    /**
+     * Obtiene el device ID del stream de entrada (micrófono).
+     * @return Device ID, o -1 si no está activo
+     */
+    fun getInputDeviceId(): Int = nativeGetInputDeviceId()
+
+    /**
+     * Obtiene el device ID del stream de salida (auricular/parlante).
+     * @return Device ID, o -1 si no está activo
+     */
+    fun getOutputDeviceId(): Int = nativeGetOutputDeviceId()
+
     // ─────────────────────────────────────────────────────────────────────
     // Polling de nivel
     // ─────────────────────────────────────────────────────────────────────
@@ -253,4 +265,8 @@ class NativeAudioBridge {
     private external fun nativeSetSplOffset(offset: Float)
 
     private external fun nativeGetInputLevel(): Float
+
+    private external fun nativeGetInputDeviceId(): Int
+
+    private external fun nativeGetOutputDeviceId(): Int
 }

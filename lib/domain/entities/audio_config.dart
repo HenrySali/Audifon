@@ -15,10 +15,10 @@ import 'wdrc_params.dart';
 ///
 /// Requisitos: 1.1, 2.1, 2.2
 class AudioConfig extends Equatable {
-  /// Frecuencia de muestreo en Hz (16000 Hz para voz).
+  /// Frecuencia de muestreo en Hz (48000 Hz nativo para Oboe).
   final int sampleRate;
 
-  /// Tamaño del buffer en muestras (64 = 4 ms a 16 kHz).
+  /// Tamaño del buffer en muestras (256 = ~5.3 ms a 48 kHz).
   final int bufferSize;
 
   /// Número de canales (1 = mono).
@@ -44,8 +44,8 @@ class AudioConfig extends Equatable {
   final double mpoThresholdDbSpl;
 
   const AudioConfig({
-    this.sampleRate = 16000,
-    this.bufferSize = 64,
+    this.sampleRate = 48000,
+    this.bufferSize = 256,
     this.channels = 1,
     this.bitsPerSample = 16,
     required this.eqGains,

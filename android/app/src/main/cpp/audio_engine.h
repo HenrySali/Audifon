@@ -56,6 +56,10 @@ public:
     using LevelCallback = std::function<void(float levelDbSpl)>;
     void setLevelCallback(LevelCallback cb);
 
+    // ─── Device info (for UI display) ───────────────────────────────────
+    int32_t getInputDeviceId() const;
+    int32_t getOutputDeviceId() const;
+
     // ─── Oboe FullDuplexStream override ─────────────────────────────────
     oboe::DataCallbackResult onBothStreamsReady(
         const void *inputData,

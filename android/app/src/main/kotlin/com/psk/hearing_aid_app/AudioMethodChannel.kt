@@ -1,6 +1,9 @@
 package com.psk.hearing_aid_app
 
 import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -150,6 +153,7 @@ class AudioMethodChannel(
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
+                "getDeviceInfo" -> handleGetDeviceInfo(result)
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
@@ -180,8 +184,8 @@ class AudioMethodChannel(
      * - mpoThresholdDbSpl: Double (default 100)
      */
     private fun handleStartAudio(call: MethodCall, result: MethodChannel.Result) {
-        val sampleRate = call.argument<Int>("sampleRate") ?: 16000
-        val bufferSize = call.argument<Int>("bufferSize") ?: 64
+        val sampleRate = call.argument<Int>("sampleRate") ?: 48000
+        val bufferSize = call.argument<Int>("bufferSize") ?: 256
         val eqGainsList = call.argument<List<Double>>("eqGains") ?: List(12) { 0.0 }
         val volumeDb = call.argument<Double>("volumeDb") ?: 0.0
         val expansionKnee = call.argument<Double>("expansionKnee") ?: 35.0
@@ -322,16 +326,78 @@ class AudioMethodChannel(
      */
     private fun handleGetDebugInfo(result: MethodChannel.Result) {
         val level = nativeBridge.getInputLevel()
+        val inputDeviceId = nativeBridge.getInputDeviceId()
+        val outputDeviceId = nativeBridge.getOutputDeviceId()
         val info = buildString {
             appendLine("=== Debug Info ===")
             appendLine("State: $currentState")
             appendLine("NativeBridge level: $level dB SPL")
+            appendLine("Input device ID: $inputDeviceId")
+            appendLine("Output device ID: $outputDeviceId")
             appendLine("LevelListener active: ${nativeBridge.getInputLevel() != 0f}")
             appendLine("LevelEventSink: ${if (levelEventSink != null) "connected" else "null"}")
             appendLine("StateEventSink: ${if (stateEventSink != null) "connected" else "null"}")
             appendLine("==================")
         }
         result.success(info)
+    }
+
+    /**
+     * Devuelve información de dispositivos de audio conectados.
+     * Incluye: micrófono activo, auricular BT conectado, device IDs.
+     */
+    private fun handleGetDeviceInfo(result: MethodChannel.Result) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        // Get input devices (microphones)
+        val inputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val builtInMic = inputDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+
+        // Get output devices
+        val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val btA2dp = outputDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+        val btSco = outputDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+        val btDevice = btA2dp ?: btSco
+
+        // Get active device IDs from native engine
+        val activeInputDeviceId = nativeBridge.getInputDeviceId()
+        val activeOutputDeviceId = nativeBridge.getOutputDeviceId()
+
+        // Find the active input device name
+        val activeInputDevice = inputDevices.firstOrNull { it.id == activeInputDeviceId }
+        val inputDeviceName = activeInputDevice?.productName?.toString()
+            ?: builtInMic?.productName?.toString()
+            ?: "Micrófono integrado"
+
+        // Find the active output device name
+        val activeOutputDevice = outputDevices.firstOrNull { it.id == activeOutputDeviceId }
+        val outputDeviceName = activeOutputDevice?.productName?.toString()
+            ?: btDevice?.productName?.toString()
+            ?: "Parlante del dispositivo"
+
+        val deviceInfo = mapOf(
+            "inputDeviceId" to activeInputDeviceId,
+            "inputDeviceName" to inputDeviceName,
+            "inputDeviceType" to (activeInputDevice?.type ?: builtInMic?.type ?: -1),
+            "outputDeviceId" to activeOutputDeviceId,
+            "outputDeviceName" to outputDeviceName,
+            "outputDeviceType" to (activeOutputDevice?.type ?: btDevice?.type ?: -1),
+            "bluetoothConnected" to (btDevice != null),
+            "bluetoothName" to (btDevice?.productName?.toString() ?: ""),
+            "bluetoothIsA2dp" to (btA2dp != null),
+            "availableInputDevices" to inputDevices.map { mapOf(
+                "id" to it.id,
+                "name" to (it.productName?.toString() ?: "Unknown"),
+                "type" to it.type
+            ) },
+            "availableOutputDevices" to outputDevices.map { mapOf(
+                "id" to it.id,
+                "name" to (it.productName?.toString() ?: "Unknown"),
+                "type" to it.type
+            ) }
+        )
+
+        result.success(deviceInfo)
     }
 
     // ─────────────────────────────────────────────────────────────────────

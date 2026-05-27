@@ -309,4 +309,32 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetInputLevel(
     return g_engine->getLastInputLevel();
 }
 
+/// Obtiene el device ID del stream de entrada (micrófono).
+/// @return Device ID del input stream, o -1 si no está activo
+JNIEXPORT jint JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetInputDeviceId(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return -1;
+    }
+
+    return g_engine->getInputDeviceId();
+}
+
+/// Obtiene el device ID del stream de salida (auricular/parlante).
+/// @return Device ID del output stream, o -1 si no está activo
+JNIEXPORT jint JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetOutputDeviceId(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return -1;
+    }
+
+    return g_engine->getOutputDeviceId();
+}
+
 } // extern "C"
