@@ -25,8 +25,8 @@
 
 /// Configuración del motor de audio.
 struct AudioEngineConfig {
-    int sampleRate = 16000;       ///< Hz — frecuencia de muestreo
-    int bufferSize = 64;          ///< Muestras por bloque (4 ms @ 16 kHz)
+    int sampleRate = 44100;       ///< Hz — frecuencia de muestreo
+    int bufferSize = 256;         ///< Muestras por bloque (~5.8 ms @ 44100 Hz)
     int channels = 1;             ///< Mono
     int bitsPerSample = 16;       ///< PCM16
     float mpoThresholdDbSpl = 100.0f;  ///< Threshold del MPO en dB SPL

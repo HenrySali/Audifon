@@ -90,8 +90,8 @@ class NativeAudioBridge {
      * @param splOffset Offset de calibración dBFS → dB SPL (default: 120)
      */
     fun start(
-        sampleRate: Int = 16000,
-        bufferSize: Int = 64,
+        sampleRate: Int = 44100,
+        bufferSize: Int = 256,
         eqGains: FloatArray = FloatArray(12) { 0f },
         volumeDb: Float = 0f,
         expansionKnee: Float = 35f,

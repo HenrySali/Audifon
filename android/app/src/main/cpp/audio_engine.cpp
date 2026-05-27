@@ -210,9 +210,12 @@ void AudioEngine::audioThreadFunc() {
 
         {
             // ─── 2. Leer PCM16 del buffer del recorder ──────────────────
+            // recBufIndex_ apunta al buffer que se está llenando AHORA.
+            // El buffer que ya está COMPLETO es el anterior (el que acabó de llenarse
+            // y disparó recBufferReady_).
             int recIdx = recBufIndex_.load(std::memory_order_acquire);
-            // Usar el buffer que NO está siendo llenado actualmente
-            int readIdx = (recIdx + 1) % kNumBuffers;
+            // El buffer listo es el OPUESTO al que se está llenando actualmente
+            int readIdx = 1 - recIdx;
             const int16_t* inputPcm = recBuffers_[readIdx];
 
             // ─── 3. Convertir PCM16 → float32 ──────────────────────────
@@ -232,8 +235,8 @@ void AudioEngine::audioThreadFunc() {
             auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 processEnd - processStart).count();
 
-            // Umbral de descarte: 3500 µs (3.5 ms) — deja 0.5 ms para I/O
-            static constexpr long kMaxProcessingTimeUs = 3500;
+            // Umbral de descarte: 5000 µs (5 ms) — deja margen para I/O
+            static constexpr long kMaxProcessingTimeUs = 5000;
 
             if (elapsedUs > kMaxProcessingTimeUs) {
                 // Bloque excedió tiempo disponible: descartar salida y continuar
