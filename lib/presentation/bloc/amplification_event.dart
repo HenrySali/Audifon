@@ -138,10 +138,13 @@ class UpdateEqGains extends AmplificationEvent {
   /// Ganancias en dB para las 12 bandas [0, 50].
   final List<double> gains;
 
-  const UpdateEqGains({required this.gains});
+  /// Nombre del preset (null si es custom).
+  final String? presetName;
+
+  const UpdateEqGains({required this.gains, this.presetName});
 
   @override
-  List<Object?> get props => [gains];
+  List<Object?> get props => [gains, presetName];
 }
 
 /// Solicita actualizar el nivel de reducción de ruido.

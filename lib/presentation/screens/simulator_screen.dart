@@ -70,7 +70,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
       _currentGains = List.from(preset.gains);
       _activePreset = preset;
     });
-    _applyGains();
+    _applyGains(presetName: preset.name);
   }
 
   void _updateBand(int index, double value) {
@@ -81,10 +81,10 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
     _applyGains();
   }
 
-  void _applyGains() {
+  void _applyGains({String? presetName}) {
     try {
       context.read<AmplificationBloc>().add(
-        UpdateEqGains(gains: List.from(_currentGains)),
+        UpdateEqGains(gains: List.from(_currentGains), presetName: presetName),
       );
     } catch (_) {
       // Bloc not available (not in active state)

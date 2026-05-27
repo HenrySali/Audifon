@@ -408,6 +408,18 @@ class AmplificationBloc
 
     try {
       await _audioBridge.updateEqGains(event.gains);
+      // Persistir el preset
+      if (event.presetName != null) {
+        await _settingsRepository.setLastEqPreset({
+          'name': event.presetName,
+          'gains': event.gains,
+        });
+      } else {
+        await _settingsRepository.setLastEqPreset({
+          'name': 'Custom',
+          'gains': event.gains,
+        });
+      }
     } catch (_) {
       // No interrumpir por error de actualización de EQ
     }
@@ -422,6 +434,8 @@ class AmplificationBloc
 
     try {
       await _audioBridge.updateNrLevel(event.level);
+      // Persistir el nivel de NR
+      await _settingsRepository.setLastNrLevel(event.level);
     } catch (_) {
       // No interrumpir por error de actualización de NR
     }

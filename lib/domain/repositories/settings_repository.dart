@@ -40,4 +40,16 @@ abstract class SettingsRepository {
   /// Restaura la última configuración utilizada.
   /// Retorna un record con lastProfile y lastVolume.
   Future<({String? lastProfile, double? lastVolume})> restoreLastConfig();
+
+  /// Obtiene el último preset de EQ guardado.
+  Future<Map<String, dynamic>?> getLastEqPreset();
+
+  /// Guarda el preset de EQ activo.
+  Future<void> setLastEqPreset(Map<String, dynamic> presetJson);
+
+  /// Obtiene el último nivel de NR guardado.
+  Future<int?> getLastNrLevel();
+
+  /// Guarda el nivel de NR activo.
+  Future<void> setLastNrLevel(int level);
 }

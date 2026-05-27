@@ -294,6 +294,9 @@ class _ActiveView extends StatelessWidget {
           // Medidor de nivel de entrada (estilo VU) — Req 5.4
           _InputLevelMeter(levelDb: state.inputLevelDb),
           const SizedBox(height: 16),
+          // Indicador de preset EQ activo
+          _EqPresetIndicator(presetName: state.activeEqPreset, nrLevel: state.activeNrLevel),
+          const SizedBox(height: 16),
           // Reporte de procesamiento en tiempo real
           _ProcessingReport(state: state),
           const SizedBox(height: 16),
@@ -1056,6 +1059,55 @@ class _ReportMetric extends StatelessWidget {
                 fontWeight: FontWeight.w600,
               ),
               overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// EQ PRESET INDICATOR — Muestra el preset activo en la pantalla principal
+// =============================================================================
+
+/// Indicador compacto del preset de EQ y NR activos.
+class _EqPresetIndicator extends StatelessWidget {
+  final String presetName;
+  final int nrLevel;
+
+  const _EqPresetIndicator({required this.presetName, required this.nrLevel});
+
+  @override
+  Widget build(BuildContext context) {
+    const nrLabels = ['Off', 'Bajo', 'Medio', 'Alto'];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.equalizer, color: Colors.cyan, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            'EQ: $presetName',
+            style: const TextStyle(
+              color: Colors.cyan,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          const Icon(Icons.noise_aware, color: Colors.white54, size: 16),
+          const SizedBox(width: 4),
+          Text(
+            'NR: ${nrLabels[nrLevel.clamp(0, 3)]}',
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 12,
             ),
           ),
         ],

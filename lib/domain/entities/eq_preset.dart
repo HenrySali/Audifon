@@ -65,30 +65,33 @@ class EqPreset extends Equatable {
 
   /// Moderate: pérdida moderada (40-55 dB HL).
   /// Basado en NAL-NL2 para pérdida moderada descendente.
+  /// Ganancias reducidas para evitar distorsión en dispositivos móviles.
   static const moderate = EqPreset(
     name: 'Moderate',
     description: 'Pérdida moderada (40-55 dB HL)',
-    gains: [4, 7, 10, 14, 16, 18, 19, 20, 20, 18, 14, 11],
+    gains: [2, 4, 6, 8, 10, 12, 13, 14, 14, 12, 9, 7],
     compressionRatio: 2.0,
     compressionKnee: 50.0,
   );
 
   /// Severe: pérdida severa (55-70 dB HL).
   /// Basado en NAL-NL2 para pérdida severa descendente.
+  /// Ganancias reducidas para evitar distorsión en dispositivos móviles.
   static const severe = EqPreset(
     name: 'Severe',
     description: 'Pérdida severa (55-70 dB HL)',
-    gains: [8, 13, 18, 22, 24, 27, 28, 28, 27, 26, 20, 17],
+    gains: [4, 7, 10, 14, 16, 18, 19, 20, 19, 18, 14, 11],
     compressionRatio: 2.5,
     compressionKnee: 45.0,
   );
 
   /// Profound: pérdida profunda (>70 dB HL).
   /// Basado en NAL-NL2 para pérdida profunda.
+  /// Ganancias reducidas para evitar distorsión en dispositivos móviles.
   static const profound = EqPreset(
     name: 'Profound',
     description: 'Pérdida profunda (>70 dB HL)',
-    gains: [12, 19, 25, 30, 32, 35, 36, 36, 35, 33, 27, 22],
+    gains: [6, 10, 14, 18, 20, 23, 24, 24, 23, 22, 18, 14],
     compressionRatio: 3.0,
     compressionKnee: 40.0,
   );
@@ -110,6 +113,38 @@ class EqPreset extends Equatable {
     severe,
     profound,
   ];
+
+  /// Busca un preset por nombre. Retorna null si no existe.
+  static EqPreset? findByName(String name) {
+    for (final preset in allPresets) {
+      if (preset.name == name) return preset;
+    }
+    return null;
+  }
+
+  /// Serializa a Map para persistencia en Hive/JSON.
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'description': description,
+    'gains': gains,
+    'compressionRatio': compressionRatio,
+    'compressionKnee': compressionKnee,
+    'expansionKnee': expansionKnee,
+  };
+
+  /// Deserializa desde Map.
+  static EqPreset fromJson(Map<String, dynamic> json) {
+    return EqPreset(
+      name: json['name'] as String? ?? 'Custom',
+      description: json['description'] as String? ?? '',
+      gains: (json['gains'] as List<dynamic>?)
+          ?.map((e) => (e as num).toDouble())
+          .toList() ?? List.filled(12, 0.0),
+      compressionRatio: (json['compressionRatio'] as num?)?.toDouble() ?? 2.0,
+      compressionKnee: (json['compressionKnee'] as num?)?.toDouble() ?? 55.0,
+      expansionKnee: (json['expansionKnee'] as num?)?.toDouble() ?? 35.0,
+    );
+  }
 
   @override
   List<Object?> get props => [name, gains];

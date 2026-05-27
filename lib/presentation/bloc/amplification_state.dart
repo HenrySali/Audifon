@@ -56,11 +56,19 @@ class AmplificationActive extends AmplificationState {
   /// Estado de conexión de auriculares.
   final bool headphonesConnected;
 
+  /// Nombre del preset de EQ activo (Normal, Mild, etc.).
+  final String activeEqPreset;
+
+  /// Nivel de NR activo (0-3).
+  final int activeNrLevel;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
     required this.volumeDb,
     required this.headphonesConnected,
+    this.activeEqPreset = 'Normal',
+    this.activeNrLevel = 0,
   });
 
   /// Crea una copia con campos actualizados.
@@ -69,12 +77,16 @@ class AmplificationActive extends AmplificationState {
     String? activeProfile,
     double? volumeDb,
     bool? headphonesConnected,
+    String? activeEqPreset,
+    int? activeNrLevel,
   }) {
     return AmplificationActive(
       inputLevelDb: inputLevelDb ?? this.inputLevelDb,
       activeProfile: activeProfile ?? this.activeProfile,
       volumeDb: volumeDb ?? this.volumeDb,
       headphonesConnected: headphonesConnected ?? this.headphonesConnected,
+      activeEqPreset: activeEqPreset ?? this.activeEqPreset,
+      activeNrLevel: activeNrLevel ?? this.activeNrLevel,
     );
   }
 
@@ -84,6 +96,8 @@ class AmplificationActive extends AmplificationState {
         activeProfile,
         volumeDb,
         headphonesConnected,
+        activeEqPreset,
+        activeNrLevel,
       ];
 }
 

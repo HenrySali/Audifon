@@ -12,6 +12,8 @@ class _SettingsKeys {
   static const String lastVolume = 'lastVolume';
   static const String prescriptionMethod = 'prescriptionMethod';
   static const String calibrationData = 'calibrationData';
+  static const String lastEqPreset = 'lastEqPreset';
+  static const String lastNrLevel = 'lastNrLevel';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -85,6 +87,28 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final profile = await getLastProfile();
     final volume = await getLastVolume();
     return (lastProfile: profile, lastVolume: volume);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getLastEqPreset() async {
+    final data = _box.get(_SettingsKeys.lastEqPreset);
+    if (data == null) return null;
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  @override
+  Future<void> setLastEqPreset(Map<String, dynamic> presetJson) async {
+    await _box.put(_SettingsKeys.lastEqPreset, presetJson);
+  }
+
+  @override
+  Future<int?> getLastNrLevel() async {
+    return _box.get(_SettingsKeys.lastNrLevel) as int?;
+  }
+
+  @override
+  Future<void> setLastNrLevel(int level) async {
+    await _box.put(_SettingsKeys.lastNrLevel, level);
   }
 
   // --- Serialización de CalibrationData ---
