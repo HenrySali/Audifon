@@ -171,6 +171,10 @@ void AudioEngine::setSplOffset(float offset) {
     pipeline_.setSplOffset(offset);
 }
 
+float AudioEngine::getLastInputLevel() const {
+    return pipeline_.getLastInputLevelDb();
+}
+
 void AudioEngine::setLevelCallback(LevelCallback cb) {
     levelCallback_ = std::move(cb);
 }

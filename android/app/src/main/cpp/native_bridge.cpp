@@ -1,9 +1,9 @@
 /// @file native_bridge.cpp
-/// @brief Puente JNI entre Kotlin (NativeAudioBridge) y el pipeline DSP C++.
+/// @brief Puente JNI entre Kotlin (NativeAudioBridge) y el AudioEngine C++.
 ///
 /// Funciones expuestas:
-/// - nativeStart: Inicializa el pipeline con configuración completa
-/// - nativeStop: Detiene y libera recursos del pipeline
+/// - nativeStart: Inicializa el AudioEngine con configuración completa
+/// - nativeStop: Detiene y libera recursos del AudioEngine
 /// - nativeSetEqGains: Actualiza ganancias EQ (12 bandas, thread-safe)
 /// - nativeSetVolume: Actualiza volumen maestro (thread-safe)
 /// - nativeSetWdrcParams: Actualiza parámetros WDRC (thread-safe)
@@ -11,6 +11,7 @@
 /// - nativeSetSplOffset: Actualiza offset de calibración SPL (thread-safe)
 /// - nativeGetInputLevel: Lee último nivel de entrada PRE-EQ (polling ~10 Hz)
 ///
+/// El AudioEngine encapsula OpenSL ES (captura + reproducción) y el DspPipeline.
 /// Todas las actualizaciones de parámetros son lock-free (atómicas).
 /// El nivel de entrada se obtiene por polling desde Kotlin (no callback).
 
@@ -19,7 +20,7 @@
 #include <atomic>
 #include <memory>
 
-#include "dsp_pipeline.h"
+#include "audio_engine.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logging
@@ -31,16 +32,17 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Estado global del pipeline (singleton — una sola instancia de audio activa)
+// Estado global del AudioEngine (singleton — una sola instancia de audio activa)
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace {
 
-/// Pipeline DSP — propiedad del puente JNI.
+/// AudioEngine — propiedad del puente JNI.
 /// Se crea en nativeStart y se destruye en nativeStop.
-std::unique_ptr<DspPipeline> g_pipeline;
+/// Encapsula OpenSL ES (captura mic + reproducción auriculares) + DspPipeline.
+std::unique_ptr<AudioEngine> g_engine;
 
-/// Flag atómico que indica si el pipeline está activo.
+/// Flag atómico que indica si el engine está activo.
 std::atomic<bool> g_running{false};
 
 } // namespace anónimo
@@ -51,7 +53,7 @@ std::atomic<bool> g_running{false};
 
 extern "C" {
 
-/// Inicializa el pipeline DSP con la configuración completa.
+/// Inicializa el AudioEngine (OpenSL ES + DSP pipeline) con la configuración completa.
 ///
 /// @param sampleRate Frecuencia de muestreo (típicamente 16000 Hz)
 /// @param bufferSize Tamaño de bloque en muestras (típicamente 64)
@@ -93,20 +95,24 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     LOGI("nativeStart: sampleRate=%d, bufferSize=%d, volume=%.1f dB, NR=%d, MPO=%.1f dB SPL",
          sampleRate, bufferSize, volumeDb, nrLevel, mpoThresholdDbSpl);
 
-    // Crear pipeline
-    g_pipeline = std::make_unique<DspPipeline>();
+    // Crear AudioEngine (encapsula OpenSL ES + DspPipeline)
+    g_engine = std::make_unique<AudioEngine>();
 
-    // Configurar AudioConfig
-    AudioConfig config;
-    config.sampleRate = sampleRate;
-    config.bufferSize = bufferSize;
-    config.channels = 1;
-    config.bitsPerSample = 16;
-    config.mpoThresholdDbSpl = mpoThresholdDbSpl;
-    config.splOffset = splOffset;
+    // Configurar AudioEngineConfig
+    AudioEngineConfig engineConfig;
+    engineConfig.sampleRate = sampleRate;
+    engineConfig.bufferSize = bufferSize;
+    engineConfig.channels = 1;
+    engineConfig.bitsPerSample = 16;
+    engineConfig.mpoThresholdDbSpl = mpoThresholdDbSpl;
+    engineConfig.splOffset = splOffset;
 
-    // Inicializar pipeline
-    g_pipeline->init(config);
+    // Iniciar el AudioEngine (crea OpenSL ES recorder + player + hilo de audio)
+    if (!g_engine->start(engineConfig)) {
+        LOGE("nativeStart: AudioEngine failed to start!");
+        g_engine.reset();
+        return;
+    }
 
     // Aplicar ganancias EQ iniciales
     if (eqGains != nullptr) {
@@ -114,7 +120,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
         if (len >= 12) {
             jfloat* gains = env->GetFloatArrayElements(eqGains, nullptr);
             if (gains != nullptr) {
-                g_pipeline->setEqGains(gains);
+                g_engine->setEqGains(gains);
                 env->ReleaseFloatArrayElements(eqGains, gains, JNI_ABORT);
             }
         } else {
@@ -123,7 +129,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     }
 
     // Aplicar volumen inicial
-    g_pipeline->setVolume(volumeDb);
+    g_engine->setVolume(volumeDb);
 
     // Aplicar parámetros WDRC iniciales
     WdrcParams wdrcParams;
@@ -133,18 +139,18 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     wdrcParams.compressionRatio = compressionRatio;
     wdrcParams.attackMs = attackMs;
     wdrcParams.releaseMs = releaseMs;
-    g_pipeline->setWdrcParams(wdrcParams);
+    g_engine->setWdrcParams(wdrcParams);
 
     // Aplicar nivel de NR
-    g_pipeline->setNrLevel(nrLevel);
+    g_engine->setNrLevel(nrLevel);
 
     // Marcar como activo
     g_running.store(true, std::memory_order_release);
 
-    LOGI("nativeStart: Pipeline initialized successfully");
+    LOGI("nativeStart: AudioEngine started successfully (OpenSL ES active)");
 }
 
-/// Detiene el pipeline y libera recursos.
+/// Detiene el AudioEngine y libera recursos.
 JNIEXPORT void JNICALL
 Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStop(
         JNIEnv* /* env */,
@@ -155,15 +161,18 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStop(
         return;
     }
 
-    LOGI("nativeStop: Stopping pipeline");
+    LOGI("nativeStop: Stopping AudioEngine");
 
-    // Marcar como inactivo primero (el hilo de audio dejará de procesar)
+    // Marcar como inactivo primero
     g_running.store(false, std::memory_order_release);
 
-    // Destruir pipeline
-    g_pipeline.reset();
+    // Detener y destruir AudioEngine (para OpenSL ES, hilo de audio, pipeline)
+    if (g_engine) {
+        g_engine->stop();
+        g_engine.reset();
+    }
 
-    LOGI("nativeStop: Pipeline stopped and resources released");
+    LOGI("nativeStop: AudioEngine stopped and resources released");
 }
 
 /// Actualiza las ganancias del EQ (12 bandas, en dB, rango [0, 50]).
@@ -176,7 +185,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetEqGains(
         jobject /* thiz */,
         jfloatArray gains) {
 
-    if (!g_running.load(std::memory_order_acquire) || g_pipeline == nullptr) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
         return;
     }
 
@@ -193,7 +202,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetEqGains(
 
     jfloat* gainsPtr = env->GetFloatArrayElements(gains, nullptr);
     if (gainsPtr != nullptr) {
-        g_pipeline->setEqGains(gainsPtr);
+        g_engine->setEqGains(gainsPtr);
         env->ReleaseFloatArrayElements(gains, gainsPtr, JNI_ABORT);
     }
 }
@@ -208,11 +217,11 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetVolume(
         jobject /* thiz */,
         jfloat volumeDb) {
 
-    if (!g_running.load(std::memory_order_acquire) || g_pipeline == nullptr) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
         return;
     }
 
-    g_pipeline->setVolume(volumeDb);
+    g_engine->setVolume(volumeDb);
 }
 
 /// Actualiza parámetros del WDRC (Wide Dynamic Range Compression).
@@ -235,7 +244,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetWdrcParams(
         jfloat attackMs,
         jfloat releaseMs) {
 
-    if (!g_running.load(std::memory_order_acquire) || g_pipeline == nullptr) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
         return;
     }
 
@@ -247,7 +256,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetWdrcParams(
     params.attackMs = attackMs;
     params.releaseMs = releaseMs;
 
-    g_pipeline->setWdrcParams(params);
+    g_engine->setWdrcParams(params);
 }
 
 /// Actualiza el nivel de reducción de ruido.
@@ -260,11 +269,11 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetNrLevel(
         jobject /* thiz */,
         jint level) {
 
-    if (!g_running.load(std::memory_order_acquire) || g_pipeline == nullptr) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
         return;
     }
 
-    g_pipeline->setNrLevel(level);
+    g_engine->setNrLevel(level);
 }
 
 /// Actualiza el offset de calibración SPL (dBFS → dB SPL).
@@ -277,48 +286,28 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetSplOffset(
         jobject /* thiz */,
         jfloat offset) {
 
-    if (!g_running.load(std::memory_order_acquire) || g_pipeline == nullptr) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
         return;
     }
 
-    g_pipeline->setSplOffset(offset);
+    g_engine->setSplOffset(offset);
 }
 
 /// Obtiene el último nivel de entrada medido PRE-EQ (dB SPL).
 /// Diseñado para ser llamado por polling desde Kotlin (~10 Hz).
 /// Thread-safe: lee un std::atomic<float>.
 ///
-/// @return Nivel de entrada en dB SPL, o 0.0 si el pipeline no está activo
+/// @return Nivel de entrada en dB SPL, o 0.0 si el engine no está activo
 JNIEXPORT jfloat JNICALL
 Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetInputLevel(
         JNIEnv* /* env */,
         jobject /* thiz */) {
 
-    if (!g_running.load(std::memory_order_acquire) || g_pipeline == nullptr) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
         return 0.0f;
     }
 
-    return g_pipeline->getLastInputLevelDb();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Funciones auxiliares para el AudioEngine (usadas por tarea 5.1)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Verifica si el pipeline está activo (para uso del hilo de audio).
-/// @return true si el pipeline está inicializado y corriendo
-bool nativeBridge_isRunning() {
-    return g_running.load(std::memory_order_acquire);
-}
-
-/// Obtiene puntero al pipeline para procesamiento de audio.
-/// Solo debe llamarse desde el hilo de audio cuando isRunning() == true.
-/// @return Puntero al DspPipeline activo, o nullptr si no está corriendo
-DspPipeline* nativeBridge_getPipeline() {
-    if (!g_running.load(std::memory_order_acquire)) {
-        return nullptr;
-    }
-    return g_pipeline.get();
+    return g_engine->getLastInputLevel();
 }
 
 } // extern "C"

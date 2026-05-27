@@ -91,6 +91,11 @@ public:
     /// @param offset Offset en dB (120 para mic real, 76 para WAV)
     void setSplOffset(float offset);
 
+    /// Obtiene el último nivel de entrada medido PRE-EQ (dB SPL).
+    /// Thread-safe: lee un std::atomic<float> del pipeline interno.
+    /// @return Nivel de entrada en dB SPL
+    float getLastInputLevel() const;
+
     // ─── Callback de nivel para UI ──────────────────────────────────────
 
     /// Tipo de callback para reportar nivel de entrada (dB SPL).
