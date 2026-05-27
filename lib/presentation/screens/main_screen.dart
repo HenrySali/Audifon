@@ -845,6 +845,25 @@ class _ProcessingReport extends StatelessWidget {
               ),
               const Spacer(),
               GestureDetector(
+                onTap: () => _showDebugInfo(context),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.bug_report, color: Colors.orange, size: 14),
+                      SizedBox(width: 4),
+                      Text('Debug', style: TextStyle(color: Colors.orange, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
                 onTap: () => _copyReport(context, inputSpl, outputSpl,
                     estimatedGain, volumeDb, wdrcState, mpoActive, nrLevel, nrLabels),
                 child: Container(
@@ -917,6 +936,47 @@ class _ProcessingReport extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  void _showDebugInfo(BuildContext context) async {
+    try {
+      const channel = MethodChannel('com.psk.hearing_aid/audio');
+      final info = await channel.invokeMethod<String>('getDebugInfo');
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1a2332),
+            title: const Text('Debug Info', style: TextStyle(color: Colors.orange)),
+            content: SingleChildScrollView(
+              child: Text(
+                info ?? 'No info',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: info ?? ''));
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Copiar y cerrar'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   void _copyReport(

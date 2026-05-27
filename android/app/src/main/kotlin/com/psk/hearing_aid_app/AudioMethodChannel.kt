@@ -149,6 +149,7 @@ class AudioMethodChannel(
                 "updateWdrcParams" -> handleUpdateWdrcParams(call, result)
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
+                "getDebugInfo" -> handleGetDebugInfo(result)
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
@@ -313,6 +314,24 @@ class AudioMethodChannel(
         // (La compensación se suma a las ganancias prescritas en el lado Dart,
         //  pero el offset SPL se aplica directamente al engine nativo)
         result.success(null)
+    }
+
+    /**
+     * Devuelve información de diagnóstico del engine nativo.
+     * Se muestra en la UI para debugging sin ADB.
+     */
+    private fun handleGetDebugInfo(result: MethodChannel.Result) {
+        val level = nativeBridge.getInputLevel()
+        val info = buildString {
+            appendLine("=== Debug Info ===")
+            appendLine("State: $currentState")
+            appendLine("NativeBridge level: $level dB SPL")
+            appendLine("LevelListener active: ${nativeBridge.getInputLevel() != 0f}")
+            appendLine("LevelEventSink: ${if (levelEventSink != null) "connected" else "null"}")
+            appendLine("StateEventSink: ${if (stateEventSink != null) "connected" else "null"}")
+            appendLine("==================")
+        }
+        result.success(info)
     }
 
     // ─────────────────────────────────────────────────────────────────────

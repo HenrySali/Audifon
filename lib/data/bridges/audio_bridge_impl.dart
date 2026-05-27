@@ -213,6 +213,13 @@ class AudioBridgeImpl implements AudioBridge {
     });
   }
 
+  /// Obtiene información de diagnóstico del engine nativo.
+  /// Útil para debugging sin ADB.
+  Future<String> getDebugInfo() async {
+    final result = await _methodChannel.invokeMethod<String>('getDebugInfo');
+    return result ?? 'No debug info available';
+  }
+
   /// Convierte un valor dinámico del EventChannel a [AudioEngineState].
   AudioEngineState _parseState(dynamic event) {
     if (event is int) {
