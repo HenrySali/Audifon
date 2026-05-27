@@ -14,7 +14,8 @@
 
     <application
         android:label="PSK Hearing Aid"
-        android:name="${applicationName}">
+        android:name="${applicationName}"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
