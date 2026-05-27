@@ -134,19 +134,13 @@ class AudioForegroundService : Service() {
                 // Iniciar servicio en primer plano con notificación
                 startForeground(NOTIFICATION_ID, createNotification())
 
-                // Solicitar foco de audio
-                if (requestAudioFocus()) {
-                    // Configurar modo de comunicación para baja latencia
-                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                // Do NOT request audio focus or change audio mode here.
+                // The Oboe output stream uses Usage::Media which routes to A2DP
+                // (Bluetooth headphone speaker). Requesting VOICE_COMMUNICATION
+                // focus would switch to SCO profile (low quality, wrong routing).
+                // The foreground service only keeps the process alive.
 
-                    // Iniciar el engine de audio con la configuración del intent
-                    startAudioEngine(intent)
-                    isRunning = true
-                } else {
-                    Log.w(TAG, "No se pudo obtener foco de audio")
-                    eventListener?.onAudioFocusChanged(EVENT_AUDIO_FOCUS_LOST)
-                    stopSelf()
-                }
+                isRunning = true
             }
         }
 
@@ -155,15 +149,6 @@ class AudioForegroundService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
-
-        // Detener el engine de audio
-        stopAudioEngine()
-
-        // Liberar foco de audio
-        abandonAudioFocus()
-
-        // Restaurar modo de audio normal
-        audioManager.mode = AudioManager.MODE_NORMAL
 
         // Desregistrar receivers
         unregisterHeadphoneReceiver()
