@@ -203,8 +203,8 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     pipeline_.init(dspConfig);
 
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
-    setSharedInputStream(inputStream_);
-    setSharedOutputStream(outputStream_);
+    setInputStream(inputStream_.get());
+    setOutputStream(outputStream_.get());
 
     // ─── Step 7: Start the input stream first ────────────────────────────
     // FullDuplexStream reads from the input stream synchronously in the
@@ -430,8 +430,8 @@ void AudioEngine::attemptReconnection() {
         }
 
         // Success — start full-duplex
-        setSharedInputStream(inputStream_);
-        setSharedOutputStream(outputStream_);
+        setInputStream(inputStream_.get());
+        setOutputStream(outputStream_.get());
 
         // Start input stream first (it must be recording for FullDuplexStream to read)
         auto inputStartResult = inputStream_->requestStart();
