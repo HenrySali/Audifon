@@ -15,7 +15,7 @@ dependencies:
   hive_flutter: ^1.1.0
   permission_handler: ^11.0.1
   wakelock_plus: ^1.2.8
-  webview_flutter: ^4.4.2
+  url_launcher: ^6.2.1
 
 dev_dependencies:
   flutter_test:

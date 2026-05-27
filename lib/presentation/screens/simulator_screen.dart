@@ -1,156 +1,66 @@
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import '../../data/services/local_web_server.dart';
-
-/// Pantalla de configuración avanzada que muestra el simulador DSP web.
+/// Pantalla que abre el simulador DSP web en el navegador externo (Chrome).
 ///
-/// Levanta un servidor HTTP local (localhost) que sirve los archivos del
-/// simulador desde los assets de la app. El WebView se conecta a localhost,
-/// lo que permite que Chrome habilite getUserMedia (micrófono) y AudioWorklet
-/// sin necesidad de HTTPS ni internet.
-class SimulatorScreen extends StatefulWidget {
+/// El simulador está hosteado en GitHub Pages con HTTPS, lo que permite
+/// que Chrome habilite getUserMedia (micrófono) y AudioWorklet.
+class SimulatorScreen extends StatelessWidget {
   const SimulatorScreen({super.key});
 
-  @override
-  State<SimulatorScreen> createState() => _SimulatorScreenState();
-}
-
-class _SimulatorScreenState extends State<SimulatorScreen> {
-  final LocalWebServer _server = LocalWebServer();
-  WebViewController? _controller;
-  bool _isLoading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _startServer();
-  }
-
-  Future<void> _startServer() async {
-    try {
-      // Pedir permiso de micrófono antes de cargar el WebView
-      final micStatus = await Permission.microphone.request();
-      if (!micStatus.isGranted) {
-        setState(() {
-          _error = 'Se necesita permiso de micrófono para el modo tiempo real.';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // Iniciar servidor local
-      await _server.start();
-
-      // Crear WebView apuntando al servidor local
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageFinished: (_) {
-              if (mounted) setState(() => _isLoading = false);
-            },
-            onWebResourceError: (error) {
-              if (mounted) {
-                setState(() {
-                  _error = 'Error cargando simulador: ${error.description}';
-                  _isLoading = false;
-                });
-              }
-            },
-          ),
-        )
-        ..loadRequest(Uri.parse(_server.url!));
-
-      if (mounted) setState(() {});
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'Error iniciando servidor: $e';
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _server.stop();
-    super.dispose();
-  }
+  static const _simulatorUrl =
+      'https://henrysalinas1985-source.github.io/audifono/';
 
   @override
   Widget build(BuildContext context) {
+    // Abrir Chrome inmediatamente y volver atrás
+    _openSimulator(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Configuración Avanzada'),
         backgroundColor: const Color(0xFF0f3460),
         foregroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          if (_controller != null)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Recargar',
-              onPressed: () {
-                _controller!.reload();
-                setState(() => _isLoading = true);
-              },
-            ),
-        ],
       ),
-      body: _buildBody(),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_error != null) {
-      return Center(
+      body: Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-              const SizedBox(height: 16),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16),
-              ),
+              const Icon(Icons.open_in_browser, size: 64, color: Colors.cyan),
               const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _error = null;
-                    _isLoading = true;
-                  });
-                  _startServer();
-                },
-                child: const Text('Reintentar'),
+              const Text(
+                'Abriendo simulador en Chrome...',
+                style: TextStyle(fontSize: 16, color: Colors.white70),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'El simulador se abre en el navegador porque necesita acceso al micrófono con HTTPS.',
+                style: TextStyle(fontSize: 13, color: Colors.white38),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              ElevatedButton.icon(
+                onPressed: () => _openSimulator(context),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Abrir de nuevo'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.cyan,
+                  foregroundColor: Colors.white,
+                ),
               ),
             ],
           ),
         ),
-      );
-    }
-
-    if (_controller == null) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.cyan),
-      );
-    }
-
-    return Stack(
-      children: [
-        WebViewWidget(controller: _controller!),
-        if (_isLoading)
-          const Center(
-            child: CircularProgressIndicator(color: Colors.cyan),
-          ),
-      ],
+      ),
     );
+  }
+
+  void _openSimulator(BuildContext context) async {
+    final uri = Uri.parse(_simulatorUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 }
