@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +37,18 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
       
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: psk-hearing-aid-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Create Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: PSK Hearing Aid v${{ github.run_number }}
+          files: build/app/outputs/flutter-apk/app-release.apk
+          body: |
+            APK generada automáticamente.
+            Descargá `app-release.apk` directo al celular e instalá.
