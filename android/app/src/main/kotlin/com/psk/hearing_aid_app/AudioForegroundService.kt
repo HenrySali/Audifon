@@ -251,8 +251,8 @@ class AudioForegroundService : Service() {
 
         audioEngine = NativeAudioBridge()
 
-        val sampleRate = intent?.getIntExtra(EXTRA_SAMPLE_RATE, 16000) ?: 16000
-        val bufferSize = intent?.getIntExtra(EXTRA_BUFFER_SIZE, 64) ?: 64
+        val sampleRate = intent?.getIntExtra(EXTRA_SAMPLE_RATE, 48000) ?: 48000
+        val bufferSize = intent?.getIntExtra(EXTRA_BUFFER_SIZE, 256) ?: 256
         val eqGains = intent?.getFloatArrayExtra(EXTRA_EQ_GAINS) ?: FloatArray(12) { 0f }
         val volumeDb = intent?.getFloatExtra(EXTRA_VOLUME_DB, 0f) ?: 0f
         val expansionKnee = intent?.getFloatExtra(EXTRA_EXPANSION_KNEE, 35f) ?: 35f

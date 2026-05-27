@@ -1,6 +1,7 @@
 package com.psk.hearing_aid_app
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
@@ -183,6 +184,10 @@ class AudioMethodChannel(
      * - nrLevel: Int
      * - mpoThresholdDbSpl: Double (default 100)
      */
+    /**
+     * Inicia el pipeline de audio con la configuración proporcionada.
+     * Inicia el foreground service para mantener el audio en segundo plano.
+     */
     private fun handleStartAudio(call: MethodCall, result: MethodChannel.Result) {
         val sampleRate = call.argument<Int>("sampleRate") ?: 48000
         val bufferSize = call.argument<Int>("bufferSize") ?: 256
@@ -204,6 +209,26 @@ class AudioMethodChannel(
 
         emitState("starting")
 
+        // Start the foreground service to keep audio alive in background
+        val serviceIntent = Intent(context, AudioForegroundService::class.java).apply {
+            action = AudioForegroundService.ACTION_START
+            putExtra(AudioForegroundService.EXTRA_SAMPLE_RATE, sampleRate)
+            putExtra(AudioForegroundService.EXTRA_BUFFER_SIZE, bufferSize)
+            putExtra(AudioForegroundService.EXTRA_EQ_GAINS, eqGains)
+            putExtra(AudioForegroundService.EXTRA_VOLUME_DB, volumeDb.toFloat())
+            putExtra(AudioForegroundService.EXTRA_EXPANSION_KNEE, expansionKnee.toFloat())
+            putExtra(AudioForegroundService.EXTRA_EXPANSION_RATIO, expansionRatio.toFloat())
+            putExtra(AudioForegroundService.EXTRA_COMPRESSION_KNEE, compressionKnee.toFloat())
+            putExtra(AudioForegroundService.EXTRA_COMPRESSION_RATIO, compressionRatio.toFloat())
+            putExtra(AudioForegroundService.EXTRA_ATTACK_MS, attackMs.toFloat())
+            putExtra(AudioForegroundService.EXTRA_RELEASE_MS, releaseMs.toFloat())
+            putExtra(AudioForegroundService.EXTRA_NR_LEVEL, nrLevel)
+            putExtra(AudioForegroundService.EXTRA_MPO_THRESHOLD, mpoThresholdDbSpl.toFloat())
+            putExtra(AudioForegroundService.EXTRA_SPL_OFFSET, 120f)
+        }
+        context.startForegroundService(serviceIntent)
+
+        // Also start via the direct bridge for level polling
         nativeBridge.start(
             sampleRate = sampleRate,
             bufferSize = bufferSize,
@@ -225,9 +250,17 @@ class AudioMethodChannel(
 
     /**
      * Detiene el pipeline de audio y libera recursos.
+     * También detiene el foreground service.
      */
     private fun handleStopAudio(result: MethodChannel.Result) {
         nativeBridge.stop()
+
+        // Stop the foreground service
+        val serviceIntent = Intent(context, AudioForegroundService::class.java).apply {
+            action = AudioForegroundService.ACTION_STOP
+        }
+        context.startService(serviceIntent)
+
         emitState("idle")
         result.success(null)
     }
