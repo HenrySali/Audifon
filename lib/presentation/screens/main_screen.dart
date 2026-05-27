@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -275,11 +276,10 @@ class _ActiveView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       child: Column(
         children: [
-          const Spacer(flex: 1),
           // Botón grande de desactivación (≥ 30% del área visible) — Req 5.1
           _ActivationButton(
             active: true,
@@ -287,13 +287,16 @@ class _ActiveView extends StatelessWidget {
               context.read<AmplificationBloc>().add(const StopAmplification());
             },
           ),
-          const Spacer(flex: 1),
+          const SizedBox(height: 20),
           // Slider de volumen (-20 a +10 dB) — Req 5.3
           _VolumeSlider(volumeDb: state.volumeDb),
           const SizedBox(height: 16),
           // Medidor de nivel de entrada (estilo VU) — Req 5.4
           _InputLevelMeter(levelDb: state.inputLevelDb),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
+          // Reporte de procesamiento en tiempo real
+          _ProcessingReport(state: state),
+          const SizedBox(height: 16),
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
           const SizedBox(height: 24),
