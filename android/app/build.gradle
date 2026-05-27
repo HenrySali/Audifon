@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.psk.hearing_aid_app"
-    compileSdk = 34
+    compileSdk = 35
     ndkVersion = "25.2.9519653"
 
     compileOptions {
