@@ -62,10 +62,6 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
             },
           ),
         )
-        // Permitir acceso al micrófono desde el WebView
-        ..setOnPermissionRequest((request) {
-          request.grant();
-        })
         ..loadRequest(Uri.parse(_server.url!));
 
       if (mounted) setState(() {});
