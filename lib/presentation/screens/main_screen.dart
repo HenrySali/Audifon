@@ -755,3 +755,251 @@ class _ProfileChip extends StatelessWidget {
     );
   }
 }
+
+// =============================================================================
+// PROCESSING REPORT — Reporte de procesamiento en tiempo real
+// =============================================================================
+
+/// Panel de reporte de procesamiento DSP en tiempo real.
+/// Muestra: entrada, salida, ganancia, WDRC, MPO, NR, latencia.
+/// Incluye botón para copiar el reporte al portapapeles.
+class _ProcessingReport extends StatelessWidget {
+  final AmplificationActive state;
+
+  const _ProcessingReport({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    // Calcular valores derivados
+    final inputSpl = state.inputLevelDb;
+    final volumeDb = state.volumeDb;
+    final profile = state.activeProfile;
+
+    // Estimar ganancia basada en perfil
+    final double estimatedGain;
+    final double compressionRatio;
+    final int nrLevel;
+    switch (profile) {
+      case 'Silencioso':
+        estimatedGain = 15.0;
+        compressionRatio = 1.5;
+        nrLevel = 1;
+      case 'Conversación':
+        estimatedGain = 20.0;
+        compressionRatio = 2.0;
+        nrLevel = 2;
+      case 'Ruidoso':
+        estimatedGain = 10.0;
+        compressionRatio = 3.0;
+        nrLevel = 3;
+      default:
+        estimatedGain = 15.0;
+        compressionRatio = 2.0;
+        nrLevel = 1;
+    }
+
+    // Estado WDRC
+    const expansionKnee = 35.0;
+    const compressionKnee = 55.0;
+    final String wdrcState;
+    if (inputSpl < expansionKnee) {
+      wdrcState = 'Expansión ↓';
+    } else if (inputSpl > compressionKnee) {
+      wdrcState = 'Compresión (${compressionRatio.toStringAsFixed(1)}:1)';
+    } else {
+      wdrcState = 'Lineal';
+    }
+
+    // Salida estimada
+    final outputSpl = inputSpl + estimatedGain + volumeDb;
+
+    // MPO
+    const mpoThreshold = 100.0;
+    final mpoActive = outputSpl > mpoThreshold - 3;
+
+    // NR labels
+    const nrLabels = ['Off', 'Mild', 'Moderate', 'Strong'];
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2a3a4a)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header con título y botón copiar
+          Row(
+            children: [
+              const Icon(Icons.analytics, color: Colors.cyan, size: 18),
+              const SizedBox(width: 6),
+              const Text(
+                'Procesamiento',
+                style: TextStyle(
+                  color: Colors.cyan,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => _copyReport(context, inputSpl, outputSpl,
+                    estimatedGain, volumeDb, wdrcState, mpoActive, nrLevel, nrLabels),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.cyan.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.copy, color: Colors.cyan, size: 14),
+                      SizedBox(width: 4),
+                      Text('Copiar', style: TextStyle(color: Colors.cyan, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Grid de métricas
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              _ReportMetric(
+                icon: '📥',
+                label: 'Entrada',
+                value: '${inputSpl.toStringAsFixed(1)} dB SPL',
+              ),
+              _ReportMetric(
+                icon: '📤',
+                label: 'Salida',
+                value: '${outputSpl.toStringAsFixed(1)} dB SPL',
+              ),
+              _ReportMetric(
+                icon: '📈',
+                label: 'Ganancia',
+                value: '+${(estimatedGain + volumeDb).toStringAsFixed(1)} dB',
+              ),
+              _ReportMetric(
+                icon: '🔊',
+                label: 'Volumen',
+                value: '${volumeDb >= 0 ? '+' : ''}${volumeDb.toStringAsFixed(0)} dB',
+              ),
+              _ReportMetric(
+                icon: '🎚️',
+                label: 'WDRC',
+                value: wdrcState,
+              ),
+              _ReportMetric(
+                icon: '🛡️',
+                label: 'MPO',
+                value: mpoActive ? '⚠️ LIMITANDO' : 'Inactivo',
+                valueColor: mpoActive ? Colors.red : null,
+              ),
+              _ReportMetric(
+                icon: '🔇',
+                label: 'NR',
+                value: nrLabels[nrLevel.clamp(0, 3)],
+              ),
+              _ReportMetric(
+                icon: '⏱️',
+                label: 'Latencia',
+                value: '~5.8 ms',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _copyReport(
+    BuildContext context,
+    double inputSpl,
+    double outputSpl,
+    double gain,
+    double volume,
+    String wdrcState,
+    bool mpoActive,
+    int nrLevel,
+    List<String> nrLabels,
+  ) {
+    final report = '''
+=== Reporte de Procesamiento DSP ===
+Perfil: ${state.activeProfile}
+Entrada: ${inputSpl.toStringAsFixed(1)} dB SPL
+Salida: ${outputSpl.toStringAsFixed(1)} dB SPL
+Ganancia: +${(gain + volume).toStringAsFixed(1)} dB
+Volumen: ${volume >= 0 ? '+' : ''}${volume.toStringAsFixed(0)} dB
+WDRC: $wdrcState
+MPO: ${mpoActive ? 'LIMITANDO' : 'Inactivo'}
+NR: ${nrLabels[nrLevel.clamp(0, 3)]}
+Latencia: ~5.8 ms
+Auriculares: ${state.headphonesConnected ? 'Conectados' : 'Desconectados'}
+================================
+''';
+
+    Clipboard.setData(ClipboardData(text: report));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Reporte copiado al portapapeles'),
+        duration: Duration(seconds: 2),
+        backgroundColor: Color(0xFF0f3460),
+      ),
+    );
+  }
+}
+
+/// Métrica individual del reporte de procesamiento.
+class _ReportMetric extends StatelessWidget {
+  final String icon;
+  final String label;
+  final String value;
+  final Color? valueColor;
+
+  const _ReportMetric({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 145,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(icon, style: const TextStyle(fontSize: 12)),
+          const SizedBox(width: 4),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          Flexible(
+            child: Text(
+              value,
+              style: TextStyle(
+                color: valueColor ?? Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
