@@ -3,9 +3,6 @@ name: Deploy Simulator to GitHub Pages
 on:
   push:
     branches: [main]
-    paths:
-      - 'assets/simulator/**'
-      - '.github/workflows/deploy-simulator.yml'
 
 permissions:
   contents: read
