@@ -195,8 +195,8 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     pipeline_.init(dspConfig);
 
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
-    setInputStream(inputStream_.get());
-    setOutputStream(outputStream_.get());
+    setSharedInputStream(inputStream_);
+    setSharedOutputStream(outputStream_);
 
     // ─── Step 7: Start the FullDuplexStream ──────────────────────────────
     oboe::Result startResult = oboe::FullDuplexStream::start();
@@ -391,8 +391,8 @@ void AudioEngine::attemptReconnection() {
         }
 
         // Success — start full-duplex
-        setInputStream(inputStream_.get());
-        setOutputStream(outputStream_.get());
+        setSharedInputStream(inputStream_);
+        setSharedOutputStream(outputStream_);
         auto startResult = FullDuplexStream::start();
         if (startResult == oboe::Result::OK) {
             reconnecting_.store(false, std::memory_order_release);
