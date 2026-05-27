@@ -38,7 +38,8 @@ public:
     bool start(const AudioEngineConfig& config);
 
     /// Detiene streams y libera recursos Oboe.
-    void stop();
+    /// Returns oboe::Result (overrides FullDuplexStream::stop()).
+    oboe::Result stop() override;
 
     /// @return true si ambos streams están activos.
     bool isRunning() const;
