@@ -48,7 +48,11 @@ oboe::Result AudioEngine::openInputStream() {
     oboe::AudioStreamBuilder builder;
 
     builder.setDirection(oboe::Direction::Input);
-    builder.setDeviceId(config_.builtInMicDeviceId);
+    // Only set deviceId if explicitly provided (non-zero)
+    // When 0, let Oboe use the system default input device (built-in mic)
+    if (config_.builtInMicDeviceId != 0) {
+        builder.setDeviceId(config_.builtInMicDeviceId);
+    }
     builder.setSampleRate(config_.sampleRate);
     builder.setChannelCount(1);
     builder.setFormat(oboe::AudioFormat::Float);
