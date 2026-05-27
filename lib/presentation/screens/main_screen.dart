@@ -8,6 +8,7 @@ import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 import '../widgets/safety_warning_widget.dart';
 import 'audiogram_screen.dart';
+import 'simulator_screen.dart';
 
 /// Pantalla principal de amplificación del PSK Mobile Hearing Aid.
 ///
@@ -128,6 +129,22 @@ class _StatusBar extends StatelessWidget {
               ),
             ),
           const SizedBox(width: 8),
+          // Botón de simulador avanzado
+          Builder(
+            builder: (context) => IconButton(
+              icon: const Icon(Icons.tune, color: Colors.white70, size: 22),
+              tooltip: 'Configuración Avanzada',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const SimulatorScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
           // Botón de configuración de audiograma (Req 4.1, 4.3)
           Builder(
             builder: (context) => IconButton(
