@@ -11,7 +11,7 @@
 /// - nativeSetSplOffset: Actualiza offset de calibración SPL (thread-safe)
 /// - nativeGetInputLevel: Lee último nivel de entrada PRE-EQ (polling ~10 Hz)
 ///
-/// El AudioEngine encapsula OpenSL ES (captura + reproducción) y el DspPipeline.
+/// El AudioEngine encapsula Oboe FullDuplexStream (captura + reproducción) y el DspPipeline.
 /// Todas las actualizaciones de parámetros son lock-free (atómicas).
 /// El nivel de entrada se obtiene por polling desde Kotlin (no callback).
 
@@ -39,7 +39,7 @@ namespace {
 
 /// AudioEngine — propiedad del puente JNI.
 /// Se crea en nativeStart y se destruye en nativeStop.
-/// Encapsula OpenSL ES (captura mic + reproducción auriculares) + DspPipeline.
+/// Encapsula Oboe FullDuplexStream (captura mic + reproducción auriculares) + DspPipeline.
 std::unique_ptr<AudioEngine> g_engine;
 
 /// Flag atómico que indica si el engine está activo.
@@ -103,11 +103,10 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     engineConfig.sampleRate = sampleRate;
     engineConfig.bufferSize = bufferSize;
     engineConfig.channels = 1;
-    engineConfig.bitsPerSample = 16;
     engineConfig.mpoThresholdDbSpl = mpoThresholdDbSpl;
     engineConfig.splOffset = splOffset;
 
-    // Iniciar el AudioEngine (crea OpenSL ES recorder + player + hilo de audio)
+    // Iniciar el AudioEngine (crea Oboe streams + hilo de audio)
     if (!g_engine->start(engineConfig)) {
         LOGE("nativeStart: AudioEngine failed to start!");
         g_engine.reset();
@@ -147,7 +146,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     // Marcar como activo
     g_running.store(true, std::memory_order_release);
 
-    LOGI("nativeStart: AudioEngine started successfully (OpenSL ES active)");
+    LOGI("nativeStart: AudioEngine started successfully (Oboe active)");
 }
 
 /// Detiene el AudioEngine y libera recursos.
@@ -166,7 +165,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStop(
     // Marcar como inactivo primero
     g_running.store(false, std::memory_order_release);
 
-    // Detener y destruir AudioEngine (para OpenSL ES, hilo de audio, pipeline)
+    // Detener y destruir AudioEngine (para Oboe streams, pipeline)
     if (g_engine) {
         g_engine->stop();
         g_engine.reset();

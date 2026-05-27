@@ -1,4 +1,4 @@
-# CMakeLists.txt — Pipeline DSP nativo para PSK Hearing Aid
+# CMakeLists.txt — Pipeline DSP nativo para PSK Hearing Aid (Oboe)
 # Compila el motor de audio C++ que procesa audio en tiempo real vía JNI
 
 cmake_minimum_required(VERSION 3.22.1)
@@ -12,13 +12,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -ffast-math -fno-exceptions")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -ffast-math -DNDEBUG")
 
+# Find Oboe package (provided via prefab)
+find_package(oboe REQUIRED CONFIG)
+
 # Librería compartida del DSP pipeline
 add_library(
     hearing_aid_dsp
     SHARED
     # Puente JNI (Kotlin ↔ C++)
     native_bridge.cpp
-    # Motor de audio (AudioRecord + AudioTrack)
+    # Motor de audio (Oboe FullDuplexStream)
     audio_engine.cpp
     # Pipeline DSP completo
     dsp_pipeline.cpp
@@ -29,12 +32,12 @@ add_library(
     mpo_limiter.cpp
 )
 
-# Enlazar con librerías del sistema Android
+# Enlazar con Oboe y librerías del sistema Android
 target_link_libraries(
     hearing_aid_dsp
     android
     log
-    OpenSLES
+    oboe::oboe
 )
 
 # Incluir headers del directorio actual

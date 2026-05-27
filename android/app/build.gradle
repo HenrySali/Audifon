@@ -9,6 +9,10 @@ android {
     compileSdk = 34
     ndkVersion = "25.2.9519653"
 
+    buildFeatures {
+        prefab true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -67,4 +71,5 @@ flutter {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
     implementation "androidx.core:core-ktx:1.12.0"
+    implementation 'com.google.oboe:oboe:1.9.0'
 }
