@@ -1,7 +1,8 @@
 /// @file dsp_pipeline.cpp
 /// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
 ///
-/// Pipeline: NR → medir nivel PRE-EQ → EQ → WDRC → Headroom Guard → Volume → MPO
+/// Pipeline: HPF → NR → medir nivel PRE-EQ → Adaptive EQ Scale → EQ → WDRC →
+///           Headroom Guard → Volume → MPO
 ///                       ↓
 ///              Environment Classifier
 ///              (actualiza NR + WDRC en transición)
@@ -12,12 +13,18 @@
 /// - MPO es la última etapa — red de seguridad absoluta.
 /// - Silencio debe producir silencio (expansión activa).
 /// - Headroom Guard protege contra transitorios post-EQ.
+/// - HPF @ 150 Hz removes low-frequency rumble to free headroom.
+/// - Adaptive EQ scaling prevents distortion on Moderate/Severe/Profound presets.
 
 #include "dsp_pipeline.h"
 
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -60,6 +67,9 @@ void DspPipeline::init(const AudioConfig& config) {
 
     // Inicializar analizador de espectro
     spectrumAnalyzer_.init(config.sampleRate, config.splOffset);
+
+    // Compute high-pass filter coefficients (150 Hz Butterworth, actual sample rate)
+    computeHighPassCoeffs(config.sampleRate, 150.0f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,6 +88,18 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         std::memcpy(inputCopy, buffer, blockSize * sizeof(float));
     }
 
+    // ─── 0.5. High-pass filter @ 150 Hz (remove rumble, free headroom) ──
+    // 2nd-order Butterworth HPF removes low-frequency wind/vibration that
+    // wastes headroom without contributing to speech intelligibility.
+    for (int i = 0; i < blockSize; ++i) {
+        float x = buffer[i];
+        float y = hpB0_ * x + hpB1_ * hpX1_ + hpB2_ * hpX2_
+                - hpA1_ * hpY1_ - hpA2_ * hpY2_;
+        hpX2_ = hpX1_; hpX1_ = x;
+        hpY2_ = hpY1_; hpY1_ = y;
+        buffer[i] = y;
+    }
+
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
     nr_.process(buffer, blockSize);
 
@@ -89,12 +111,6 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
 
     // ─── 3. Environment Classifier (actualiza NR + WDRC en transición) ──
     if (autoClassifyEnabled_.load(std::memory_order_relaxed)) {
-        // Estimar SNR desde las potencias de ruido del NR.
-        // Usamos las noisePower_ del NR como estimación de ruido por banda.
-        // Como no tenemos acceso directo a noisePower_ (privado), usamos
-        // una estimación simplificada basada en el nivel de entrada.
-        // SNR alto cuando el nivel es bajo (quiet), SNR bajo cuando es alto.
-        // En un sistema completo, el NR expondría sus noise estimates.
         float estimatedSnr = estimateSnrSimple(inputLevelDb);
 
         EnvironmentClass envClass = envClassifier_.update(inputLevelDb, estimatedSnr);
@@ -115,8 +131,36 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         }
     }
 
+    // ─── 3.5. Adaptive EQ gain scaling (prevent distortion) ─────────────
+    // Calculate peak amplitude of current buffer to determine available headroom.
+    // If the EQ's max gain would exceed headroom, scale all gains proportionally.
+    float peakAmplitude = 0.0f;
+    for (int i = 0; i < blockSize; ++i) {
+        float absVal = std::abs(buffer[i]);
+        if (absVal > peakAmplitude) peakAmplitude = absVal;
+    }
+
+    // Calculate available headroom in dB
+    // Ceiling = 0.9 (leave margin for WDRC + volume, which can add up to +10 dB)
+    float headroomDb = (peakAmplitude > 1e-10f) ?
+        20.0f * std::log10(0.9f / peakAmplitude) : 60.0f;
+
+    // Get maximum EQ gain currently configured
+    float maxEqGain = eq_.getMaxGain();
+
+    // If EQ would exceed headroom, scale all gains proportionally
+    float eqScale = 1.0f;
+    if (maxEqGain > 0.1f && headroomDb < maxEqGain) {
+        eqScale = std::max(0.1f, headroomDb / maxEqGain);
+    }
+
     // ─── 4. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
-    eq_.process(buffer, blockSize);
+    // Apply EQ with adaptive scaling if needed to prevent distortion
+    if (eqScale < 0.99f) {
+        eq_.processWithScale(buffer, blockSize, eqScale);
+    } else {
+        eq_.process(buffer, blockSize);
+    }
 
     // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
     // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
@@ -246,4 +290,27 @@ float DspPipeline::estimateSnrSimple(float inputLevelDb) const {
     float snr = inputLevelDb - kNoiseFloorDbSpl;
     snr = std::max(kEnvSnrMin, std::min(kEnvSnrMax, snr));
     return snr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// High-pass filter coefficient computation
+// ─────────────────────────────────────────────────────────────────────────────
+
+void DspPipeline::computeHighPassCoeffs(int sampleRate, float cutoffHz) {
+    // 2nd order Butterworth high-pass filter
+    // Q = 0.7071 (1/sqrt(2)) for maximally flat passband
+    const float w0 = 2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(sampleRate);
+    const float cosW0 = std::cos(w0);
+    const float alpha = std::sin(w0) / (2.0f * 0.7071f); // Q = 0.7071 for Butterworth
+
+    const float a0 = 1.0f + alpha;
+    hpB0_ = ((1.0f + cosW0) / 2.0f) / a0;
+    hpB1_ = (-(1.0f + cosW0)) / a0;
+    hpB2_ = ((1.0f + cosW0) / 2.0f) / a0;
+    hpA1_ = (-2.0f * cosW0) / a0;
+    hpA2_ = (1.0f - alpha) / a0;
+
+    // Reset filter state
+    hpX1_ = hpX2_ = 0.0f;
+    hpY1_ = hpY2_ = 0.0f;
 }

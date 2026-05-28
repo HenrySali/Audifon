@@ -109,6 +109,19 @@ public:
     /// @return Ganancia en dB, o 0.0 si el índice es inválido
     float getGain(int band) const;
 
+    /// Returns the maximum gain currently configured across all bands (in dB).
+    /// Very cheap: simple scan of 12 atomic gain values.
+    float getMaxGain() const;
+
+    /// Process with a gain scaling factor (0.0 to 1.0).
+    /// Applies EQ normally, then scales the output by the given factor.
+    /// Preserves frequency shape while reducing overall level.
+    /// Used for adaptive headroom management.
+    /// @param buffer Puntero al buffer de audio float32
+    /// @param blockSize Número de muestras en el buffer
+    /// @param scale Scaling factor [0.0, 1.0]
+    void processWithScale(float* buffer, int blockSize, float scale);
+
 private:
     /// Calcula coeficientes biquad peaking EQ usando Audio EQ Cookbook.
     ///

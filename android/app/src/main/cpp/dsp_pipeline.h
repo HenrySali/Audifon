@@ -152,6 +152,18 @@ private:
 
     // --- Analizador de espectro ---
     SpectrumAnalyzer spectrumAnalyzer_;  ///< FFT 128-point para visualización
+
+    // --- High-pass filter state (2nd order Butterworth @ 150 Hz) ---
+    float hpX1_ = 0.0f, hpX2_ = 0.0f;
+    float hpY1_ = 0.0f, hpY2_ = 0.0f;
+    // Precomputed coefficients (computed in init() for actual sample rate)
+    float hpB0_ = 0.0f, hpB1_ = 0.0f, hpB2_ = 0.0f;
+    float hpA1_ = 0.0f, hpA2_ = 0.0f;
+
+    /// Computes 2nd-order Butterworth high-pass filter coefficients.
+    /// @param sampleRate Sample rate in Hz
+    /// @param cutoffHz Cutoff frequency in Hz
+    void computeHighPassCoeffs(int sampleRate, float cutoffHz);
 };
 
 #endif // HEARING_AID_DSP_PIPELINE_H

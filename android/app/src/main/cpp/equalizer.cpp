@@ -68,6 +68,28 @@ float Equalizer::getGain(int band) const {
     return gains_[band].load(std::memory_order_relaxed);
 }
 
+float Equalizer::getMaxGain() const {
+    float maxGain = 0.0f;
+    for (int i = 0; i < kEqBandCount; ++i) {
+        float g = gains_[i].load(std::memory_order_relaxed);
+        if (g > maxGain) maxGain = g;
+    }
+    return maxGain;
+}
+
+void Equalizer::processWithScale(float* buffer, int blockSize, float scale) {
+    if (buffer == nullptr || blockSize <= 0) return;
+
+    // Apply EQ normally (preserves frequency shape)
+    process(buffer, blockSize);
+
+    // Post-scale: reduce the amplified signal to fit in headroom.
+    // This preserves the frequency shape perfectly while reducing overall level.
+    for (int i = 0; i < blockSize; ++i) {
+        buffer[i] *= scale;
+    }
+}
+
 // ============================================================================
 // Cálculo de coeficientes (Audio EQ Cookbook — Peaking EQ)
 // ============================================================================
