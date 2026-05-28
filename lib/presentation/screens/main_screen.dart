@@ -9,6 +9,7 @@ import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 import '../widgets/safety_warning_widget.dart';
 import 'audiogram_screen.dart';
+import 'dsp_config_detail_screen.dart';
 import 'simulator_screen.dart';
 import 'spectrum_analyzer_screen.dart';
 
@@ -1180,6 +1181,7 @@ class _ReportMetric extends StatelessWidget {
 // =============================================================================
 
 /// Indicador compacto del preset de EQ y NR activos.
+/// Al tocarlo abre la pantalla de detalle completo de configuración DSP.
 class _EqPresetIndicator extends StatelessWidget {
   final String presetName;
   final int nrLevel;
@@ -1190,35 +1192,49 @@ class _EqPresetIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     const nrLabels = ['Off', 'Bajo', 'Medio', 'Alto'];
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213e),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.equalizer, color: Colors.cyan, size: 18),
-          const SizedBox(width: 8),
-          Text(
-            'EQ: $presetName',
-            style: const TextStyle(
-              color: Colors.cyan,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => BlocProvider.value(
+              value: context.read<AmplificationBloc>(),
+              child: const DspConfigDetailScreen(),
             ),
           ),
-          const Spacer(),
-          const Icon(Icons.noise_aware, color: Colors.white54, size: 16),
-          const SizedBox(width: 4),
-          Text(
-            'NR: ${nrLabels[nrLevel.clamp(0, 3)]}',
-            style: const TextStyle(
-              color: Colors.white54,
-              fontSize: 12,
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF16213e),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.equalizer, color: Colors.cyan, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              'EQ: $presetName',
+              style: const TextStyle(
+                color: Colors.cyan,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-        ],
+            const Spacer(),
+            const Icon(Icons.noise_aware, color: Colors.white54, size: 16),
+            const SizedBox(width: 4),
+            Text(
+              'NR: ${nrLabels[nrLevel.clamp(0, 3)]}',
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
+          ],
+        ),
       ),
     );
   }
