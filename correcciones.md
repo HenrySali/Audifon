@@ -165,12 +165,80 @@
 
 | # | Tarea | Prioridad |
 |---|-------|-----------|
-| 1 | Verificar fix #1 (micrófono) con logcat en dispositivo real | ALTA |
-| 2 | Verificar fix #3 (background) — ¿suena al minimizar? | ALTA |
-| 3 | Verificar fix #4 (A2DP) — ¿volvió a sonar en auricular? | ALTA |
-| 4 | Conectar `getLastEqPreset()` al inicio de amplificación | MEDIA |
-| 5 | Resaltar visualmente el chip de NR activo | BAJA |
-| 6 | Probar script de frecuencias con auricular BT | BAJA |
+| 1 | Agregar histéresis al clasificador de ambiente (oscila SPEECH↔NOISE en frontera) | MEDIA |
+| 2 | Verificar botón REC del spectrum analyzer con nuevo build | ALTA |
+| 3 | Verificar long-press para borrar presets personalizados | MEDIA |
+| 4 | Ajustar offset de calibración (input 100 dB SPL parece alto para conversación) | MEDIA |
+| 5 | Conectar `getLastEqPreset()` al inicio de amplificación | BAJA |
+
+---
+
+## 2026-05-28
+
+### #12 — Feature: Clasificador Automático de Ambiente (C++ + JNI)
+
+| Campo | Valor |
+|-------|-------|
+| **Estado** | ✅ EFECTIVA |
+| **Commit** | `d60e41b` |
+| **Problema** | Niños no pueden cambiar perfiles manualmente |
+| **Fix** | Clasificador rule-based: QUIET/SPEECH/SPEECH_IN_NOISE/NOISE con EMA smoothing (α=0.05) y hold timer (500ms). Ajusta NR (0-3) y WDRC (knee/ratio) automáticamente |
+| **Archivos** | `environment_classifier.h/.cpp`, `dsp_pipeline.h/.cpp`, `native_bridge.cpp`, `audio_engine.h/.cpp`, `NativeAudioBridge.kt`, `AudioMethodChannel.kt` |
+| **Verificación usuario** | Funciona — detecta NOISE en mesa con 3 personas + ruido externo. Oscila SPEECH↔NOISE en frontera (pendiente histéresis) |
+
+---
+
+### #13 — Feature: Headroom Guard post-WDRC (0.95 ceiling)
+
+| Campo | Valor |
+|-------|-------|
+| **Estado** | ✅ EFECTIVA |
+| **Commit** | `d60e41b` |
+| **Problema** | Picos post-EQ podían exceder 1.0 antes de llegar al MPO |
+| **Fix** | `applyHeadroomGuard()` en `wdrc_processor.cpp` — escanea pico post-WDRC, escala si > 0.95 |
+| **Archivos** | `wdrc_processor.h/.cpp`, `dsp_pipeline.cpp` |
+| **Verificación** | Integrado en pipeline, reduce carga del MPO |
+
+---
+
+### #14 — Feature: Analizador de Espectro en Tiempo Real
+
+| Campo | Valor |
+|-------|-------|
+| **Estado** | ⚠️ PARCIAL |
+| **Commit** | Pendiente push completo |
+| **Problema** | No había forma de visualizar qué hace el pipeline con el audio |
+| **Fix** | FFT Cooley-Tukey 128 puntos, magnitud (dB SPL) + fase (grados), 64 bins + 12 bandas EQ, visualización en vivo a 10 Hz, grabación 3 min, exportación JSON |
+| **Archivos** | `spectrum_analyzer.h/.cpp`, `dsp_pipeline.h/.cpp`, `native_bridge.cpp`, `audio_engine.h/.cpp`, `NativeAudioBridge.kt`, `AudioMethodChannel.kt`, `spectrum_snapshot.dart`, `spectrum_bridge.dart`, `magnitude_chart.dart`, `phase_chart.dart`, `spectrum_analyzer_screen.dart`, `main_screen.dart` |
+| **Verificación usuario** | Visualización funciona ✅, Copy funciona ✅, botón REC no respondía (fix aplicado: method names mismatch) |
+| **Nota** | Pendiente verificar REC con nuevo build |
+
+---
+
+### #15 — Fix: Botón REC siempre rojo + no responde
+
+| Campo | Valor |
+|-------|-------|
+| **Estado** | 🔄 PENDIENTE |
+| **Commit** | Pendiente push |
+| **Problema** | Botón REC aparecía siempre rojo (parecía grabando), al presionar no hacía nada |
+| **Causa raíz** | 1) Visual: idle usaba `Colors.red.withOpacity(0.2)` (parecía rojo). 2) Funcional: `spectrum_bridge.dart` llamaba `'startRecording'` pero Kotlin esperaba `'startSpectrumRecording'` |
+| **Fix** | 1) Idle ahora es gris oscuro con texto "REC". 2) Corregidos method names a `startSpectrumRecording`/`stopSpectrumRecording`. 3) Agregado SnackBar de feedback |
+| **Archivos** | `spectrum_analyzer_screen.dart`, `spectrum_bridge.dart` |
+| **Verificación** | Pendiente con nuevo build |
+
+---
+
+### #16 — Feature: Presets Personalizados con Nombre
+
+| Campo | Valor |
+|-------|-------|
+| **Estado** | ⚠️ PARCIAL |
+| **Commit** | Pendiente push |
+| **Problema** | Solo 3 perfiles fijos, no se podían guardar configuraciones personalizadas |
+| **Fix** | Botón 🔖 en pantalla audiograma → diálogo con nombre → guarda en Hive. Eventos `SaveCustomPreset`/`DeleteCustomPreset` en BLoC. Selector de perfiles carga predefinidos + personalizados. Long-press para borrar |
+| **Archivos** | `audiogram_screen.dart`, `amplification_event.dart`, `amplification_bloc.dart`, `main_screen.dart` |
+| **Verificación usuario** | Guardar funciona ✅, borrar (long-press) pendiente verificar |
 
 ---
 
