@@ -611,50 +611,41 @@ class _BandSlider extends StatelessWidget {
 class _NrControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<AmplificationBloc, AmplificationState>(
-      builder: (context, state) {
-        // Only show when active
-        if (state is! AmplificationActive) {
-          return const SizedBox.shrink();
-        }
-
-        return Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF16213e),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
             children: [
-              const Row(
-                children: [
-                  Icon(Icons.noise_aware, color: Colors.cyan, size: 18),
-                  SizedBox(width: 8),
-                  Text(
-                    'Reducción de Ruido',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _NrChip(label: 'Off', level: 0, context: context),
-                  _NrChip(label: 'Bajo', level: 1, context: context),
-                  _NrChip(label: 'Medio', level: 2, context: context),
-                  _NrChip(label: 'Alto', level: 3, context: context),
-                ],
+              Icon(Icons.noise_aware, color: Colors.cyan, size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Reducción de Ruido',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
-        );
-      },
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _NrChip(label: 'Off', level: 0),
+              _NrChip(label: 'Bajo', level: 1),
+              _NrChip(label: 'Medio', level: 2),
+              _NrChip(label: 'Alto', level: 3),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -662,30 +653,32 @@ class _NrControl extends StatelessWidget {
 class _NrChip extends StatelessWidget {
   final String label;
   final int level;
-  final BuildContext context;
 
   const _NrChip({
     required this.label,
     required this.level,
-    required this.context,
   });
 
   @override
-  Widget build(BuildContext outerContext) {
-    // For now, all chips are selectable
+  Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () {
-        context.read<AmplificationBloc>().add(UpdateNrLevel(level: level));
+        try {
+          context.read<AmplificationBloc>().add(UpdateNrLevel(level: level));
+        } catch (_) {
+          // Bloc not available
+        }
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white24),
+          border: Border.all(color: Colors.cyan.withOpacity(0.5)),
+          color: Colors.cyan.withOpacity(0.1),
         ),
         child: Text(
           label,
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
+          style: const TextStyle(color: Colors.cyan, fontSize: 12),
         ),
       ),
     );
