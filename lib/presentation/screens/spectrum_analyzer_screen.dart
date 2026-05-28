@@ -97,6 +97,9 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
 
   Future<void> _startRecording() async {
     await _bridge.startRecording();
+    if (mounted) {
+      _showSnackBar('🔴 Recording started — 3 min max');
+    }
     setState(() {
       _isRecording = true;
       _elapsedSeconds = 0;
@@ -133,6 +136,7 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
         _recordedCount = count;
         _hasRecordingData = count > 0;
       });
+      _showSnackBar('⏹ Recording stopped — $count snapshots captured');
     }
   }
 
@@ -433,38 +437,58 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
 
   Widget _buildRecordButton() {
     if (_isRecording) {
+      // RECORDING STATE: pulsing red circle with STOP icon
       return AnimatedBuilder(
         animation: _pulseAnimation,
         builder: (context, child) {
           return GestureDetector(
             onTap: _stopRecording,
             child: Container(
-              width: 56,
-              height: 56,
+              width: 64,
+              height: 64,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: Colors.red.withOpacity(_pulseAnimation.value),
-                border: Border.all(color: Colors.red, width: 2),
+                border: Border.all(color: Colors.red, width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.red.withOpacity(0.4),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  ),
+                ],
               ),
-              child: const Icon(Icons.stop, color: Colors.white, size: 28),
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.stop, color: Colors.white, size: 24),
+                  Text('STOP', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold)),
+                ],
+              ),
             ),
           );
         },
       );
     }
 
+    // IDLE STATE: gray/dark circle with REC label — clearly NOT recording
     return GestureDetector(
       onTap: _startRecording,
       child: Container(
-        width: 56,
-        height: 56,
+        width: 64,
+        height: 64,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.red.withOpacity(0.2),
-          border: Border.all(color: Colors.red.shade300, width: 2),
+          color: const Color(0xFF2a2a3e),
+          border: Border.all(color: Colors.white38, width: 2),
         ),
-        child: const Icon(Icons.fiber_manual_record,
-            color: Colors.red, size: 28),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.fiber_manual_record, color: Colors.white54, size: 20),
+            Text('REC', style: TextStyle(color: Colors.white54, fontSize: 9, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }

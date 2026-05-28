@@ -159,3 +159,33 @@ class UpdateNrLevel extends AmplificationEvent {
   @override
   List<Object?> get props => [level];
 }
+
+/// Solicita guardar la configuración actual del audiograma como un preset con nombre.
+///
+/// El preset se persiste en Hive y aparece en la lista de perfiles disponibles.
+/// Puede ser eliminado posteriormente con [DeleteCustomPreset].
+class SaveCustomPreset extends AmplificationEvent {
+  /// Nombre del preset personalizado.
+  final String name;
+
+  /// Audiograma asociado al preset.
+  final List<AudiogramPoint> audiogram;
+
+  const SaveCustomPreset({required this.name, required this.audiogram});
+
+  @override
+  List<Object?> get props => [name, audiogram];
+}
+
+/// Solicita eliminar un preset personalizado por nombre.
+///
+/// Solo funciona con presets personalizados (no predefinidos).
+class DeleteCustomPreset extends AmplificationEvent {
+  /// Nombre del preset a eliminar.
+  final String name;
+
+  const DeleteCustomPreset({required this.name});
+
+  @override
+  List<Object?> get props => [name];
+}

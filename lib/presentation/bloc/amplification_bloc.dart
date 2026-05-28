@@ -80,6 +80,8 @@ class AmplificationBloc
     on<ResumeAmplification>(_onResumeAmplification);
     on<UpdateEqGains>(_onUpdateEqGains);
     on<UpdateNrLevel>(_onUpdateNrLevel);
+    on<SaveCustomPreset>(_onSaveCustomPreset);
+    on<DeleteCustomPreset>(_onDeleteCustomPreset);
   }
 
   /// Inicia la amplificación: permisos → auriculares → foco → servicio.
@@ -438,6 +440,54 @@ class AmplificationBloc
       await _settingsRepository.setLastNrLevel(event.level);
     } catch (_) {
       // No interrumpir por error de actualización de NR
+    }
+  }
+
+  /// Guarda un preset personalizado con nombre.
+  ///
+  /// Persiste el audiograma y los parámetros actuales como un preset
+  /// que aparece en la lista de perfiles disponibles.
+  Future<void> _onSaveCustomPreset(
+    SaveCustomPreset event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    try {
+      // Guardar el audiograma como preset
+      final thresholds = <int, double>{};
+      for (final point in event.audiogram) {
+        thresholds[point.frequencyHz] = point.thresholdHL;
+      }
+
+      // Crear un perfil con los parámetros WDRC actuales
+      final profile = EnvironmentProfile(
+        name: event.name,
+        nrLevel: _currentProfile?.nrLevel ?? 1,
+        compressionRatio: _currentProfile?.compressionRatio ?? 2.0,
+        expansionKnee: _currentProfile?.expansionKnee ?? 35.0,
+        compressionKnee: _currentProfile?.compressionKnee ?? 55.0,
+      );
+
+      await _profileRepository.saveCustomProfile(profile);
+
+      // También guardar el audiograma asociado
+      final newAudiogram = Audiogram(thresholds: thresholds);
+      await _audiogramRepository.saveAudiogram(newAudiogram);
+    } catch (_) {
+      // No interrumpir por error de guardado
+    }
+  }
+
+  /// Elimina un preset personalizado por nombre.
+  ///
+  /// Solo funciona con presets personalizados (no predefinidos).
+  Future<void> _onDeleteCustomPreset(
+    DeleteCustomPreset event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    try {
+      await _profileRepository.deleteCustomProfile(event.name);
+    } catch (_) {
+      // No interrumpir por error de eliminación
     }
   }
 

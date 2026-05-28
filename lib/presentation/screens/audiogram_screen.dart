@@ -86,6 +86,53 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
     Navigator.of(context).pop();
   }
 
+  /// Muestra diálogo para guardar el audiograma actual como un preset con nombre.
+  void _saveAsPreset() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Guardar como Preset'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Nombre del preset (ej: Mesa de trabajo)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isEmpty) return;
+              // Dispatch save preset event
+              final points = _thresholds.entries
+                  .map((e) => AudiogramPoint(frequencyHz: e.key, thresholdHL: e.value))
+                  .toList()
+                ..sort((a, b) => a.frequencyHz.compareTo(b.frequencyHz));
+              context.read<AmplificationBloc>().add(
+                SaveCustomPreset(name: name, audiogram: points),
+              );
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Preset "$name" guardado'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Formatea la frecuencia para mostrar en la UI.
   String _formatFrequency(int freq) {
     if (freq >= 1000) {
@@ -104,6 +151,11 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
       appBar: AppBar(
         title: const Text('Configurar Audiograma'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bookmark_add),
+            tooltip: 'Guardar como Preset',
+            onPressed: _saveAsPreset,
+          ),
           IconButton(
             icon: const Icon(Icons.restore),
             tooltip: 'Restaurar valores predeterminados',
