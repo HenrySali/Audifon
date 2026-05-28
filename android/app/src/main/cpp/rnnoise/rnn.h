@@ -33,7 +33,7 @@ typedef struct {
     int activation;
 } GRULayer;
 
-typedef struct {
+typedef struct RNNModel {
     int model_loaded;
     /* Layers */
     DenseLayer input_dense;
