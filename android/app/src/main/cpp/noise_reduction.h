@@ -20,9 +20,10 @@
 static constexpr int kNrSubBands = 8;
 
 /// Frecuencia de muestreo del sistema.
-static constexpr int kNrSampleRate = 16000;
+static constexpr int kNrSampleRate = 48000;
 
-/// Ancho de cada sub-banda en Hz (8000 Hz / 8 bandas = 1000 Hz).
+/// Ancho de cada sub-banda en Hz.
+/// Para 48kHz, cubrimos 0-8kHz (rango de habla) con 8 bandas de ~1000 Hz.
 static constexpr float kNrBandWidthHz = 1000.0f;
 
 /// Reducción de ruido con filtrado de Wiener en 8 sub-bandas.
@@ -106,6 +107,9 @@ private:
 
     float noisePower_[kNrSubBands];   ///< Estimación de potencia de ruido por banda
     float signalPower_[kNrSubBands];  ///< Potencia de señal por banda (suavizada)
+
+    /// Ganancia compuesta del bloque anterior (para suavizado temporal).
+    float prevGain_ = 1.0f;
 
     // --- Constantes de suavizado ---
     /// Coeficiente de actualización de ruido (lento, ~500 ms)

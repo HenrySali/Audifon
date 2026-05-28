@@ -79,6 +79,7 @@ void NoiseReduction::reset() {
         noisePower_[i] = kMinPower;
         signalPower_[i] = kMinPower;
     }
+    prevGain_ = 1.0f;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +186,17 @@ void NoiseReduction::process(float* buffer, int blockSize) {
     // Asegurar restricciones finales
     compositeGain = std::max(compositeGain, gainFloor);
     compositeGain = std::min(compositeGain, 1.0f);
+
+    // Suavizado temporal: attack rápido (ruido aparece), release lento (ruido desaparece)
+    // Esto evita clicks y transiciones abruptas entre bloques.
+    if (compositeGain < prevGain_) {
+        // Attack: ruido detectado → atenuar rápido (~5ms)
+        compositeGain = prevGain_ + 0.4f * (compositeGain - prevGain_);
+    } else {
+        // Release: ruido desaparece → restaurar lento (~50ms)
+        compositeGain = prevGain_ + 0.1f * (compositeGain - prevGain_);
+    }
+    prevGain_ = compositeGain;
 
     // Aplicar ganancia compuesta al buffer
     for (int i = 0; i < blockSize; ++i) {
