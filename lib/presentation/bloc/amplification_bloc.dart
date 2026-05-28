@@ -39,6 +39,9 @@ class AmplificationBloc
   final SettingsRepository _settingsRepository;
   final GainPrescriber _gainPrescriber;
 
+  /// Expone el repositorio de perfiles para consultas desde la UI.
+  ProfileRepository get profileRepository => _profileRepository;
+
   /// Suscripción al stream de nivel de entrada (~10 Hz).
   StreamSubscription<double>? _inputLevelSubscription;
 

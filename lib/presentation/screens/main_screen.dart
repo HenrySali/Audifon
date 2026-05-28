@@ -686,26 +686,108 @@ class _InputLevelMeter extends StatelessWidget {
   }
 }
 
-/// Selector de perfil de entorno (3 predefinidos).
+/// Selector de perfil de entorno (predefinidos + personalizados).
 ///
-/// Requisito 8.1: Silencioso, Conversación, Ruidoso.
-class _ProfileSelector extends StatelessWidget {
+/// Requisito 8.1: Silencioso, Conversación, Ruidoso + custom presets.
+/// Carga todos los perfiles desde ProfileRepository.
+/// Long-press en perfiles personalizados muestra diálogo de eliminación.
+class _ProfileSelector extends StatefulWidget {
   final String activeProfile;
 
   const _ProfileSelector({required this.activeProfile});
 
   @override
+  State<_ProfileSelector> createState() => _ProfileSelectorState();
+}
+
+class _ProfileSelectorState extends State<_ProfileSelector> {
+  List<EnvironmentProfile> _allProfiles = [];
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfiles();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ProfileSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reload profiles when the widget updates (e.g., after delete)
+    _loadProfiles();
+  }
+
+  Future<void> _loadProfiles() async {
+    final bloc = context.read<AmplificationBloc>();
+    final profiles = await bloc.profileRepository.getAllProfiles();
+    if (mounted) {
+      setState(() {
+        _allProfiles = profiles;
+        _loaded = true;
+      });
+    }
+  }
+
+  Future<void> _confirmDelete(BuildContext context, EnvironmentProfile profile) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1a2332),
+        title: const Text(
+          'Eliminar preset',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          '¿Eliminar el preset "${profile.name}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Eliminar',
+              style: TextStyle(color: Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      context
+          .read<AmplificationBloc>()
+          .add(DeleteCustomPreset(name: profile.name));
+      // Refresh the list after deletion
+      await Future.delayed(const Duration(milliseconds: 100));
+      _loadProfiles();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Show predefined profiles while loading
+    final profiles = _loaded
+        ? _allProfiles
+        : EnvironmentProfile.predefinedProfiles;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF16213e),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: EnvironmentProfile.predefinedProfiles.map((profile) {
-          final isActive = profile.name == activeProfile;
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: profiles.map((profile) {
+          final isActive = profile.name == widget.activeProfile;
+          final isPredefined = EnvironmentProfile.predefinedProfiles
+              .any((p) => p.name == profile.name);
           return _ProfileChip(
             profile: profile,
             isActive: isActive,
@@ -714,6 +796,9 @@ class _ProfileSelector extends StatelessWidget {
                   .read<AmplificationBloc>()
                   .add(ChangeProfile(profile: profile.name));
             },
+            onLongPress: isPredefined
+                ? null
+                : () => _confirmDelete(context, profile),
           );
         }).toList(),
       ),
@@ -726,11 +811,13 @@ class _ProfileChip extends StatelessWidget {
   final EnvironmentProfile profile;
   final bool isActive;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _ProfileChip({
     required this.profile,
     required this.isActive,
     required this.onTap,
+    this.onLongPress,
   });
 
   IconData get _icon => switch (profile.name) {
@@ -744,6 +831,7 @@ class _ProfileChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

@@ -49,7 +49,7 @@ class SpectrumBridge {
   /// snapshots en el buffer nativo C++.
   Future<void> startRecording() async {
     try {
-      await _channel.invokeMethod<void>('startRecording');
+      await _channel.invokeMethod<void>('startSpectrumRecording');
     } on PlatformException catch (_) {
       // Silently handle
     }
@@ -60,7 +60,7 @@ class SpectrumBridge {
   /// Retorna 0 si no había grabación activa o si ocurrió un error.
   Future<int> stopRecording() async {
     try {
-      final count = await _channel.invokeMethod<int>('stopRecording');
+      final count = await _channel.invokeMethod<int>('stopSpectrumRecording');
       return count ?? 0;
     } on PlatformException catch (_) {
       return 0;
