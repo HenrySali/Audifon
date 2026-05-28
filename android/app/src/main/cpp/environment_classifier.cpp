@@ -73,35 +73,60 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     smoothedLevelDb_ += kEnvAlpha * (inputLevelDbSpl - smoothedLevelDb_);
     smoothedSnrDb_ += kEnvAlpha * (estimatedSnrDb - smoothedSnrDb_);
 
-    // Step 2: Clasificación rule-based según valores suavizados
+    // Step 2: Clasificación rule-based con HISTÉRESIS
+    // La histéresis evita oscilación en la frontera SPEECH↔NOISE.
+    // Para ENTRAR a SPEECH: SNR debe ser > 12 dB (umbral alto)
+    // Para SALIR de SPEECH: SNR debe caer < 5 dB (umbral bajo)
+    // Zona muerta [5, 12] dB: mantiene el estado actual.
     EnvironmentClass newClass;
     float level = smoothedLevelDb_;
     float snr = smoothedSnrDb_;
 
-    if (level < kEnvLevelQuietThreshold) {
-        newClass = EnvironmentClass::QUIET;
-    } else if (snr > kEnvSnrSpeechThreshold && level <= kEnvLevelSpeechMax) {
-        newClass = EnvironmentClass::SPEECH;
-    } else if (snr > kEnvSnrNoiseThreshold && snr <= kEnvSnrSpeechThreshold) {
-        newClass = EnvironmentClass::SPEECH_IN_NOISE;
-    } else {
-        newClass = EnvironmentClass::NOISE;
-    }
-
-    // Step 3: Hold timer — prevenir oscilación rápida entre estados
-    if (holdCounter_ > 0) {
-        holdCounter_--;
-        return static_cast<EnvironmentClass>(currentClass_.load(std::memory_order_relaxed));
-    }
-
-    // Step 4: Transición con período de hold
     EnvironmentClass current = static_cast<EnvironmentClass>(
         currentClass_.load(std::memory_order_relaxed));
 
+    if (level < kEnvLevelQuietThreshold) {
+        newClass = EnvironmentClass::QUIET;
+    } else if (current == EnvironmentClass::SPEECH) {
+        // Ya estamos en SPEECH — solo salir si SNR cae mucho (< 5 dB)
+        if (snr < 5.0f) {
+            newClass = (snr < kEnvSnrNoiseThreshold) ?
+                EnvironmentClass::NOISE : EnvironmentClass::SPEECH_IN_NOISE;
+        } else {
+            newClass = EnvironmentClass::SPEECH; // mantener
+        }
+    } else if (current == EnvironmentClass::NOISE) {
+        // Ya estamos en NOISE — solo salir si SNR sube mucho (> 12 dB)
+        if (snr > 12.0f && level <= kEnvLevelSpeechMax) {
+            newClass = EnvironmentClass::SPEECH;
+        } else if (snr > 5.0f) {
+            newClass = EnvironmentClass::SPEECH_IN_NOISE;
+        } else {
+            newClass = EnvironmentClass::NOISE; // mantener
+        }
+    } else {
+        // SPEECH_IN_NOISE o estado inicial — usar umbrales normales
+        if (snr > 12.0f && level <= kEnvLevelSpeechMax) {
+            newClass = EnvironmentClass::SPEECH;
+        } else if (snr < kEnvSnrNoiseThreshold) {
+            newClass = EnvironmentClass::NOISE;
+        } else {
+            newClass = EnvironmentClass::SPEECH_IN_NOISE;
+        }
+    }
+
+    // Step 3: Hold timer — prevenir oscilación rápida entre estados
+    // Aumentado a 3 segundos (750 bloques × 4ms) para mayor estabilidad
+    if (holdCounter_ > 0) {
+        holdCounter_--;
+        return current;
+    }
+
+    // Step 4: Transición con período de hold extendido
     if (newClass != current) {
         prevClass_ = current;
         currentClass_.store(static_cast<int>(newClass), std::memory_order_relaxed);
-        holdCounter_ = kEnvHoldBlocks;
+        holdCounter_ = 750;  // 3 segundos (750 × 4ms) — mucho más estable
     }
 
     return static_cast<EnvironmentClass>(currentClass_.load(std::memory_order_relaxed));

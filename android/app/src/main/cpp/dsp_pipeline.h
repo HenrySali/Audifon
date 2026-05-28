@@ -149,6 +149,7 @@ private:
 
     // --- Estado interno para el clasificador ---
     int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada
+    int currentNrLevel_ = 0; ///< Nivel NR actual (transiciones graduales)
 
     // --- Analizador de espectro ---
     SpectrumAnalyzer spectrumAnalyzer_;  ///< FFT 128-point para visualización

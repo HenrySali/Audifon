@@ -120,11 +120,18 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         if (envClassInt != lastEnvClass_) {
             lastEnvClass_ = envClassInt;
 
-            // Actualizar NR level
-            int nrLevel = envClassifier_.getRecommendedNrLevel();
-            nr_.setLevel(nrLevel);
+            // Actualizar NR level GRADUALMENTE (máximo 1 nivel por transición)
+            // Esto evita cortes de audio al saltar de NR 1 → 3 directamente
+            int targetNrLevel = envClassifier_.getRecommendedNrLevel();
+            int currentNrLevel = currentNrLevel_;
+            if (targetNrLevel > currentNrLevel) {
+                currentNrLevel_ = currentNrLevel + 1; // subir de a 1
+            } else if (targetNrLevel < currentNrLevel) {
+                currentNrLevel_ = currentNrLevel - 1; // bajar de a 1
+            }
+            nr_.setLevel(currentNrLevel_);
 
-            // Actualizar WDRC compression params
+            // Actualizar WDRC compression params (estos son suaves por naturaleza)
             EnvWdrcParams wdrcParams = envClassifier_.getRecommendedWdrcParams();
             wdrc_.setCompressionKnee(wdrcParams.compressionKnee);
             wdrc_.setCompressionRatio(wdrcParams.compressionRatio);
