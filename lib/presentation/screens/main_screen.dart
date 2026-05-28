@@ -140,7 +140,10 @@ class _StatusBar extends StatelessWidget {
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => const SimulatorScreen(),
+                    builder: (_) => BlocProvider.value(
+                      value: context.read<AmplificationBloc>(),
+                      child: const SimulatorScreen(),
+                    ),
                   ),
                 );
               },
