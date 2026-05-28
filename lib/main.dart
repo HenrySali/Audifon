@@ -7,6 +7,7 @@ import 'domain/entities/audiogram.dart';
 import 'domain/gain_prescriber.dart';
 import 'presentation/bloc/amplification_bloc.dart';
 import 'presentation/screens/main_screen.dart';
+import 'presentation/screens/permissions_screen.dart';
 import 'presentation/services/permission_service.dart';
 import 'presentation/utils/device_checker.dart';
 
@@ -100,7 +101,7 @@ class HearingAidApp extends StatelessWidget {
             elevation: 0,
           ),
         ),
-        home: const MainScreen(),
+        home: const PermissionsScreen(child: MainScreen()),
       ),
     );
   }
