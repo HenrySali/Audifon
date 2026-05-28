@@ -17,7 +17,7 @@
 #include <atomic>
 #include <cmath>
 
-#include "rnnoise_nr.h"
+#include "noise_reduction.h"
 #include "equalizer.h"
 #include "wdrc_processor.h"
 #include "mpo_limiter.h"
@@ -110,7 +110,7 @@ private:
     static void applyVolume(float* buffer, int blockSize, float volumeLinear);
 
     // --- Módulos del pipeline ---
-    RnnoiseNr nr_;            ///< Reducción de ruido RNNoise (solo atenúa)
+    NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)

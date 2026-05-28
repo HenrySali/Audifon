@@ -128,8 +128,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
             ),
             const SizedBox(height: 16),
 
-            // ─── NR Control ────────────────────────────────────────────
-            _NrControl(),
+            // ─── NR Control (removed) ─────────────────────────────────
             const SizedBox(height: 24),
           ],
         ),
@@ -604,83 +603,4 @@ class _BandSlider extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// NR CONTROL
-// =============================================================================
-
-class _NrControl extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213e),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.noise_aware, color: Colors.cyan, size: 18),
-              SizedBox(width: 8),
-              Text(
-                'Reducción de Ruido',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _NrChip(label: 'Off', level: 0),
-              _NrChip(label: 'Bajo', level: 1),
-              _NrChip(label: 'Medio', level: 2),
-              _NrChip(label: 'Alto', level: 3),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NrChip extends StatelessWidget {
-  final String label;
-  final int level;
-
-  const _NrChip({
-    required this.label,
-    required this.level,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        try {
-          context.read<AmplificationBloc>().add(UpdateNrLevel(level: level));
-        } catch (_) {
-          // Bloc not available
-        }
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.cyan.withOpacity(0.5)),
-          color: Colors.cyan.withOpacity(0.1),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(color: Colors.cyan, fontSize: 12),
-        ),
-      ),
-    );
-  }
-}
+// NR Control removed — will be re-implemented when RNNoise compiles correctly
