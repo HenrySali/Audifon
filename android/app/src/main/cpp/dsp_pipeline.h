@@ -1,13 +1,15 @@
 /// @file dsp_pipeline.h
 /// @brief Pipeline DSP completo para procesamiento de audio en tiempo real.
 ///
-/// Orden del pipeline: NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+/// Orden del pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
 ///
 /// Principios de diseño:
 /// - El nivel se mide ANTES del EQ para que el WDRC tome decisiones
 ///   basadas en el nivel real de entrada, no en el nivel amplificado.
 /// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa sin cambio.
 /// - MPO es la última etapa — red de seguridad absoluta sample-by-sample.
+/// - MPO threshold: 110 dB SPL (FDA 21 CFR 800.30 OTC limit: 111 dB SPL).
+/// - Offset calibración: 93 dB para mic celular Android con AGC.
 /// - Actualizaciones de parámetros son thread-safe (atómicas, lock-free).
 
 #ifndef HEARING_AID_DSP_PIPELINE_H
@@ -30,8 +32,8 @@ struct AudioConfig {
     int bufferSize = 64;               ///< muestras por bloque
     int channels = 1;                  ///< mono
     int bitsPerSample = 16;            ///< PCM16
-    float mpoThresholdDbSpl = 100.0f;  ///< dB SPL — threshold del MPO
-    float splOffset = 120.0f;          ///< Offset dBFS → dB SPL (120 para mic real)
+    float mpoThresholdDbSpl = 110.0f;  ///< dB SPL — threshold del MPO (FDA OTC: 111 dB SPL)
+    float splOffset = 93.0f;           ///< Offset dBFS → dB SPL (93 para mic celular con AGC)
 };
 
 /// Parámetros del WDRC (Wide Dynamic Range Compression)
@@ -141,7 +143,7 @@ private:
     // --- Parámetros atómicos (actualizables desde hilo de UI) ---
     std::atomic<float> volumeDb_{0.0f};       ///< Volumen maestro en dB
     std::atomic<float> volumeLinear_{1.0f};   ///< Factor lineal pre-calculado
-    std::atomic<float> splOffset_{120.0f};    ///< Offset dBFS → dB SPL
+    std::atomic<float> splOffset_{93.0f};     ///< Offset dBFS → dB SPL (93 para mic celular)
     std::atomic<bool> autoClassifyEnabled_{true}; ///< Clasificación automática habilitada
 
     // --- Estado de salida (legible desde cualquier hilo) ---

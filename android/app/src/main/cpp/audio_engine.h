@@ -17,8 +17,8 @@ struct AudioEngineConfig {
     int sampleRate = 48000;              ///< Hz — native rate (was 44100)
     int bufferSize = 256;                ///< Hint only — Oboe manages actual size
     int channels = 1;                    ///< Mono
-    float mpoThresholdDbSpl = 100.0f;   ///< Threshold del MPO en dB SPL
-    float splOffset = 120.0f;            ///< Offset dBFS → dB SPL
+    float mpoThresholdDbSpl = 110.0f;   ///< Threshold del MPO en dB SPL (FDA OTC: 111)
+    float splOffset = 93.0f;             ///< Offset dBFS → dB SPL (93 para mic celular con AGC)
     int builtInMicDeviceId = 0;          ///< Device ID for built-in mic (from Kotlin)
 };
 

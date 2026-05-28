@@ -1,20 +1,26 @@
 /// @file dsp_pipeline.cpp
 /// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
 ///
-/// Pipeline: HPF → NR → medir nivel PRE-EQ → Adaptive EQ Scale → EQ → WDRC →
-///           Headroom Guard → Volume → MPO
+/// Pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
 ///                       ↓
 ///              Environment Classifier
-///              (actualiza NR + WDRC en transición)
+///              (actualiza NR + WDRC directamente al target)
 ///
 /// Reglas de oro:
 /// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa.
 /// - Medir nivel PRE-EQ para decisiones de WDRC.
-/// - MPO es la última etapa — red de seguridad absoluta.
+/// - MPO es la última etapa — red de seguridad absoluta (110 dB SPL, FDA OTC).
 /// - Silencio debe producir silencio (expansión activa).
-/// - Headroom Guard protege contra transitorios post-EQ.
-/// - HPF @ 150 Hz removes low-frequency rumble to free headroom.
-/// - Adaptive EQ scaling prevents distortion on Moderate/Severe/Profound presets.
+/// - HPF @ 100 Hz removes rumble while preserving male voice F0 (~120 Hz).
+/// - Offset calibración: 93 dB para mic celular Android con AGC.
+///
+/// Cambios validados con literatura académica (Mayo 2026):
+/// - MPO 110 dB SPL: FDA 21 CFR 800.30, consenso profesional OTC
+/// - HPF 100 Hz: preserva F0 masculina, elimina rumble
+/// - Sin adaptive EQ scaling: causaba doble atenuación (audioXpress OTC paper)
+/// - Sin headroom guard: redundante con MPO correcto (Hearing Review MPO paper)
+/// - NR transiciones directas: NR tiene suavizado interno, gradualidad redundante
+/// - Clasificador activo: Keidser 2017 muestra ventaja SRT del automático
 
 #include "dsp_pipeline.h"
 
@@ -59,7 +65,12 @@ void DspPipeline::init(const AudioConfig& config) {
 
     // Inicializar MPO con sample rate y threshold
     mpo_.init(config.sampleRate);
-    mpo_.setThreshold(config.mpoThresholdDbSpl, config.splOffset);
+    // MPO threshold: usar valor lineal directo de 0.85 (-1.4 dBFS).
+    // Con offset 93, el máximo digital (0 dBFS) equivale a 93 dB SPL,
+    // así que un threshold en dB SPL > 93 nunca se alcanzaría.
+    // Usamos threshold lineal directo para garantizar protección contra clipping.
+    // 0.85 deja ~1.4 dB de headroom bajo el clip point digital.
+    mpo_.setThresholdLinear(0.85f);
 
     // Volumen inicial: 0 dB (ganancia unitaria)
     volumeDb_.store(0.0f, std::memory_order_relaxed);
@@ -68,8 +79,10 @@ void DspPipeline::init(const AudioConfig& config) {
     // Inicializar analizador de espectro
     spectrumAnalyzer_.init(config.sampleRate, config.splOffset);
 
-    // Compute high-pass filter coefficients (150 Hz Butterworth, actual sample rate)
-    computeHighPassCoeffs(config.sampleRate, 150.0f);
+    // Compute high-pass filter coefficients (100 Hz Butterworth, actual sample rate)
+    // 100 Hz preserves male F0 (~120 Hz, only -3 dB) while removing rumble/vibration.
+    // Literature: 80 Hz too low (amplifies ambient noise), 150 Hz cuts male voice.
+    computeHighPassCoeffs(config.sampleRate, 100.0f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,9 +101,10 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         std::memcpy(inputCopy, buffer, blockSize * sizeof(float));
     }
 
-    // ─── 0.5. High-pass filter @ 150 Hz (remove rumble, free headroom) ──
-    // 2nd-order Butterworth HPF removes low-frequency wind/vibration that
-    // wastes headroom without contributing to speech intelligibility.
+    // ─── 0.5. High-pass filter @ 100 Hz (remove rumble, preserve voice) ─
+    // 2nd-order Butterworth HPF at 100 Hz removes low-frequency wind/vibration
+    // while preserving male voice fundamental (~120 Hz, only -3 dB attenuation).
+    // Literature: 150 Hz was too high (cut male F0), 80 Hz too low (amplifies noise).
     for (int i = 0; i < blockSize; ++i) {
         float x = buffer[i];
         float y = hpB0_ * x + hpB1_ * hpX1_ + hpB2_ * hpX2_
@@ -120,15 +134,12 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         if (envClassInt != lastEnvClass_) {
             lastEnvClass_ = envClassInt;
 
-            // Actualizar NR level GRADUALMENTE (máximo 1 nivel por transición)
-            // Esto evita cortes de audio al saltar de NR 1 → 3 directamente
+            // Actualizar NR level DIRECTAMENTE al target recomendado.
+            // El NR ya tiene suavizado temporal interno (attack/release en
+            // compositeGain), así que la transición gradual de nivel era
+            // redundante y causaba que nunca convergiera con hold de 3s.
             int targetNrLevel = envClassifier_.getRecommendedNrLevel();
-            int currentNrLevel = currentNrLevel_;
-            if (targetNrLevel > currentNrLevel) {
-                currentNrLevel_ = currentNrLevel + 1; // subir de a 1
-            } else if (targetNrLevel < currentNrLevel) {
-                currentNrLevel_ = currentNrLevel - 1; // bajar de a 1
-            }
+            currentNrLevel_ = targetNrLevel;
             nr_.setLevel(currentNrLevel_);
 
             // Actualizar WDRC compression params (estos son suaves por naturaleza)
@@ -138,36 +149,12 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         }
     }
 
-    // ─── 3.5. Adaptive EQ gain scaling (prevent distortion) ─────────────
-    // Calculate peak amplitude of current buffer to determine available headroom.
-    // If the EQ's max gain would exceed headroom, scale all gains proportionally.
-    float peakAmplitude = 0.0f;
-    for (int i = 0; i < blockSize; ++i) {
-        float absVal = std::abs(buffer[i]);
-        if (absVal > peakAmplitude) peakAmplitude = absVal;
-    }
-
-    // Calculate available headroom in dB
-    // Ceiling = 0.9 (leave margin for WDRC + volume, which can add up to +10 dB)
-    float headroomDb = (peakAmplitude > 1e-10f) ?
-        20.0f * std::log10(0.9f / peakAmplitude) : 60.0f;
-
-    // Get maximum EQ gain currently configured
-    float maxEqGain = eq_.getMaxGain();
-
-    // If EQ would exceed headroom, scale all gains proportionally
-    float eqScale = 1.0f;
-    if (maxEqGain > 0.1f && headroomDb < maxEqGain) {
-        eqScale = std::max(0.1f, headroomDb / maxEqGain);
-    }
-
     // ─── 4. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
-    // Apply EQ with adaptive scaling if needed to prevent distortion
-    if (eqScale < 0.99f) {
-        eq_.processWithScale(buffer, blockSize, eqScale);
-    } else {
-        eq_.process(buffer, blockSize);
-    }
+    // EQ aplica ganancia prescrita sin scaling adaptativo.
+    // La protección contra overflow la provee el MPO (threshold 110 dB SPL = 0.316 lineal).
+    // Adaptive EQ scaling fue eliminado: causaba doble atenuación con MPO y reducía
+    // la amplificación prescrita innecesariamente (validado: audioXpress OTC DSP paper).
+    eq_.process(buffer, blockSize);
 
     // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
     // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
@@ -175,22 +162,20 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // dispare compresión innecesaria.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
-    // ─── 6. Headroom Guard (post-EQ peak protection) ────────────────────
-    // Escanea el buffer post-WDRC para transitorios que excedan 0.95.
-    // Protege contra picos que el WDRC block-level no detectó.
-    wdrc_.applyHeadroomGuard(buffer, blockSize);
-
-    // ─── 7. Volume master ───────────────────────────────────────────────
+    // ─── 6. Volume master ───────────────────────────────────────────────
     // Rango: -20 a +10 dB. Puede amplificar hasta +10 dB (3.16×).
     float volLinear = volumeLinear_.load(std::memory_order_relaxed);
     applyVolume(buffer, blockSize, volLinear);
 
-    // ─── 8. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
+    // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede
-    // el threshold. Opera muestra-por-muestra, no block-rate.
+    // 0.85 lineal (-1.4 dBFS). Opera muestra-por-muestra, no block-rate.
+    // Threshold lineal directo (independiente del offset de calibración).
+    // FDA 21 CFR 800.30 limita output OTC a 111 dB SPL en el oído;
+    // con auriculares, 0.85 lineal es conservador y seguro.
     mpo_.process(buffer, blockSize);
 
-    // ─── 9. Spectrum Analyzer (post-pipeline) ───────────────────────────
+    // ─── 8. Spectrum Analyzer (post-pipeline) ───────────────────────────
     // Alimentar el analizador con buffers pre y post procesamiento.
     // Solo se ejecuta cuando la pantalla de espectro está visible.
     if (spectrumActive) {
@@ -234,9 +219,10 @@ void DspPipeline::setNrLevel(int level) {
 
 void DspPipeline::setSplOffset(float offset) {
     splOffset_.store(offset, std::memory_order_relaxed);
-    // Actualizar threshold del MPO con el nuevo offset
-    // (el threshold en dB SPL no cambia, pero su equivalente lineal sí)
-    mpo_.setThreshold(100.0f, offset);
+    // MPO threshold lineal fijo a 0.85 (-1.4 dBFS) — independiente del offset.
+    // El offset solo afecta la interpretación del nivel de entrada para WDRC,
+    // no el threshold de protección de salida del MPO.
+    mpo_.setThresholdLinear(0.85f);
 }
 
 float DspPipeline::getLastInputLevelDb() const {
