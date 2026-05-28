@@ -21,6 +21,7 @@
 #include "equalizer.h"
 #include "wdrc_processor.h"
 #include "mpo_limiter.h"
+#include "environment_classifier.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -96,6 +97,15 @@ public:
     /// Actualizado cada bloque. Seguro para leer desde cualquier hilo.
     float getLastInputLevelDb() const;
 
+    /// Habilita/deshabilita la clasificación automática de entorno.
+    /// Cuando está habilitada, NR y WDRC se ajustan automáticamente.
+    /// @param enabled true para habilitar, false para deshabilitar
+    void setAutoClassifyEnabled(bool enabled);
+
+    /// Obtiene la clase de entorno actual (thread-safe).
+    /// @return 0=QUIET, 1=SPEECH, 2=SPEECH_IN_NOISE, 3=NOISE
+    int getCurrentEnvironmentClass() const;
+
 private:
     /// Mide el nivel RMS de un buffer y lo convierte a dB SPL.
     /// @param buffer Buffer de audio float32
@@ -109,19 +119,31 @@ private:
     /// @param volumeLinear Factor lineal de volumen
     static void applyVolume(float* buffer, int blockSize, float volumeLinear);
 
+    /// Estimación simplificada de SNR basada en nivel de entrada.
+    /// Usada por el clasificador de entorno cuando no hay acceso directo
+    /// a las estimaciones de ruido por banda del NR.
+    /// @param inputLevelDb Nivel de entrada en dB SPL
+    /// @return SNR estimado en dB, clampeado a [-20, 40]
+    float estimateSnrSimple(float inputLevelDb) const;
+
     // --- Módulos del pipeline ---
     NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)
+    EnvironmentClassifier envClassifier_; ///< Clasificador automático de entorno
 
     // --- Parámetros atómicos (actualizables desde hilo de UI) ---
     std::atomic<float> volumeDb_{0.0f};       ///< Volumen maestro en dB
     std::atomic<float> volumeLinear_{1.0f};   ///< Factor lineal pre-calculado
     std::atomic<float> splOffset_{120.0f};    ///< Offset dBFS → dB SPL
+    std::atomic<bool> autoClassifyEnabled_{true}; ///< Clasificación automática habilitada
 
     // --- Estado de salida (legible desde cualquier hilo) ---
     std::atomic<float> lastInputLevelDb_{0.0f}; ///< Último nivel PRE-EQ medido
+
+    // --- Estado interno para el clasificador ---
+    int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada
 };
 
 #endif // HEARING_AID_DSP_PIPELINE_H

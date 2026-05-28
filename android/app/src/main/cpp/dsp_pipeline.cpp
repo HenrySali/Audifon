@@ -1,13 +1,17 @@
 /// @file dsp_pipeline.cpp
 /// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
 ///
-/// Pipeline: NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+/// Pipeline: NR → medir nivel PRE-EQ → EQ → WDRC → Headroom Guard → Volume → MPO
+///                       ↓
+///              Environment Classifier
+///              (actualiza NR + WDRC en transición)
 ///
 /// Reglas de oro:
 /// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa.
 /// - Medir nivel PRE-EQ para decisiones de WDRC.
 /// - MPO es la última etapa — red de seguridad absoluta.
 /// - Silencio debe producir silencio (expansión activa).
+/// - Headroom Guard protege contra transitorios post-EQ.
 
 #include "dsp_pipeline.h"
 
@@ -66,27 +70,60 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
     nr_.process(buffer, blockSize);
 
-    // ─── 2. Medir nivel PRE-EQ (para WDRC) ──────────────────────────────
+    // ─── 2. Medir nivel PRE-EQ (para WDRC y Environment Classifier) ─────
     // Este nivel refleja la señal REAL de entrada, sin amplificación del EQ.
     // El WDRC usa este valor para decidir en qué región operar.
     float inputLevelDb = measureRmsDb(buffer, blockSize);
     lastInputLevelDb_.store(inputLevelDb, std::memory_order_relaxed);
 
-    // ─── 3. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
+    // ─── 3. Environment Classifier (actualiza NR + WDRC en transición) ──
+    if (autoClassifyEnabled_.load(std::memory_order_relaxed)) {
+        // Estimar SNR desde las potencias de ruido del NR.
+        // Usamos las noisePower_ del NR como estimación de ruido por banda.
+        // Como no tenemos acceso directo a noisePower_ (privado), usamos
+        // una estimación simplificada basada en el nivel de entrada.
+        // SNR alto cuando el nivel es bajo (quiet), SNR bajo cuando es alto.
+        // En un sistema completo, el NR expondría sus noise estimates.
+        float estimatedSnr = estimateSnrSimple(inputLevelDb);
+
+        EnvironmentClass envClass = envClassifier_.update(inputLevelDb, estimatedSnr);
+        int envClassInt = static_cast<int>(envClass);
+
+        // Si la clase cambió, actualizar NR y WDRC automáticamente
+        if (envClassInt != lastEnvClass_) {
+            lastEnvClass_ = envClassInt;
+
+            // Actualizar NR level
+            int nrLevel = envClassifier_.getRecommendedNrLevel();
+            nr_.setLevel(nrLevel);
+
+            // Actualizar WDRC compression params
+            EnvWdrcParams wdrcParams = envClassifier_.getRecommendedWdrcParams();
+            wdrc_.setCompressionKnee(wdrcParams.compressionKnee);
+            wdrc_.setCompressionRatio(wdrcParams.compressionRatio);
+        }
+    }
+
+    // ─── 4. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
     eq_.process(buffer, blockSize);
 
-    // ─── 4. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
+    // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
     // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
     // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
     // dispare compresión innecesaria.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
-    // ─── 5. Volume master ───────────────────────────────────────────────
+    // ─── 6. Headroom Guard (post-EQ peak protection) ────────────────────
+    // Escanea el buffer post-WDRC para transitorios que excedan 0.95.
+    // Protege contra picos que el WDRC block-level no detectó.
+    wdrc_.applyHeadroomGuard(buffer, blockSize);
+
+    // ─── 7. Volume master ───────────────────────────────────────────────
     // Rango: -20 a +10 dB. Puede amplificar hasta +10 dB (3.16×).
     float volLinear = volumeLinear_.load(std::memory_order_relaxed);
     applyVolume(buffer, blockSize, volLinear);
 
-    // ─── 6. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
+    // ─── 8. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede
     // el threshold. Opera muestra-por-muestra, no block-rate.
     mpo_.process(buffer, blockSize);
@@ -136,6 +173,14 @@ float DspPipeline::getLastInputLevelDb() const {
     return lastInputLevelDb_.load(std::memory_order_relaxed);
 }
 
+void DspPipeline::setAutoClassifyEnabled(bool enabled) {
+    autoClassifyEnabled_.store(enabled, std::memory_order_relaxed);
+}
+
+int DspPipeline::getCurrentEnvironmentClass() const {
+    return envClassifier_.getCurrentClass();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Funciones internas
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,4 +211,20 @@ void DspPipeline::applyVolume(float* buffer, int blockSize, float volumeLinear) 
     for (int i = 0; i < blockSize; ++i) {
         buffer[i] *= volumeLinear;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Estimación simplificada de SNR
+// ─────────────────────────────────────────────────────────────────────────────
+
+float DspPipeline::estimateSnrSimple(float inputLevelDb) const {
+    // Estimación heurística de SNR basada en el nivel de entrada.
+    // En un sistema completo, el NR expondría sus noise estimates por banda.
+    // Aquí usamos una aproximación: el piso de ruido del micrófono es ~26 dB SPL.
+    // SNR ≈ inputLevel - noiseFloor.
+    // Clampeamos al rango práctico [-20, 40] dB.
+    static constexpr float kNoiseFloorDbSpl = 30.0f;
+    float snr = inputLevelDb - kNoiseFloorDbSpl;
+    snr = std::max(kEnvSnrMin, std::min(kEnvSnrMax, snr));
+    return snr;
 }

@@ -162,6 +162,34 @@ void WdrcProcessor::setReleaseMs(float ms) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Headroom Guard (post-EQ peak protection)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void WdrcProcessor::applyHeadroomGuard(float* buffer, int blockSize) {
+    if (buffer == nullptr || blockSize <= 0) {
+        return;
+    }
+
+    // Scan for peak amplitude in the buffer
+    float peak = 0.0f;
+    for (int i = 0; i < blockSize; ++i) {
+        float absVal = std::abs(buffer[i]);
+        if (absVal > peak) {
+            peak = absVal;
+        }
+    }
+
+    // If peak exceeds ceiling, scale entire block to fit
+    static constexpr float kCeiling = 0.95f;
+    if (peak > kCeiling) {
+        float scale = kCeiling / peak;
+        for (int i = 0; i < blockSize; ++i) {
+            buffer[i] *= scale;
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Funciones internas
 // ─────────────────────────────────────────────────────────────────────────────
 

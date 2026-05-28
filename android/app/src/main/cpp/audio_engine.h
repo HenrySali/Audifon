@@ -52,6 +52,10 @@ public:
     void setSplOffset(float offset);
     float getLastInputLevel() const;
 
+    // ─── Environment Classifier (thread-safe) ───────────────────────────
+    void setAutoClassifyEnabled(bool enabled);
+    int getCurrentEnvironmentClass() const;
+
     // ─── Callback de nivel para UI ──────────────────────────────────────
     using LevelCallback = std::function<void(float levelDbSpl)>;
     void setLevelCallback(LevelCallback cb);

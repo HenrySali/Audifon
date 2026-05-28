@@ -30,6 +30,7 @@ add_library(
     equalizer.cpp
     wdrc_processor.cpp
     mpo_limiter.cpp
+    environment_classifier.cpp
 )
 
 # Enlazar con Oboe y librerías del sistema Android

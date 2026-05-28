@@ -304,6 +304,14 @@ float AudioEngine::getLastInputLevel() const {
     return pipeline_.getLastInputLevelDb();
 }
 
+void AudioEngine::setAutoClassifyEnabled(bool enabled) {
+    pipeline_.setAutoClassifyEnabled(enabled);
+}
+
+int AudioEngine::getCurrentEnvironmentClass() const {
+    return pipeline_.getCurrentEnvironmentClass();
+}
+
 void AudioEngine::setLevelCallback(LevelCallback cb) {
     levelCallback_ = std::move(cb);
 }

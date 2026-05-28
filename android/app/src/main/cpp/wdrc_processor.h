@@ -78,6 +78,14 @@ public:
     /// @return Factor de ganancia ∈ [0.0, 1.0]
     float computeGainFactor(float inputLevelDb) const;
 
+    /// Escanea el buffer post-EQ para detectar picos y aplica headroom guard.
+    /// Garantiza que ninguna muestra excede 0.95 (kHeadroomCeiling).
+    /// Llamar DESPUÉS de process() para proteger contra transitorios post-EQ.
+    ///
+    /// @param buffer Puntero al buffer de audio float32 (modificado in-place)
+    /// @param blockSize Número de muestras en el buffer
+    void applyHeadroomGuard(float* buffer, int blockSize);
+
 private:
     /// Recalcula los coeficientes de attack/release basados en los tiempos
     /// actuales y el sample rate.
