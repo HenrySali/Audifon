@@ -269,4 +269,18 @@ class NativeAudioBridge {
     private external fun nativeGetInputDeviceId(): Int
 
     private external fun nativeGetOutputDeviceId(): Int
+
+    // ─── Spectrum Analyzer (implementados en native_bridge.cpp) ──────────
+
+    external fun nativeStartSpectrumAnalysis()
+
+    external fun nativeStopSpectrumAnalysis()
+
+    external fun nativeStartSpectrumRecording()
+
+    external fun nativeStopSpectrumRecording(): Int
+
+    external fun nativeGetRecordingData(): ByteArray
+
+    external fun nativeGetCurrentSpectrum(): ByteArray
 }

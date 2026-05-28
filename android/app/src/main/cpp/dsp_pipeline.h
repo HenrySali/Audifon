@@ -22,6 +22,7 @@
 #include "wdrc_processor.h"
 #include "mpo_limiter.h"
 #include "environment_classifier.h"
+#include "spectrum_analyzer.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -106,6 +107,10 @@ public:
     /// @return 0=QUIET, 1=SPEECH, 2=SPEECH_IN_NOISE, 3=NOISE
     int getCurrentEnvironmentClass() const;
 
+    /// Acceso al analizador de espectro (para JNI bridge).
+    SpectrumAnalyzer& getSpectrumAnalyzer() { return spectrumAnalyzer_; }
+    const SpectrumAnalyzer& getSpectrumAnalyzer() const { return spectrumAnalyzer_; }
+
 private:
     /// Mide el nivel RMS de un buffer y lo convierte a dB SPL.
     /// @param buffer Buffer de audio float32
@@ -144,6 +149,9 @@ private:
 
     // --- Estado interno para el clasificador ---
     int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada
+
+    // --- Analizador de espectro ---
+    SpectrumAnalyzer spectrumAnalyzer_;  ///< FFT 128-point para visualización
 };
 
 #endif // HEARING_AID_DSP_PIPELINE_H

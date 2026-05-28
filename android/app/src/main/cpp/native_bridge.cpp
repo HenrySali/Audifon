@@ -371,4 +371,107 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetCurrentEnvironmentClas
     return g_engine->getCurrentEnvironmentClass();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Spectrum Analyzer JNI Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Inicia el análisis de espectro (activa computación FFT en cada bloque).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStartSpectrumAnalysis(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->startSpectrumAnalysis();
+}
+
+/// Detiene el análisis de espectro (ahorra CPU cuando la pantalla no es visible).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStopSpectrumAnalysis(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->stopSpectrumAnalysis();
+}
+
+/// Inicia la grabación de snapshots de espectro (máximo 3 minutos / 1800 snapshots).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStartSpectrumRecording(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->startSpectrumRecording();
+}
+
+/// Detiene la grabación de espectro y retorna el número de snapshots capturados.
+JNIEXPORT jint JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStopSpectrumRecording(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return 0;
+    }
+
+    return g_engine->stopSpectrumRecording();
+}
+
+/// Retorna todos los snapshots grabados como byte array.
+/// El tamaño es count * sizeof(SpectrumSnapshot).
+JNIEXPORT jbyteArray JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetRecordingData(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return env->NewByteArray(0);
+    }
+
+    const SpectrumSnapshot* snapshots = g_engine->getRecordedSnapshots();
+    int size = g_engine->getRecordedDataSize();
+
+    if (snapshots == nullptr || size <= 0) {
+        return env->NewByteArray(0);
+    }
+
+    jbyteArray result = env->NewByteArray(size);
+    if (result != nullptr) {
+        env->SetByteArrayRegion(result, 0, size,
+                                reinterpret_cast<const jbyte*>(snapshots));
+    }
+    return result;
+}
+
+/// Retorna el snapshot de espectro actual como byte array (para polling a 10 Hz).
+JNIEXPORT jbyteArray JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetCurrentSpectrum(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return env->NewByteArray(0);
+    }
+
+    SpectrumSnapshot snapshot = g_engine->getCurrentSpectrum();
+    int size = static_cast<int>(sizeof(SpectrumSnapshot));
+
+    jbyteArray result = env->NewByteArray(size);
+    if (result != nullptr) {
+        env->SetByteArrayRegion(result, 0, size,
+                                reinterpret_cast<const jbyte*>(&snapshot));
+    }
+    return result;
+}
+
 } // extern "C"

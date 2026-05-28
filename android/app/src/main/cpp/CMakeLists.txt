@@ -31,6 +31,8 @@ add_library(
     wdrc_processor.cpp
     mpo_limiter.cpp
     environment_classifier.cpp
+    # Analizador de espectro (FFT 128-point Cooley-Tukey)
+    spectrum_analyzer.cpp
 )
 
 # Enlazar con Oboe y librerías del sistema Android

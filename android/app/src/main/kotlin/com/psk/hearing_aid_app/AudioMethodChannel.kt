@@ -155,6 +155,13 @@ class AudioMethodChannel(
                 "applyCalibration" -> handleApplyCalibration(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
                 "getDeviceInfo" -> handleGetDeviceInfo(result)
+                // Spectrum Analyzer
+                "startSpectrumAnalysis" -> { nativeBridge.nativeStartSpectrumAnalysis(); result.success(null) }
+                "stopSpectrumAnalysis" -> { nativeBridge.nativeStopSpectrumAnalysis(); result.success(null) }
+                "startSpectrumRecording" -> { nativeBridge.nativeStartSpectrumRecording(); result.success(null) }
+                "stopSpectrumRecording" -> { val count = nativeBridge.nativeStopSpectrumRecording(); result.success(count) }
+                "getRecordingData" -> { val data = nativeBridge.nativeGetRecordingData(); result.success(data) }
+                "getCurrentSpectrum" -> { val data = nativeBridge.nativeGetCurrentSpectrum(); result.success(data) }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

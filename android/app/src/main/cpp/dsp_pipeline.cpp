@@ -16,6 +16,7 @@
 #include "dsp_pipeline.h"
 
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +57,9 @@ void DspPipeline::init(const AudioConfig& config) {
     // Volumen inicial: 0 dB (ganancia unitaria)
     volumeDb_.store(0.0f, std::memory_order_relaxed);
     volumeLinear_.store(1.0f, std::memory_order_relaxed);
+
+    // Inicializar analizador de espectro
+    spectrumAnalyzer_.init(config.sampleRate, config.splOffset);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,6 +69,13 @@ void DspPipeline::init(const AudioConfig& config) {
 void DspPipeline::processBlock(float* buffer, int blockSize) {
     if (buffer == nullptr || blockSize <= 0) {
         return;
+    }
+
+    // ─── 0. Copiar buffer de entrada para el analizador de espectro ─────
+    float inputCopy[256];  // max block size
+    bool spectrumActive = spectrumAnalyzer_.isActive();
+    if (spectrumActive) {
+        std::memcpy(inputCopy, buffer, blockSize * sizeof(float));
     }
 
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
@@ -127,6 +138,14 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede
     // el threshold. Opera muestra-por-muestra, no block-rate.
     mpo_.process(buffer, blockSize);
+
+    // ─── 9. Spectrum Analyzer (post-pipeline) ───────────────────────────
+    // Alimentar el analizador con buffers pre y post procesamiento.
+    // Solo se ejecuta cuando la pantalla de espectro está visible.
+    if (spectrumActive) {
+        spectrumAnalyzer_.setEnvironmentClass(lastEnvClass_);
+        spectrumAnalyzer_.processBuffers(inputCopy, buffer, blockSize);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import '../bloc/amplification_state.dart';
 import '../widgets/safety_warning_widget.dart';
 import 'audiogram_screen.dart';
 import 'simulator_screen.dart';
+import 'spectrum_analyzer_screen.dart';
 
 /// Pantalla principal de amplificación del PSK Mobile Hearing Aid.
 ///
@@ -130,6 +131,22 @@ class _StatusBar extends StatelessWidget {
               ),
             ),
           const SizedBox(width: 8),
+          // Botón de analizador de espectro
+          Builder(
+            builder: (context) => IconButton(
+              icon: const Icon(Icons.graphic_eq, color: Colors.white70, size: 22),
+              tooltip: 'Spectrum Analyzer',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const SpectrumAnalyzerScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
           // Botón de simulador avanzado
           Builder(
             builder: (context) => IconButton(

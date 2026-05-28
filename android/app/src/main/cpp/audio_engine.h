@@ -56,6 +56,16 @@ public:
     void setAutoClassifyEnabled(bool enabled);
     int getCurrentEnvironmentClass() const;
 
+    // ─── Spectrum Analyzer forwarding ───────────────────────────────────
+    void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
+    void stopSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(false); }
+    void startSpectrumRecording() { pipeline_.getSpectrumAnalyzer().startRecording(); }
+    int stopSpectrumRecording() { pipeline_.getSpectrumAnalyzer().stopRecording(); return pipeline_.getSpectrumAnalyzer().getRecordedCount(); }
+    SpectrumSnapshot getCurrentSpectrum() const { return pipeline_.getSpectrumAnalyzer().getCurrentSnapshot(); }
+    const SpectrumSnapshot* getRecordedSnapshots() const { return pipeline_.getSpectrumAnalyzer().getRecordedSnapshots(); }
+    int getRecordedSnapshotCount() const { return pipeline_.getSpectrumAnalyzer().getRecordedCount(); }
+    int getRecordedDataSize() const { return pipeline_.getSpectrumAnalyzer().getRecordedSize(); }
+
     // ─── Callback de nivel para UI ──────────────────────────────────────
     using LevelCallback = std::function<void(float levelDbSpl)>;
     void setLevelCallback(LevelCallback cb);
