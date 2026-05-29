@@ -16,6 +16,8 @@ dependencies:
   permission_handler: ^11.0.1
   wakelock_plus: ^1.2.8
   url_launcher: ^6.2.1
+  just_audio: ^0.9.36
+  flutter_tts: ^4.0.2
 
 dev_dependencies:
   flutter_test:

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 import '../../../domain/entities/diagnostic_result.dart';
 
@@ -33,6 +34,9 @@ class _Step3WordTestState extends State<Step3WordTest> {
   int? _selectedOption;
   bool? _lastAnswerCorrect;
 
+  // TTS engine
+  final FlutterTts _tts = FlutterTts();
+
   // Opciones mezcladas para la palabra actual
   List<String> _shuffledOptions = [];
   int _correctOptionIndex = 0;
@@ -40,6 +44,20 @@ class _Step3WordTestState extends State<Step3WordTest> {
   @override
   void initState() {
     super.initState();
+    _initTts();
+  }
+
+  Future<void> _initTts() async {
+    await _tts.setLanguage('es-ES');
+    await _tts.setSpeechRate(0.4); // Lento para claridad
+    await _tts.setVolume(0.5); // Volumen bajo (simula nivel suave)
+    await _tts.setPitch(1.0);
+  }
+
+  @override
+  void dispose() {
+    _tts.stop();
+    super.dispose();
   }
 
   int get _totalWords => DiagnosticResult.testWords.length;
@@ -78,13 +96,15 @@ class _Step3WordTestState extends State<Step3WordTest> {
   void _playCurrentWord() {
     setState(() => _isPlayingWord = true);
 
-    // TODO: implement TTS or audio playback
-    // Aquí se reproduciría la palabra usando TTS del sistema
-    // o un archivo de audio pregrabado.
-    // Palabra: DiagnosticResult.testWords[_currentWordIndex]
+    final word = DiagnosticResult.testWords[_currentWordIndex];
 
-    // Simular duración de reproducción
-    Timer(const Duration(milliseconds: 1200), () {
+    // Reproducir la palabra usando TTS
+    _tts.speak(word).then((_) {
+      // TTS completó la reproducción
+    });
+
+    // Esperar un tiempo razonable para que termine el TTS
+    Timer(const Duration(milliseconds: 1500), () {
       if (mounted) {
         setState(() => _isPlayingWord = false);
       }

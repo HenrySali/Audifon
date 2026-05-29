@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../data/services/tone_generator.dart';
 import '../../../domain/entities/diagnostic_result.dart';
 
 /// Paso 2: Test de Tonos Puros.
@@ -32,6 +33,9 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
   bool _testStarted = false;
   bool _isPlayingTone = false;
   bool _waitingForResponse = false;
+
+  // Generador de tonos
+  final ToneGenerator _toneGenerator = ToneGenerator();
 
   // Oído actual: 0 = derecho, 1 = izquierdo
   int _currentEarIndex = 0;
@@ -70,6 +74,7 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
   void dispose() {
     _toneTimer?.cancel();
     _responseTimer?.cancel();
+    _toneGenerator.dispose();
     super.dispose();
   }
 
@@ -103,13 +108,17 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
       _waitingForResponse = false;
     });
 
-    // TODO: implement tone generation
-    // Aquí se generaría un tono sinusoidal puro a _currentFrequency Hz
-    // con nivel _currentLevel dB HL, en el oído _currentEarLabel.
-    // Duración: 1.5 segundos.
+    // Reproducir tono real usando ToneGenerator
+    final ear = _currentEarIndex == 0 ? 'right' : 'left';
+    _toneGenerator.playTone(
+      frequencyHz: _currentFrequency,
+      levelDb: _currentLevel,
+      ear: ear,
+    );
 
     _toneTimer = Timer(_toneDuration, () {
       if (mounted) {
+        _toneGenerator.stop();
         setState(() {
           _isPlayingTone = false;
           _waitingForResponse = true;
