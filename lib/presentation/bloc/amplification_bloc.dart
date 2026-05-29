@@ -411,14 +411,31 @@ class AmplificationBloc
   }
 
   /// Actualiza las ganancias del EQ directamente (desde configuración avanzada).
+  ///
+  /// Si el preset tiene nombre conocido (Mild, Moderate, Severe, Profound),
+  /// también actualiza los parámetros WDRC recomendados para ese preset.
   Future<void> _onUpdateEqGains(
     UpdateEqGains event,
     Emitter<AmplificationState> emit,
   ) async {
     if (state is! AmplificationActive) return;
+    final currentState = state as AmplificationActive;
 
     try {
       await _audioBridge.updateEqGains(event.gains);
+
+      // Si es un preset conocido, aplicar también sus parámetros WDRC recomendados
+      if (event.presetName != null) {
+        final preset = _findEqPresetWdrcParams(event.presetName!);
+        if (preset != null) {
+          await _audioBridge.updateWdrcParams(WdrcParams(
+            expansionKnee: preset.expansionKnee,
+            compressionKnee: preset.compressionKnee,
+            compressionRatio: preset.compressionRatio,
+          ));
+        }
+      }
+
       // Persistir el preset
       if (event.presetName != null) {
         await _settingsRepository.setLastEqPreset({
@@ -431,8 +448,34 @@ class AmplificationBloc
           'gains': event.gains,
         });
       }
+
+      // Actualizar estado con el nombre del preset activo
+      emit(currentState.copyWith(
+        activeEqPreset: event.presetName ?? 'Custom',
+      ));
     } catch (_) {
       // No interrumpir por error de actualización de EQ
+    }
+  }
+
+  /// Busca los parámetros WDRC recomendados para un preset EQ por nombre.
+  /// Retorna null si no es un preset conocido.
+  ({double compressionRatio, double compressionKnee, double expansionKnee})?
+      _findEqPresetWdrcParams(String presetName) {
+    // Parámetros WDRC optimizados por preset (de eq_preset.dart)
+    switch (presetName) {
+      case 'Normal':
+        return (compressionRatio: 1.2, compressionKnee: 60.0, expansionKnee: 35.0);
+      case 'Mild':
+        return (compressionRatio: 1.5, compressionKnee: 55.0, expansionKnee: 35.0);
+      case 'Moderate':
+        return (compressionRatio: 2.0, compressionKnee: 50.0, expansionKnee: 35.0);
+      case 'Severe':
+        return (compressionRatio: 2.5, compressionKnee: 45.0, expansionKnee: 35.0);
+      case 'Profound':
+        return (compressionRatio: 3.0, compressionKnee: 40.0, expansionKnee: 35.0);
+      default:
+        return null;
     }
   }
 
