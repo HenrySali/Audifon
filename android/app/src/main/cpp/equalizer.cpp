@@ -8,10 +8,9 @@
 /// Las ganancias se actualizan atómicamente desde el hilo de UI;
 /// los coeficientes se recalculan en el hilo de audio al inicio de cada bloque.
 ///
-/// CROSSFADE: Al detectar cambio significativo de ganancias, se aplica un
-/// fade-out rápido (5ms), se resetean los estados de los filtros, y luego
-/// un fade-in (5ms). Esto elimina completamente el transitorio/ruido que
-/// ocurría al cambiar presets en caliente.
+/// NOTA: Los cambios de preset EQ se manejan con reinicio rápido del engine
+/// desde Dart (stop+start ~50ms). Esto garantiza que los filtros siempre
+/// arrancan con estado limpio, eliminando transitorios por completo.
 
 #include "equalizer.h"
 
@@ -27,16 +26,11 @@ Equalizer::Equalizer() {
     for (int i = 0; i < kEqBandCount; ++i) {
         gains_[i].store(0.0f, std::memory_order_relaxed);
         appliedGains_[i] = 0.0f;
-        oldAppliedGains_[i] = 0.0f;
         states_[i].reset();
-        oldStates_[i].reset();
+        // Coeficientes por defecto: pass-through (b0=1, resto=0)
         coeffs_[i] = BiquadCoeffs{};
-        oldCoeffs_[i] = BiquadCoeffs{};
     }
     gainsChanged_.store(false, std::memory_order_relaxed);
-    crossfadeActive_ = false;
-    crossfadeSamplesLeft_ = 0;
-    crossfadeSamplesTotal_ = 0;
 }
 
 // ============================================================================
@@ -46,20 +40,11 @@ Equalizer::Equalizer() {
 void Equalizer::init(int sampleRate) {
     sampleRate_ = sampleRate;
 
-    // Calcular duración del crossfade en muestras (10ms total: 5ms fade-out + 5ms fade-in)
-    crossfadeSamplesTotal_ = static_cast<int>(kCrossfadeMs * sampleRate / 1000.0f);
-    if (crossfadeSamplesTotal_ < 32) crossfadeSamplesTotal_ = 32;  // mínimo 32 muestras
-    crossfadeSamplesLeft_ = 0;
-    crossfadeActive_ = false;
-
     // Resetear estados de filtro
     for (int i = 0; i < kEqBandCount; ++i) {
         states_[i].reset();
-        oldStates_[i].reset();
         appliedGains_[i] = 0.0f;
-        oldAppliedGains_[i] = 0.0f;
         coeffs_[i] = BiquadCoeffs{};
-        oldCoeffs_[i] = BiquadCoeffs{};
     }
 
     // Forzar recálculo de coeficientes en el próximo process()
@@ -190,23 +175,30 @@ float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
 }
 
 // ============================================================================
-// Procesamiento de bloque con coeficientes/estados dados
+// Procesamiento de bloque (llamado desde hilo de audio)
 // ============================================================================
 
-void Equalizer::processBlock(float* buffer, int blockSize,
-                             BiquadCoeffs* coeffs, BiquadState* states,
-                             const float* appliedGains) {
+void Equalizer::process(float* buffer, int blockSize) {
+    if (buffer == nullptr || blockSize <= 0) return;
+
+    // Verificar si hay cambio de ganancias pendiente
+    if (gainsChanged_.load(std::memory_order_acquire)) {
+        updateCoefficients();
+        gainsChanged_.store(false, std::memory_order_release);
+    }
+
+    // Aplicar cada banda en serie con per-band limiter
     for (int band = 0; band < kEqBandCount; ++band) {
         // Si la ganancia aplicada es ~0 dB, este filtro es pass-through
-        if (appliedGains[band] < 0.01f) {
+        if (appliedGains_[band] < 0.01f) {
             continue;
         }
 
-        const BiquadCoeffs& c = coeffs[band];
-        BiquadState& state = states[band];
+        const BiquadCoeffs& coeffs = coeffs_[band];
+        BiquadState& state = states_[band];
 
         for (int i = 0; i < blockSize; ++i) {
-            float sample = processBiquadSample(buffer[i], c, state);
+            float sample = processBiquadSample(buffer[i], coeffs, state);
 
             // Per-band limiter
             const float absSample = std::fabs(sample);
@@ -215,82 +207,6 @@ void Equalizer::processBlock(float* buffer, int blockSize,
             }
 
             buffer[i] = sample;
-        }
-    }
-}
-
-// ============================================================================
-// Procesamiento de bloque principal con crossfade (llamado desde hilo de audio)
-// ============================================================================
-
-void Equalizer::process(float* buffer, int blockSize) {
-    if (buffer == nullptr || blockSize <= 0) return;
-
-    // Verificar si hay cambio de ganancias pendiente
-    if (gainsChanged_.load(std::memory_order_acquire)) {
-        gainsChanged_.store(false, std::memory_order_release);
-
-        // Verificar si realmente hubo un cambio significativo
-        bool significantChange = false;
-        for (int i = 0; i < kEqBandCount; ++i) {
-            const float newGain = gains_[i].load(std::memory_order_relaxed);
-            if (std::fabs(newGain - appliedGains_[i]) > 0.5f) {
-                significantChange = true;
-                break;
-            }
-        }
-
-        if (significantChange) {
-            // Actualizar coeficientes con las nuevas ganancias
-            updateCoefficients();
-
-            // Resetear TODOS los estados de filtro para eliminar transitorios.
-            // Los estados viejos con coeficientes nuevos son la causa del ruido.
-            for (int i = 0; i < kEqBandCount; ++i) {
-                states_[i].reset();
-            }
-
-            // Iniciar crossfade (fade-in desde silencio)
-            crossfadeSamplesLeft_ = crossfadeSamplesTotal_;
-            crossfadeActive_ = true;
-        } else {
-            // Cambio menor — actualizar coeficientes sin crossfade
-            updateCoefficients();
-        }
-    }
-
-    // --- Procesamiento ---
-
-    if (!crossfadeActive_) {
-        // Caso normal: procesar directamente con coeficientes actuales
-        processBlock(buffer, blockSize, coeffs_, states_, appliedGains_);
-    } else {
-        // Crossfade activo: fade-in gradual después del reset de estados.
-        // Esto evita el "pop" del reset y permite que los filtros se estabilicen.
-
-        // Procesar con los nuevos coeficientes (estados ya reseteados)
-        processBlock(buffer, blockSize, coeffs_, states_, appliedGains_);
-
-        // Aplicar envelope de fade-in sample-by-sample
-        for (int i = 0; i < blockSize; ++i) {
-            if (crossfadeSamplesLeft_ <= 0) {
-                break;  // Crossfade terminado
-            }
-
-            // Fade-in: de 0.0 a 1.0 linealmente
-            const float progress = 1.0f - (static_cast<float>(crossfadeSamplesLeft_)
-                                          / static_cast<float>(crossfadeSamplesTotal_));
-
-            // Usar curva cuadrática para fade-in más suave (evita click al inicio)
-            const float gain = progress * progress;
-
-            buffer[i] *= gain;
-            crossfadeSamplesLeft_--;
-        }
-
-        // Si el crossfade terminó en este bloque, desactivar
-        if (crossfadeSamplesLeft_ <= 0) {
-            crossfadeActive_ = false;
         }
     }
 }

@@ -412,8 +412,11 @@ class AmplificationBloc
 
   /// Actualiza las ganancias del EQ directamente (desde configuración avanzada).
   ///
-  /// Si el preset tiene nombre conocido (Mild, Moderate, Severe, Profound),
-  /// también actualiza los parámetros WDRC recomendados para ese preset.
+  /// Estrategia: REINICIO RÁPIDO del engine (~50ms).
+  /// Los filtros biquad no pueden cambiar coeficientes en caliente sin producir
+  /// transitorios. La solución profesional es hacer stop+start del engine con
+  /// las nuevas ganancias, igual que al iniciar la app. El usuario percibe
+  /// un silencio de ~50ms (imperceptible en la práctica).
   Future<void> _onUpdateEqGains(
     UpdateEqGains event,
     Emitter<AmplificationState> emit,
@@ -422,21 +425,7 @@ class AmplificationBloc
     final currentState = state as AmplificationActive;
 
     try {
-      await _audioBridge.updateEqGains(event.gains);
-
-      // Si es un preset conocido, aplicar también sus parámetros WDRC recomendados
-      if (event.presetName != null) {
-        final preset = _findEqPresetWdrcParams(event.presetName!);
-        if (preset != null) {
-          await _audioBridge.updateWdrcParams(WdrcParams(
-            expansionKnee: preset.expansionKnee,
-            compressionKnee: preset.compressionKnee,
-            compressionRatio: preset.compressionRatio,
-          ));
-        }
-      }
-
-      // Persistir el preset
+      // 1. Persistir el preset ANTES del reinicio
       if (event.presetName != null) {
         await _settingsRepository.setLastEqPreset({
           'name': event.presetName,
@@ -449,7 +438,48 @@ class AmplificationBloc
         });
       }
 
-      // Actualizar estado con el nombre del preset activo
+      // 2. Obtener parámetros WDRC del preset (o del perfil activo)
+      WdrcParams wdrcParams;
+      if (event.presetName != null) {
+        final presetWdrc = _findEqPresetWdrcParams(event.presetName!);
+        if (presetWdrc != null) {
+          wdrcParams = WdrcParams(
+            expansionKnee: presetWdrc.expansionKnee,
+            compressionKnee: presetWdrc.compressionKnee,
+            compressionRatio: presetWdrc.compressionRatio,
+          );
+        } else {
+          wdrcParams = WdrcParams(
+            expansionKnee: _currentProfile?.expansionKnee ?? 35.0,
+            compressionKnee: _currentProfile?.compressionKnee ?? 50.0,
+            compressionRatio: _currentProfile?.compressionRatio ?? 2.0,
+          );
+        }
+      } else {
+        wdrcParams = WdrcParams(
+          expansionKnee: _currentProfile?.expansionKnee ?? 35.0,
+          compressionKnee: _currentProfile?.compressionKnee ?? 50.0,
+          compressionRatio: _currentProfile?.compressionRatio ?? 2.0,
+        );
+      }
+
+      // 3. STOP del engine actual
+      _cancelSubscriptions();
+      await _audioBridge.stopAudio();
+
+      // 4. START con las nuevas ganancias (engine limpio, sin transitorios)
+      final config = AudioConfig(
+        eqGains: event.gains,
+        volumeDb: _currentVolumeDb,
+        wdrcParams: wdrcParams,
+        nrLevel: _currentProfile?.nrLevel ?? 2,
+      );
+      await _audioBridge.startAudio(config);
+
+      // 5. Re-suscribirse a streams
+      _subscribeToStreams();
+
+      // 6. Emitir estado actualizado
       emit(currentState.copyWith(
         activeEqPreset: event.presetName ?? 'Custom',
       ));
