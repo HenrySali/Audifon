@@ -39,6 +39,9 @@ class AmplificationBloc
   final SettingsRepository _settingsRepository;
   final GainPrescriber _gainPrescriber;
 
+  /// Expone el repositorio de audiograma para consultas desde la UI.
+  AudiogramRepository get audiogramRepository => _audiogramRepository;
+
   /// Expone el repositorio de perfiles para consultas desde la UI.
   ProfileRepository get profileRepository => _profileRepository;
 

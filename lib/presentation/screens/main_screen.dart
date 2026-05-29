@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
@@ -194,12 +195,18 @@ class _StatusBar extends StatelessWidget {
               tooltip: 'Configurar Audiograma',
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              onPressed: () {
+              onPressed: () async {
+                final bloc = context.read<AmplificationBloc>();
+                final savedAudiogram =
+                    await bloc.audiogramRepository.getAudiogram();
+                if (!context.mounted) return;
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => BlocProvider.value(
-                      value: context.read<AmplificationBloc>(),
-                      child: const AudiogramScreen(),
+                      value: bloc,
+                      child: AudiogramScreen(
+                        currentAudiogram: savedAudiogram,
+                      ),
                     ),
                   ),
                 );
