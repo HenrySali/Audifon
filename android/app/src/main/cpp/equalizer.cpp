@@ -199,7 +199,7 @@ void Equalizer::process(float* buffer, int blockSize) {
         gainsChanged_.store(false, std::memory_order_release);
     }
 
-    // Aplicar cada banda en serie
+    // Aplicar cada banda en serie con per-band limiter
     // Optimización: saltar bandas con ganancia = 0 dB (pass-through)
     for (int band = 0; band < kEqBandCount; ++band) {
         // Si la ganancia aplicada es ~0 dB, este filtro es pass-through
@@ -211,8 +211,19 @@ void Equalizer::process(float* buffer, int blockSize) {
         BiquadState& state = states_[band];
 
         // Procesar todas las muestras del bloque a través de este biquad
+        // con per-band limiter integrado para prevenir saturación
         for (int i = 0; i < blockSize; ++i) {
-            buffer[i] = processBiquadSample(buffer[i], coeffs, state);
+            float sample = processBiquadSample(buffer[i], coeffs, state);
+
+            // Per-band limiter: si esta banda amplificó más allá del ceiling,
+            // limitar instantáneamente. Esto previene que bandas con alta
+            // ganancia (ej: +25 dB en 4kHz) saturen la señal antes del WDRC/MPO.
+            const float absSample = std::fabs(sample);
+            if (absSample > kPerBandCeiling) {
+                sample *= kPerBandCeiling / absSample;
+            }
+
+            buffer[i] = sample;
         }
     }
 }

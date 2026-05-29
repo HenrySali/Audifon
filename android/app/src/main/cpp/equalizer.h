@@ -43,6 +43,11 @@ static constexpr float kEqQFactors[kEqBandCount] = {
     1.5f    // 8000 Hz — ligeramente más estrecho (cerca de Nyquist)
 };
 
+/// Ceiling lineal para el per-band limiter.
+/// -3 dBFS = 0.708 — deja margen para que el WDRC y Volume operen sin clipping.
+/// Esto previene saturación cuando bandas individuales tienen alta ganancia.
+static constexpr float kPerBandCeiling = 0.708f;  // -3 dBFS
+
 /// Coeficientes normalizados de un filtro biquad (Direct Form I).
 /// Todos los coeficientes están normalizados por a0 (a0 = 1.0 implícito).
 struct BiquadCoeffs {
