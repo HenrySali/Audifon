@@ -25,21 +25,21 @@ class Audiogram extends Equatable {
   /// Audiograma predeterminado del usuario:
   /// 0 dB HL (250-750 Hz), 40 dB HL (1000 Hz), +5 dB por frecuencia hasta 75 dB HL.
   ///
-  /// Representa pérdida auditiva en frecuencias altas con audición normal
-  /// en frecuencias bajas.
+  /// Valores por defecto del audiograma antes de que el usuario configure uno.
+  /// 10 dB HL en todas las frecuencias (pérdida mínima uniforme).
   static const Map<int, double> defaultThresholds = {
-    250: 0,
-    500: 0,
-    750: 0,
-    1000: 40,
-    1500: 45,
-    2000: 50,
-    2500: 55,
-    3000: 60,
-    3500: 65,
-    4000: 70,
-    6000: 75,
-    8000: 75,
+    250: 10,
+    500: 10,
+    750: 10,
+    1000: 10,
+    1500: 10,
+    2000: 10,
+    2500: 10,
+    3000: 10,
+    3500: 10,
+    4000: 10,
+    6000: 10,
+    8000: 10,
   };
 
   /// Frecuencias audiométricas estándar (Hz).

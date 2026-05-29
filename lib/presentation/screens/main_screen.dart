@@ -9,6 +9,7 @@ import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 import '../widgets/safety_warning_widget.dart';
 import 'audiogram_screen.dart';
+import 'diagnostic/diagnostic_flow_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'simulator_screen.dart';
 import 'spectrum_analyzer_screen.dart';
@@ -132,6 +133,25 @@ class _StatusBar extends StatelessWidget {
               ),
             ),
           const SizedBox(width: 8),
+          // Botón de diagnóstico auditivo
+          Builder(
+            builder: (context) => IconButton(
+              icon: const Icon(Icons.hearing, color: Colors.white70, size: 22),
+              tooltip: 'Diagnóstico Auditivo',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => BlocProvider.value(
+                      value: context.read<AmplificationBloc>(),
+                      child: const DiagnosticFlowScreen(),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
           // Botón de analizador de espectro
           Builder(
             builder: (context) => IconButton(

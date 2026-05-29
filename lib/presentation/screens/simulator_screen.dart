@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 
 import '../../domain/entities/eq_preset.dart';
 import '../bloc/amplification_bloc.dart';
@@ -40,11 +41,39 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
   @override
   void initState() {
     super.initState();
+    _loadSavedEqPreset();
     _loadDeviceInfo();
     _deviceInfoTimer = Timer.periodic(
       const Duration(seconds: 3),
       (_) => _loadDeviceInfo(),
     );
+  }
+
+  /// Loads the last saved EQ preset from Hive settings.
+  /// If no preset was saved, defaults to Normal preset.
+  Future<void> _loadSavedEqPreset() async {
+    try {
+      const channel = MethodChannel('com.psk.hearing_aid/audio');
+      // We use the settings box directly via a method channel call
+      // or read from the BLoC state. For simplicity, read from Hive directly.
+      final box = await Hive.openBox('settings_box');
+      final savedPreset = box.get('lastEqPreset');
+      if (savedPreset != null && mounted) {
+        final presetMap = Map<String, dynamic>.from(savedPreset as Map);
+        final name = presetMap['name'] as String?;
+        final gains = (presetMap['gains'] as List<dynamic>?)
+            ?.map((e) => (e as num).toDouble())
+            .toList();
+        if (gains != null && gains.length == 12) {
+          setState(() {
+            _currentGains = gains;
+            _activePreset = EqPreset.findByName(name ?? '');
+          });
+        }
+      }
+    } catch (_) {
+      // If loading fails, keep defaults (Normal preset, all zeros)
+    }
   }
 
   @override
