@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 
+import '../../../data/services/headphone_calibrator.dart';
 import '../../../domain/entities/diagnostic_result.dart';
+import 'calibration_step.dart';
 import 'step1_questionnaire.dart';
 import 'step2_tone_test.dart';
 import 'step3_word_test.dart';
 import 'step4_results.dart';
 import 'step5_recommendation.dart';
 
-/// Pantalla principal del flujo de diagnóstico auditivo de 5 pasos.
+/// Pantalla principal del flujo de diagnóstico auditivo.
 ///
-/// Usa un PageView controlado con indicador de progreso.
-/// Cada paso valida antes de permitir avanzar al siguiente.
+/// Flujo: Cuestionario → Calibración (si necesario) → Tonos → Palabras → Resultados → Recomendación
+///
+/// Si el auricular ya está calibrado, salta automáticamente la calibración.
 class DiagnosticFlowScreen extends StatefulWidget {
   const DiagnosticFlowScreen({super.key});
 
@@ -21,7 +24,14 @@ class DiagnosticFlowScreen extends StatefulWidget {
 class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
   final PageController _pageController = PageController();
   int _currentStep = 0;
-  static const int _totalSteps = 5;
+
+  // El flujo tiene 6 pasos posibles, pero calibración puede saltarse
+  // Pasos: 0=Cuestionario, 1=Calibración, 2=Tonos, 3=Palabras, 4=Resultados, 5=Recomendación
+  static const int _totalSteps = 6;
+
+  // Si ya está calibrado, se salta el paso de calibración
+  bool _skipCalibration = false;
+  bool _calibrationChecked = false;
 
   // Datos recopilados durante el flujo
   List<int> _questionnaireAnswers = [];
@@ -30,36 +40,79 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
   double _wordRecognitionScore = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _checkCalibrationStatus();
+  }
+
+  @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
   }
 
+  Future<void> _checkCalibrationStatus() async {
+    final calibrator = HeadphoneCalibrator();
+    final isCalibrated = await calibrator.isCalibrated();
+    await calibrator.dispose();
+    if (mounted) {
+      setState(() {
+        _skipCalibration = isCalibrated;
+        _calibrationChecked = true;
+      });
+    }
+  }
+
+  /// Número de pasos visibles (sin calibración si ya está calibrado).
+  int get _visibleSteps => _skipCalibration ? 5 : 6;
+
+  /// Índice visual del paso actual (ajustado si se salta calibración).
+  int get _displayStep {
+    if (_skipCalibration && _currentStep > 0) {
+      return _currentStep - 1; // Salta el paso de calibración visualmente
+    }
+    return _currentStep;
+  }
+
+  void _goToStep(int step) {
+    setState(() => _currentStep = step);
+    _pageController.animateToPage(
+      step,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
   void _goToNextStep() {
     if (_currentStep < _totalSteps - 1) {
-      setState(() => _currentStep++);
-      _pageController.animateToPage(
-        _currentStep,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
+      _goToStep(_currentStep + 1);
     }
   }
 
   void _goToPreviousStep() {
     if (_currentStep > 0) {
-      setState(() => _currentStep--);
-      _pageController.animateToPage(
-        _currentStep,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
+      // Si estamos en tonos y calibración se saltó, volver al cuestionario
+      if (_skipCalibration && _currentStep == 2) {
+        _goToStep(0);
+      } else {
+        _goToStep(_currentStep - 1);
+      }
     }
   }
 
   void _onQuestionnaireComplete(List<int> answers) {
     _questionnaireAnswers = answers;
-    _goToNextStep();
+    if (_skipCalibration) {
+      // Saltar calibración, ir directo a tonos
+      _goToStep(2);
+    } else {
+      _goToNextStep(); // Ir a calibración
+    }
+  }
+
+  void _onCalibrationComplete() {
+    // Después de calibrar, ir al test de tonos
+    _goToStep(2);
   }
 
   void _onToneTestComplete(
@@ -68,16 +121,16 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
   ) {
     _leftEarThresholds = leftThresholds;
     _rightEarThresholds = rightThresholds;
-    _goToNextStep();
+    _goToStep(3);
   }
 
   void _onWordTestComplete(double score) {
     _wordRecognitionScore = score;
-    _goToNextStep();
+    _goToStep(4);
   }
 
   void _onResultsReviewed() {
-    _goToNextStep();
+    _goToStep(5);
   }
 
   DiagnosticResult _buildResult() {
@@ -128,8 +181,9 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
         children: [
           // Indicador de progreso
           _ProgressIndicator(
-            currentStep: _currentStep,
-            totalSteps: _totalSteps,
+            currentStep: _displayStep,
+            totalSteps: _visibleSteps,
+            skipCalibration: _skipCalibration,
           ),
           // Contenido del paso actual
           Expanded(
@@ -137,17 +191,26 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
               controller: _pageController,
               physics: const NeverScrollableScrollPhysics(),
               children: [
+                // Paso 0: Cuestionario
                 Step1Questionnaire(
                   onComplete: _onQuestionnaireComplete,
                 ),
+                // Paso 1: Calibración
+                CalibrationStep(
+                  onComplete: _onCalibrationComplete,
+                  onBack: _goToPreviousStep,
+                ),
+                // Paso 2: Test de tonos
                 Step2ToneTest(
                   onComplete: _onToneTestComplete,
                   onBack: _goToPreviousStep,
                 ),
+                // Paso 3: Test de palabras
                 Step3WordTest(
                   onComplete: _onWordTestComplete,
                   onBack: _goToPreviousStep,
                 ),
+                // Paso 4: Resultados
                 Step4Results(
                   leftEarThresholds: _leftEarThresholds,
                   rightEarThresholds: _rightEarThresholds,
@@ -155,8 +218,9 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
                   onContinue: _onResultsReviewed,
                   onBack: _goToPreviousStep,
                 ),
+                // Paso 5: Recomendación
                 Step5Recommendation(
-                  result: _currentStep >= 4 ? _buildResult() : null,
+                  result: _currentStep >= 5 ? _buildResult() : null,
                   onBack: _goToPreviousStep,
                 ),
               ],
@@ -202,23 +266,34 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
   }
 }
 
-/// Indicador de progreso visual para los 5 pasos.
+/// Indicador de progreso visual para los pasos del diagnóstico.
 class _ProgressIndicator extends StatelessWidget {
   final int currentStep;
   final int totalSteps;
+  final bool skipCalibration;
 
   const _ProgressIndicator({
     required this.currentStep,
     required this.totalSteps,
+    required this.skipCalibration,
   });
 
-  static const List<String> _stepLabels = [
-    'Cuestionario',
-    'Tonos',
-    'Palabras',
-    'Resultados',
-    'Recomendación',
-  ];
+  List<String> get _stepLabels => skipCalibration
+      ? const [
+          'Cuestionario',
+          'Tonos',
+          'Palabras',
+          'Resultados',
+          'Recomendación',
+        ]
+      : const [
+          'Cuestionario',
+          'Calibración',
+          'Tonos',
+          'Palabras',
+          'Resultados',
+          'Recomendación',
+        ];
 
   @override
   Widget build(BuildContext context) {
@@ -266,14 +341,15 @@ class _ProgressIndicator extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           // Step label
-          Text(
-            _stepLabels[currentStep],
-            style: const TextStyle(
-              color: Colors.cyan,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+          if (currentStep < _stepLabels.length)
+            Text(
+              _stepLabels[currentStep],
+              style: const TextStyle(
+                color: Colors.cyan,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-          ),
         ],
       ),
     );
