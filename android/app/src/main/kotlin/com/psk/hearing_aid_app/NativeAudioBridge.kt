@@ -181,6 +181,16 @@ class NativeAudioBridge {
     }
 
     /**
+     * Habilita/deshabilita la clasificación automática de entorno.
+     * Thread-safe, puede llamarse desde cualquier hilo.
+     *
+     * @param enabled true para habilitar, false para deshabilitar
+     */
+    fun setAutoClassifyEnabled(enabled: Boolean) {
+        nativeSetAutoClassifyEnabled(enabled)
+    }
+
+    /**
      * Actualiza el offset de calibración SPL.
      * Thread-safe, puede llamarse desde cualquier hilo.
      *
@@ -261,6 +271,8 @@ class NativeAudioBridge {
     )
 
     private external fun nativeSetNrLevel(level: Int)
+
+    private external fun nativeSetAutoClassifyEnabled(enabled: Boolean)
 
     private external fun nativeSetSplOffset(offset: Float)
 

@@ -275,6 +275,23 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetNrLevel(
     g_engine->setNrLevel(level);
 }
 
+/// Habilita/deshabilita la clasificación automática de entorno.
+/// Thread-safe: usa std::atomic internamente.
+///
+/// @param enabled true para habilitar, false para deshabilitar
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAutoClassifyEnabled(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setAutoClassifyEnabled(enabled);
+}
+
 /// Actualiza el offset de calibración SPL (dBFS → dB SPL).
 /// Thread-safe: usa std::atomic internamente.
 ///

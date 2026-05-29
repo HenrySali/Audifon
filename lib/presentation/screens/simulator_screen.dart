@@ -128,7 +128,8 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
             ),
             const SizedBox(height: 16),
 
-            // ─── NR Control (removed) ─────────────────────────────────
+            // ─── NR & Auto-Classify Controls ──────────────────────────
+            _NrAutoClassifyControls(),
             const SizedBox(height: 24),
           ],
         ),
@@ -603,4 +604,150 @@ class _BandSlider extends StatelessWidget {
   }
 }
 
-// NR Control removed — will be re-implemented when RNNoise compiles correctly
+// =============================================================================
+// NR & AUTO-CLASSIFY CONTROLS
+// =============================================================================
+
+class _NrAutoClassifyControls extends StatefulWidget {
+  const _NrAutoClassifyControls();
+
+  @override
+  State<_NrAutoClassifyControls> createState() => _NrAutoClassifyControlsState();
+}
+
+class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
+  int _nrLevel = 1;
+  bool _autoClassify = true;
+
+  static const _nrLabels = ['Off', 'Bajo', 'Medio', 'Alto'];
+  static const _nrDescriptions = [
+    'Sin reducción de ruido',
+    'Suave — preserva naturalidad',
+    'Moderado — balance habla/ruido',
+    'Agresivo — máxima reducción',
+  ];
+
+  void _setNrLevel(int level) {
+    setState(() => _nrLevel = level);
+    try {
+      context.read<AmplificationBloc>().add(UpdateNrLevel(level: level));
+    } catch (_) {}
+  }
+
+  void _setAutoClassify(bool enabled) {
+    setState(() => _autoClassify = enabled);
+    try {
+      const channel = MethodChannel('com.psk.hearing_aid/audio');
+      channel.invokeMethod('updateAutoClassify', {'enabled': enabled});
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.noise_aware, color: Colors.amber, size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Reducción de Ruido',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // NR Level selector (segmented buttons)
+          Row(
+            children: List.generate(4, (i) {
+              final isActive = _nrLevel == i;
+              return Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(right: i < 3 ? 6 : 0),
+                  child: GestureDetector(
+                    onTap: () => _setNrLevel(i),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? Colors.amber.withOpacity(0.2)
+                            : Colors.white.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isActive
+                              ? Colors.amber
+                              : Colors.white.withOpacity(0.1),
+                        ),
+                      ),
+                      child: Center(
+                        child: Text(
+                          _nrLabels[i],
+                          style: TextStyle(
+                            color: isActive ? Colors.amber : Colors.white54,
+                            fontSize: 12,
+                            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _nrDescriptions[_nrLevel],
+            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+          const SizedBox(height: 16),
+          // Auto-Classify toggle
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.auto_fix_high, color: Colors.green, size: 18),
+                  SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Auto-Ambiente',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        'Ajusta NR y compresión automáticamente',
+                        style: TextStyle(color: Colors.white38, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Switch(
+                value: _autoClassify,
+                onChanged: _setAutoClassify,
+                activeColor: Colors.green,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -152,6 +152,7 @@ class AudioMethodChannel(
                 "updateVolume" -> handleUpdateVolume(call, result)
                 "updateWdrcParams" -> handleUpdateWdrcParams(call, result)
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
+                "updateAutoClassify" -> handleUpdateAutoClassify(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
                 "getDeviceInfo" -> handleGetDeviceInfo(result)
@@ -342,6 +343,19 @@ class AudioMethodChannel(
         }
 
         nativeBridge.setNrLevel(level)
+        result.success(null)
+    }
+
+    /**
+     * Habilita/deshabilita la clasificación automática de entorno.
+     *
+     * Argumentos: { "enabled": Boolean }
+     */
+    private fun handleUpdateAutoClassify(call: MethodCall, result: MethodChannel.Result) {
+        val enabled = call.argument<Boolean>("enabled")
+            ?: return result.error("INVALID_ARGS", "Missing 'enabled' argument", null)
+
+        nativeBridge.setAutoClassifyEnabled(enabled)
         result.success(null)
     }
 
