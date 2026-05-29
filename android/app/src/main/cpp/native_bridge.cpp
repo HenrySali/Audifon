@@ -354,24 +354,6 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetOutputDeviceId(
     return g_engine->getOutputDeviceId();
 }
 
-/// Habilita/deshabilita la clasificación automática de entorno.
-/// Cuando está habilitada, NR y WDRC se ajustan automáticamente según el entorno.
-/// Habilitado por defecto (crítico para usuarios pediátricos).
-///
-/// @param enabled true para habilitar, false para deshabilitar
-JNIEXPORT void JNICALL
-Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAutoClassifyEnabled(
-        JNIEnv* /* env */,
-        jobject /* thiz */,
-        jboolean enabled) {
-
-    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
-        return;
-    }
-
-    g_engine->setAutoClassifyEnabled(static_cast<bool>(enabled));
-}
-
 /// Obtiene la clase de entorno actual detectada por el clasificador automático.
 /// Thread-safe: lee un std::atomic<int>.
 ///
