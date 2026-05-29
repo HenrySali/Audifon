@@ -345,6 +345,9 @@ class _ActiveView extends StatelessWidget {
           // Indicador de preset EQ activo
           _EqPresetIndicator(presetName: state.activeEqPreset, nrLevel: state.activeNrLevel),
           const SizedBox(height: 16),
+          // Mini panel de visualización del preset EQ activo con gráfico de barras
+          _EqPresetDetailPanel(state: state),
+          const SizedBox(height: 16),
           // Reporte de procesamiento en tiempo real
           _ProcessingReport(state: state),
           const SizedBox(height: 16),
@@ -1200,6 +1203,214 @@ class _ReportMetric extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// =============================================================================
+// EQ PRESET DETAIL PANEL — Mini gráfico de barras + WDRC params
+// =============================================================================
+
+/// Panel compacto (≤80px) que muestra:
+/// - Nombre del preset EQ activo
+/// - Mini gráfico de barras con las 12 ganancias reales por banda
+/// - Parámetros WDRC: CR y Compression Knee del perfil activo
+/// Al tocarlo navega a SimulatorScreen (configuración avanzada).
+class _EqPresetDetailPanel extends StatefulWidget {
+  final AmplificationActive state;
+
+  const _EqPresetDetailPanel({required this.state});
+
+  @override
+  State<_EqPresetDetailPanel> createState() => _EqPresetDetailPanelState();
+}
+
+class _EqPresetDetailPanelState extends State<_EqPresetDetailPanel> {
+  List<double> _gains = List.filled(12, 0.0);
+  String _presetName = '';
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEqData();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EqPresetDetailPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state.activeEqPreset != widget.state.activeEqPreset) {
+      _loadEqData();
+    }
+  }
+
+  Future<void> _loadEqData() async {
+    final bloc = context.read<AmplificationBloc>();
+    try {
+      final savedPreset = await bloc.settingsRepository.getLastEqPreset();
+      if (savedPreset != null) {
+        final gains = (savedPreset['gains'] as List<dynamic>?)
+            ?.map((e) => (e as num).toDouble())
+            .toList();
+        if (gains != null && gains.length == 12) {
+          _gains = gains;
+        }
+        _presetName = savedPreset['name'] as String? ?? widget.state.activeEqPreset;
+      } else {
+        _presetName = widget.state.activeEqPreset;
+      }
+    } catch (_) {
+      _presetName = widget.state.activeEqPreset;
+    }
+    if (mounted) setState(() => _loaded = true);
+  }
+
+  /// Obtiene los parámetros WDRC del perfil activo.
+  ({double cr, double knee}) _getWdrcParams() {
+    final profileName = widget.state.activeProfile;
+    final profile = EnvironmentProfile.predefinedProfiles.cast<EnvironmentProfile?>().firstWhere(
+      (p) => p!.name == profileName,
+      orElse: () => null,
+    );
+    if (profile != null) {
+      return (cr: profile.compressionRatio, knee: profile.compressionKnee);
+    }
+    // Fallback para perfiles custom — usar valores por defecto
+    return (cr: 2.0, knee: 50.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final wdrc = _getWdrcParams();
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => BlocProvider.value(
+              value: context.read<AmplificationBloc>(),
+              child: const SimulatorScreen(),
+            ),
+          ),
+        );
+      },
+      child: Container(
+        height: 80,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF16213e),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.cyan.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            // Left: Preset name + WDRC params
+            SizedBox(
+              width: 90,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _loaded ? _presetName : '...',
+                    style: const TextStyle(
+                      color: Colors.cyan,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'CR ${wdrc.cr.toStringAsFixed(1)}:1',
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 10,
+                    ),
+                  ),
+                  Text(
+                    'Knee ${wdrc.knee.toStringAsFixed(0)} dB',
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Center: Mini bar chart of 12 bands
+            Expanded(
+              child: _loaded
+                  ? _MiniEqBarChart(gains: _gains)
+                  : const Center(
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.cyan,
+                        ),
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 8),
+            // Right: chevron
+            const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Mini gráfico de barras compacto para las 12 ganancias EQ.
+class _MiniEqBarChart extends StatelessWidget {
+  final List<double> gains;
+
+  const _MiniEqBarChart({required this.gains});
+
+  @override
+  Widget build(BuildContext context) {
+    // Calcular rango para normalización
+    final maxGain = gains.reduce((a, b) => a > b ? a : b).clamp(1.0, 50.0);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: List.generate(12, (i) {
+        final normalized = (gains[i] / maxGain).clamp(0.0, 1.0);
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 1),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: FractionallySizedBox(
+                      heightFactor: normalized.clamp(0.05, 1.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _barColor(gains[i]),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  Color _barColor(double gain) {
+    if (gain >= 25) return Colors.orange;
+    if (gain >= 15) return Colors.cyan;
+    if (gain >= 5) return Colors.cyan.withOpacity(0.7);
+    return Colors.cyan.withOpacity(0.4);
   }
 }
 
