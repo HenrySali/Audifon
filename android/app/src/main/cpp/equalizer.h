@@ -9,6 +9,7 @@
 /// - Las ganancias se actualizan atómicamente desde el hilo de UI.
 /// - Los coeficientes se recalculan en el hilo de audio al detectar cambio.
 /// - No se usan locks — operación completamente lock-free.
+/// - Crossfade de 10ms al cambiar ganancias para evitar transitorios.
 
 #ifndef HEARING_AID_EQUALIZER_H
 #define HEARING_AID_EQUALIZER_H
@@ -48,6 +49,10 @@ static constexpr float kEqQFactors[kEqBandCount] = {
 /// Esto previene saturación cuando bandas individuales tienen alta ganancia.
 static constexpr float kPerBandCeiling = 0.708f;  // -3 dBFS
 
+/// Duración del crossfade en milisegundos al cambiar ganancias.
+/// 10ms es suficiente para eliminar transitorios sin ser perceptible.
+static constexpr float kCrossfadeMs = 10.0f;
+
 /// Coeficientes normalizados de un filtro biquad (Direct Form I).
 /// Todos los coeficientes están normalizados por a0 (a0 = 1.0 implícito).
 struct BiquadCoeffs {
@@ -77,6 +82,10 @@ struct BiquadState {
 /// Rango de ganancias: [0, 50] dB por banda.
 /// ÚNICA etapa del pipeline que amplifica la señal.
 ///
+/// Implementa crossfade de 10ms al cambiar ganancias para evitar
+/// transitorios/ruido ensordecedor causado por discontinuidades en
+/// los estados internos de los filtros biquad.
+///
 /// Uso:
 /// @code
 ///   Equalizer eq;
@@ -98,6 +107,7 @@ public:
     /// Procesa un bloque de audio aplicando ecualización in-place.
     /// Aplica los 12 filtros biquad peaking en serie.
     /// Bandas con ganancia = 0 dB se saltan (optimización).
+    /// Si hay un crossfade activo, mezcla la salida vieja con la nueva.
     /// @param buffer Puntero al buffer de audio float32 [-1.0, +1.0]
     /// @param blockSize Número de muestras en el buffer
     void process(float* buffer, int blockSize);
@@ -129,35 +139,19 @@ public:
 
 private:
     /// Calcula coeficientes biquad peaking EQ usando Audio EQ Cookbook.
-    ///
-    /// Fórmula (Robert Bristow-Johnson):
-    ///   A  = 10^(dBgain/40)
-    ///   w0 = 2*pi*f0/Fs
-    ///   alpha = sin(w0)/(2*Q)
-    ///   b0 =  1 + alpha*A
-    ///   b1 = -2*cos(w0)
-    ///   b2 =  1 - alpha*A
-    ///   a0 =  1 + alpha/A
-    ///   a1 = -2*cos(w0)
-    ///   a2 =  1 - alpha/A
-    ///   (normalizar dividiendo todo por a0)
-    ///
-    /// @param frequencyHz Frecuencia central del filtro (Hz)
-    /// @param gainDb Ganancia en dB (0 = pass-through)
-    /// @param q Factor Q del filtro
-    /// @return Coeficientes normalizados del biquad
     BiquadCoeffs computePeakingCoeffs(float frequencyHz, float gainDb, float q) const;
 
     /// Recalcula coeficientes para todas las bandas que cambiaron.
     void updateCoefficients();
 
     /// Procesa una muestra a través de un filtro biquad (Direct Form I).
-    /// @param sample Muestra de entrada
-    /// @param coeffs Coeficientes del filtro
-    /// @param state Estado del filtro (modificado in-place)
-    /// @return Muestra de salida filtrada
     static float processBiquadSample(float sample, const BiquadCoeffs& coeffs,
                                      BiquadState& state);
+
+    /// Procesa un bloque con los coeficientes/estados actuales (sin crossfade).
+    void processBlock(float* buffer, int blockSize,
+                      BiquadCoeffs* coeffs, BiquadState* states,
+                      const float* appliedGains);
 
     // --- Configuración ---
     int sampleRate_ = 16000;
@@ -165,10 +159,20 @@ private:
     // --- Ganancias atómicas (actualizables desde hilo de UI) ---
     std::atomic<float> gains_[kEqBandCount];
 
-    // --- Coeficientes y estado (solo accedidos desde hilo de audio) ---
+    // --- Coeficientes y estado NUEVOS (solo accedidos desde hilo de audio) ---
     BiquadCoeffs coeffs_[kEqBandCount];   ///< Coeficientes actuales por banda
     BiquadState states_[kEqBandCount];    ///< Estado de filtro por banda
     float appliedGains_[kEqBandCount];    ///< Ganancias con las que se calcularon los coeficientes
+
+    // --- Coeficientes y estado VIEJOS para crossfade ---
+    BiquadCoeffs oldCoeffs_[kEqBandCount];   ///< Coeficientes previos al cambio
+    BiquadState oldStates_[kEqBandCount];    ///< Estado de filtro previo al cambio
+    float oldAppliedGains_[kEqBandCount];    ///< Ganancias previas al cambio
+
+    // --- Crossfade state ---
+    int crossfadeSamplesTotal_ = 0;    ///< Total de muestras para el crossfade
+    int crossfadeSamplesLeft_ = 0;     ///< Muestras restantes del crossfade activo
+    bool crossfadeActive_ = false;     ///< Si hay un crossfade en progreso
 
     // --- Flag de cambio pendiente ---
     std::atomic<bool> gainsChanged_{false};

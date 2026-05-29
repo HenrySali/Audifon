@@ -7,6 +7,11 @@
 /// Cada banda es un filtro biquad independiente aplicado en serie.
 /// Las ganancias se actualizan atómicamente desde el hilo de UI;
 /// los coeficientes se recalculan en el hilo de audio al inicio de cada bloque.
+///
+/// CROSSFADE: Al detectar cambio de ganancias, se inicia un crossfade de 10ms
+/// entre la salida del EQ con coeficientes viejos y la salida con coeficientes
+/// nuevos. Esto elimina el transitorio/ruido ensordecedor que ocurría al cambiar
+/// presets en caliente.
 
 #include "equalizer.h"
 
@@ -22,11 +27,16 @@ Equalizer::Equalizer() {
     for (int i = 0; i < kEqBandCount; ++i) {
         gains_[i].store(0.0f, std::memory_order_relaxed);
         appliedGains_[i] = 0.0f;
+        oldAppliedGains_[i] = 0.0f;
         states_[i].reset();
-        // Coeficientes por defecto: pass-through (b0=1, resto=0)
+        oldStates_[i].reset();
         coeffs_[i] = BiquadCoeffs{};
+        oldCoeffs_[i] = BiquadCoeffs{};
     }
     gainsChanged_.store(false, std::memory_order_relaxed);
+    crossfadeActive_ = false;
+    crossfadeSamplesLeft_ = 0;
+    crossfadeSamplesTotal_ = 0;
 }
 
 // ============================================================================
@@ -36,11 +46,20 @@ Equalizer::Equalizer() {
 void Equalizer::init(int sampleRate) {
     sampleRate_ = sampleRate;
 
+    // Calcular duración del crossfade en muestras
+    crossfadeSamplesTotal_ = static_cast<int>(kCrossfadeMs * sampleRate / 1000.0f);
+    if (crossfadeSamplesTotal_ < 16) crossfadeSamplesTotal_ = 16;  // mínimo 16 muestras
+    crossfadeSamplesLeft_ = 0;
+    crossfadeActive_ = false;
+
     // Resetear estados de filtro
     for (int i = 0; i < kEqBandCount; ++i) {
         states_[i].reset();
+        oldStates_[i].reset();
         appliedGains_[i] = 0.0f;
+        oldAppliedGains_[i] = 0.0f;
         coeffs_[i] = BiquadCoeffs{};
+        oldCoeffs_[i] = BiquadCoeffs{};
     }
 
     // Forzar recálculo de coeficientes en el próximo process()
@@ -84,7 +103,6 @@ void Equalizer::processWithScale(float* buffer, int blockSize, float scale) {
     process(buffer, blockSize);
 
     // Post-scale: reduce the amplified signal to fit in headroom.
-    // This preserves the frequency shape perfectly while reducing overall level.
     for (int i = 0; i < blockSize; ++i) {
         buffer[i] *= scale;
     }
@@ -108,16 +126,6 @@ BiquadCoeffs Equalizer::computePeakingCoeffs(float frequencyHz, float gainDb, fl
     }
 
     // Audio EQ Cookbook: Peaking EQ
-    // A  = 10^(dBgain/40)
-    // w0 = 2*pi*f0/Fs
-    // alpha = sin(w0)/(2*Q)
-    // b0 =  1 + alpha*A
-    // b1 = -2*cos(w0)
-    // b2 =  1 - alpha*A
-    // a0 =  1 + alpha/A
-    // a1 = -2*cos(w0)
-    // a2 =  1 - alpha/A
-
     const float A = std::pow(10.0f, gainDb / 40.0f);
     const float w0 = 2.0f * static_cast<float>(M_PI) * frequencyHz / static_cast<float>(sampleRate_);
     const float sinW0 = std::sin(w0);
@@ -154,11 +162,6 @@ void Equalizer::updateCoefficients() {
         if (std::fabs(newGain - appliedGains_[i]) > 0.01f) {
             coeffs_[i] = computePeakingCoeffs(kEqFrequencies[i], newGain, kEqQFactors[i]);
             appliedGains_[i] = newGain;
-
-            // Nota: NO reseteamos el estado del filtro al cambiar ganancia.
-            // Esto evita clicks/pops durante actualizaciones en tiempo real.
-            // Los coeficientes nuevos se aplican gradualmente a medida que
-            // las muestras antiguas salen del estado del filtro.
         }
     }
 }
@@ -187,7 +190,37 @@ float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
 }
 
 // ============================================================================
-// Procesamiento de bloque (llamado desde hilo de audio)
+// Procesamiento de bloque con coeficientes/estados dados
+// ============================================================================
+
+void Equalizer::processBlock(float* buffer, int blockSize,
+                             BiquadCoeffs* coeffs, BiquadState* states,
+                             const float* appliedGains) {
+    for (int band = 0; band < kEqBandCount; ++band) {
+        // Si la ganancia aplicada es ~0 dB, este filtro es pass-through
+        if (appliedGains[band] < 0.01f) {
+            continue;
+        }
+
+        const BiquadCoeffs& c = coeffs[band];
+        BiquadState& state = states[band];
+
+        for (int i = 0; i < blockSize; ++i) {
+            float sample = processBiquadSample(buffer[i], c, state);
+
+            // Per-band limiter
+            const float absSample = std::fabs(sample);
+            if (absSample > kPerBandCeiling) {
+                sample *= kPerBandCeiling / absSample;
+            }
+
+            buffer[i] = sample;
+        }
+    }
+}
+
+// ============================================================================
+// Procesamiento de bloque principal con crossfade (llamado desde hilo de audio)
 // ============================================================================
 
 void Equalizer::process(float* buffer, int blockSize) {
@@ -195,35 +228,83 @@ void Equalizer::process(float* buffer, int blockSize) {
 
     // Verificar si hay cambio de ganancias pendiente
     if (gainsChanged_.load(std::memory_order_acquire)) {
-        updateCoefficients();
         gainsChanged_.store(false, std::memory_order_release);
-    }
 
-    // Aplicar cada banda en serie con per-band limiter
-    // Optimización: saltar bandas con ganancia = 0 dB (pass-through)
-    for (int band = 0; band < kEqBandCount; ++band) {
-        // Si la ganancia aplicada es ~0 dB, este filtro es pass-through
-        if (appliedGains_[band] < 0.01f) {
-            continue;
+        // Verificar si realmente hubo un cambio significativo
+        bool significantChange = false;
+        for (int i = 0; i < kEqBandCount; ++i) {
+            const float newGain = gains_[i].load(std::memory_order_relaxed);
+            if (std::fabs(newGain - appliedGains_[i]) > 0.5f) {
+                significantChange = true;
+                break;
+            }
         }
 
-        const BiquadCoeffs& coeffs = coeffs_[band];
-        BiquadState& state = states_[band];
+        if (significantChange) {
+            // Guardar coeficientes y estados VIEJOS para el crossfade
+            std::memcpy(oldCoeffs_, coeffs_, sizeof(coeffs_));
+            std::memcpy(oldStates_, states_, sizeof(states_));
+            std::memcpy(oldAppliedGains_, appliedGains_, sizeof(appliedGains_));
 
-        // Procesar todas las muestras del bloque a través de este biquad
-        // con per-band limiter integrado para prevenir saturación
-        for (int i = 0; i < blockSize; ++i) {
-            float sample = processBiquadSample(buffer[i], coeffs, state);
+            // Calcular nuevos coeficientes
+            updateCoefficients();
 
-            // Per-band limiter: si esta banda amplificó más allá del ceiling,
-            // limitar instantáneamente. Esto previene que bandas con alta
-            // ganancia (ej: +25 dB en 4kHz) saturen la señal antes del WDRC/MPO.
-            const float absSample = std::fabs(sample);
-            if (absSample > kPerBandCeiling) {
-                sample *= kPerBandCeiling / absSample;
+            // Resetear estados de los filtros NUEVOS para evitar transitorios
+            // Los filtros nuevos arrancan "limpios" y el crossfade mezcla
+            // gradualmente desde la salida vieja (estable) a la nueva (limpia).
+            for (int i = 0; i < kEqBandCount; ++i) {
+                states_[i].reset();
             }
 
-            buffer[i] = sample;
+            // Iniciar crossfade
+            crossfadeSamplesLeft_ = crossfadeSamplesTotal_;
+            crossfadeActive_ = true;
+        } else {
+            // Cambio menor — actualizar coeficientes sin crossfade
+            updateCoefficients();
+        }
+    }
+
+    // --- Procesamiento ---
+
+    if (!crossfadeActive_) {
+        // Caso normal: procesar directamente con coeficientes actuales
+        processBlock(buffer, blockSize, coeffs_, states_, appliedGains_);
+    } else {
+        // Crossfade activo: procesar con AMBOS sets de coeficientes y mezclar
+
+        // Buffer temporal para la salida con coeficientes viejos
+        float oldBuffer[512];  // max block size soportado
+        const int safeBlockSize = (blockSize <= 512) ? blockSize : 512;
+
+        // Copiar input para procesar con coeficientes viejos
+        std::memcpy(oldBuffer, buffer, safeBlockSize * sizeof(float));
+
+        // Procesar con coeficientes NUEVOS (in-place en buffer)
+        processBlock(buffer, safeBlockSize, coeffs_, states_, appliedGains_);
+
+        // Procesar con coeficientes VIEJOS (in-place en oldBuffer)
+        processBlock(oldBuffer, safeBlockSize, oldCoeffs_, oldStates_, oldAppliedGains_);
+
+        // Crossfade sample-by-sample
+        for (int i = 0; i < safeBlockSize; ++i) {
+            if (crossfadeSamplesLeft_ <= 0) {
+                // Crossfade terminado — usar solo salida nueva
+                break;
+            }
+
+            // Factor de mezcla: 1.0 = todo viejo, 0.0 = todo nuevo
+            const float oldWeight = static_cast<float>(crossfadeSamplesLeft_)
+                                  / static_cast<float>(crossfadeSamplesTotal_);
+            const float newWeight = 1.0f - oldWeight;
+
+            buffer[i] = oldBuffer[i] * oldWeight + buffer[i] * newWeight;
+            crossfadeSamplesLeft_--;
+        }
+
+        // Si el crossfade terminó en este bloque, desactivar
+        if (crossfadeSamplesLeft_ <= 0) {
+            crossfadeActive_ = false;
         }
     }
 }
