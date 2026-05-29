@@ -42,6 +42,9 @@ class AmplificationBloc
   /// Expone el repositorio de audiograma para consultas desde la UI.
   AudiogramRepository get audiogramRepository => _audiogramRepository;
 
+  /// Expone el repositorio de settings para consultas desde la UI.
+  SettingsRepository get settingsRepository => _settingsRepository;
+
   /// Expone el repositorio de perfiles para consultas desde la UI.
   ProfileRepository get profileRepository => _profileRepository;
 
