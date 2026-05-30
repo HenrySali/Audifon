@@ -67,6 +67,10 @@ static constexpr float kPerBandCeiling = 0.891f;  // -1 dBFS
 /// Referencia: DSP Concepts Audio Weaver usa ~10-50ms típicamente.
 static constexpr int kSmoothingBlocks = 5;
 
+/// Número de muestras para el fade-in después de un salto grande de ganancia.
+/// 32 muestras a 16kHz = 2ms. Suficiente para evitar click sin ser audible.
+static constexpr int kFadeSamples = 32;
+
 /// Coeficientes normalizados de un filtro biquad (Direct Form I).
 /// Todos los coeficientes están normalizados por a0 (a0 = 1.0 implícito).
 struct BiquadCoeffs {
@@ -199,6 +203,11 @@ private:
 
     // --- Flag: true si los coeficientes current aún no alcanzaron target ---
     bool smoothingActive_[kEqBandCount];
+
+    // --- Fade-in counter para saltos grandes de ganancia ---
+    // Cuando es > 0, se aplica un fade-in lineal de kFadeSamples muestras.
+    // Esto evita el transitorio al cambiar coeficientes directamente.
+    int fadeCounter_ = 0;
 
     // --- Flag de cambio pendiente ---
     std::atomic<bool> gainsChanged_{false};

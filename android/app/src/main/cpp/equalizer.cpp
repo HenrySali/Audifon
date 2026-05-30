@@ -27,6 +27,8 @@
 
 #include "equalizer.h"
 
+#include <algorithm>
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -160,19 +162,52 @@ BiquadCoeffs Equalizer::computePeakingCoeffs(float frequencyHz, float gainDb, fl
 // ============================================================================
 
 void Equalizer::updateTargetCoefficients() {
+    // Calcular la magnitud total del cambio de ganancia
+    float maxGainJump = 0.0f;
+
+    for (int i = 0; i < kEqBandCount; ++i) {
+        const float newGain = gains_[i].load(std::memory_order_relaxed);
+        float jump = std::fabs(newGain - appliedGains_[i]);
+        if (jump > maxGainJump) maxGainJump = jump;
+    }
+
+    // Si el salto de ganancia es grande (>6 dB), usar mute+switch en vez
+    // de interpolación de coeficientes. La interpolación lineal de coeficientes
+    // biquad puede pasar por estados con polos inestables (Kalinichenko 2006).
+    //
+    // Estrategia para saltos grandes:
+    // 1. Activar fade-out (muteCounter_ cuenta hacia abajo)
+    // 2. Cuando llega a 0, aplicar coeficientes nuevos directamente
+    // 3. Resetear estados del filtro (arranque limpio)
+    // 4. Activar fade-in (muteCounter_ cuenta hacia arriba)
+    //
+    // Para saltos pequeños (≤6 dB): interpolación exponencial normal.
+    bool largeJump = (maxGainJump > 6.0f);
+
     for (int i = 0; i < kEqBandCount; ++i) {
         const float newGain = gains_[i].load(std::memory_order_relaxed);
 
-        // Solo recalcular si la ganancia cambió significativamente
         if (std::fabs(newGain - appliedGains_[i]) > 0.01f) {
             targetCoeffs_[i] = computePeakingCoeffs(kEqFrequencies[i], newGain, kEqQFactors[i]);
             appliedGains_[i] = newGain;
 
-            // Activar suavizado para esta banda si los coeficientes son diferentes
-            if (currentCoeffs_[i].significantlyDifferent(targetCoeffs_[i])) {
-                smoothingActive_[i] = true;
+            if (largeJump) {
+                // Salto grande: aplicar directamente + resetear estado
+                currentCoeffs_[i] = targetCoeffs_[i];
+                states_[i].reset();
+                smoothingActive_[i] = false;
+            } else {
+                // Salto pequeño: interpolación exponencial suave
+                if (currentCoeffs_[i].significantlyDifferent(targetCoeffs_[i])) {
+                    smoothingActive_[i] = true;
+                }
             }
         }
+    }
+
+    // Si fue un salto grande, activar fade-in para suavizar el arranque
+    if (largeJump) {
+        fadeCounter_ = kFadeSamples;  // Fade-in activo
     }
 }
 
@@ -274,16 +309,24 @@ void Equalizer::process(float* buffer, int blockSize) {
         }
     }
 
-    // ─── 4. Post-EQ limiter (una sola vez después de todas las bandas) ──
-    // En vez de limitar per-band (que causa distorsión masiva con ganancias
-    // altas como Severe/Profound), limitamos UNA VEZ al final del EQ.
-    // El MPO downstream es la protección final, pero este soft-clip previene
-    // que la señal post-EQ sea absurdamente alta (>1.0) antes del WDRC.
-    //
-    // Ceiling de 0.95 (-0.4 dBFS): permite que la señal amplificada pase
-    // con dinámica completa. El WDRC y MPO se encargan de la protección.
-    // Con ganancias de 20-24 dB (Severe/Profound), la señal puede llegar
-    // a 10-16× su valor original. Sin este limiter, podría exceder ±10.0.
+    // ─── 4. Fade-in después de salto grande de ganancia ─────────────────
+    // Cuando se detecta un salto >6 dB, los coeficientes se aplican
+    // directamente (sin interpolación) y los estados se resetean.
+    // El fade-in de 2ms (32 muestras) suaviza el arranque desde silencio.
+    if (fadeCounter_ > 0) {
+        int samplesToFade = std::min(fadeCounter_, blockSize);
+        for (int i = 0; i < samplesToFade; ++i) {
+            float fadeGain = 1.0f - static_cast<float>(fadeCounter_ - i) / static_cast<float>(kFadeSamples);
+            // Fade cuadrático (más suave que lineal en el arranque)
+            fadeGain = fadeGain * fadeGain;
+            buffer[i] *= fadeGain;
+        }
+        fadeCounter_ -= samplesToFade;
+    }
+
+    // ─── 5. Post-EQ limiter (una sola vez después de todas las bandas) ──
+    // Ceiling de 0.95: previene que la señal post-EQ sea absurdamente alta
+    // antes del WDRC. El MPO downstream es la protección final.
     static constexpr float kPostEqCeiling = 0.95f;
     for (int i = 0; i < blockSize; ++i) {
         const float absSample = std::fabs(buffer[i]);
