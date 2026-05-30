@@ -37,10 +37,23 @@ class _AiChatScreenState extends State<AiChatScreen> {
       _needsApiKey = false;
       _messages.add(_ChatMessage(
         text: '¡Hola! Soy el asistente AI del audífono PSK. '
+            'Tengo acceso a toda la documentación técnica y clínica del proyecto. '
             'Puedo ayudarte con configuración, prescripción, '
-            'diagnóstico y cualquier duda técnica. ¿En qué puedo ayudarte?',
+            'diagnóstico y cualquier duda. ¿En qué puedo ayudarte?',
         isUser: false,
       ));
+    });
+    // Verificar conexión al servidor
+    _chatService!.checkServer().then((ok) {
+      if (!ok && mounted) {
+        setState(() {
+          _messages.add(_ChatMessage(
+            text: '⚠️ No se pudo conectar al servidor RAG (localhost:8080). '
+                'Asegurate de ejecutar: cd web-simulator && node src/server.js',
+            isUser: false,
+          ));
+        });
+      }
     });
   }
 
@@ -54,10 +67,14 @@ class _AiChatScreenState extends State<AiChatScreen> {
     _controller.clear();
     _scrollToBottom();
 
-    final reply = await _chatService!.sendMessage(text.trim());
+    final response = await _chatService!.sendMessage(text.trim());
 
     setState(() {
-      _messages.add(_ChatMessage(text: reply, isUser: false));
+      _messages.add(_ChatMessage(
+        text: response.answer,
+        isUser: false,
+        sources: response.sources,
+      ));
       _isLoading = false;
     });
     _scrollToBottom();
@@ -286,20 +303,41 @@ class _AiChatScreenState extends State<AiChatScreen> {
               ),
             ),
             if (!message.isUser)
-              Align(
-                alignment: Alignment.centerRight,
-                child: GestureDetector(
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: message.text));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Copiado'), duration: Duration(seconds: 1)),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Icon(Icons.copy, size: 14, color: Colors.white.withOpacity(0.3)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (message.sources.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: message.sources.map((s) => Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.cyan.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.cyan.withOpacity(0.2)),
+                        ),
+                        child: Text(s, style: const TextStyle(color: Colors.cyan, fontSize: 10)),
+                      )).toList(),
+                    ),
+                  ],
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: GestureDetector(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: message.text));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Copiado'), duration: Duration(seconds: 1)),
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Icon(Icons.copy, size: 14, color: Colors.white.withOpacity(0.3)),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
           ],
         ),
@@ -334,6 +372,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
 class _ChatMessage {
   final String text;
   final bool isUser;
+  final List<String> sources;
 
-  _ChatMessage({required this.text, required this.isUser});
+  _ChatMessage({required this.text, required this.isUser, this.sources = const []});
 }
