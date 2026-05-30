@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../data/services/preset_learning_service.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
 import '../../domain/entities/eq_preset.dart';
@@ -18,6 +19,7 @@ import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
 import 'spectrum_analyzer_screen.dart';
+import 'preset_learning_screen.dart';
 import 'technical_service_screen.dart';
 
 /// Pantalla principal de amplificación del PSK Mobile Hearing Aid.
@@ -1679,7 +1681,12 @@ class _TnrToggleButtonState extends State<_TnrToggleButton> {
 ///
 /// Funciona consultando `getDspStageMetrics` cada 100 ms durante 1 segundo,
 /// promediando la clase de ambiente devuelta por el clasificador C++. Luego
-/// usa [PresetAdvisor] para mapear ambiente → preset y aplica vía bloc.
+/// usa [PresetAdvisor.suggestForUser] para mapear ambiente → preset
+/// (consultando aprendizaje local primero) y aplica vía bloc.
+///
+/// Después de aplicar muestra una barra flotante con 👍 / 👎 para que el
+/// usuario califique el resultado. La calificación se guarda en
+/// [PresetLearningService] y permite que la app aprenda preferencias.
 class _AutoSuggestButton extends StatefulWidget {
   @override
   State<_AutoSuggestButton> createState() => _AutoSuggestButtonState();
@@ -1688,6 +1695,7 @@ class _AutoSuggestButton extends StatefulWidget {
 class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
   bool _busy = false;
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
+  final _learning = PresetLearningService();
 
   Future<void> _measureAndApply() async {
     if (_busy) return;
@@ -1732,7 +1740,15 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
     final dominant = classCounts.entries
         .reduce((a, b) => a.value >= b.value ? a : b)
         .key;
-    final preset = PresetAdvisor.suggestFor(dominant);
+
+    // Cargar aprendizaje local y consultar.
+    await _learning.load();
+    final result = PresetAdvisor.suggestForUser(
+      envClass: dominant,
+      learning: _learning,
+    );
+    final preset = result.preset;
+    final fromLearning = result.fromLearning;
     final volDelta = PresetAdvisor.volumeDeltaFor(dominant);
 
     // Aplicar preset
@@ -1746,19 +1762,97 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
       bloc.add(ChangeVolume(volumeDb: newVol));
     }
 
+    // Registrar la aplicación para que el usuario pueda calificarla.
+    final entryId = await _learning.recordApplication(
+      envClass: dominant,
+      presetName: preset.name,
+      source: 'auto',
+    );
+
+    if (!mounted) return;
+
     final label = PresetAdvisor.labelFor(dominant);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '🎯 Ambiente: $label   →   ${preset.name}'
-          '${volDelta != 0 ? '   ·   Vol ${volDelta.toStringAsFixed(0)} dB' : ''}',
-        ),
-        duration: const Duration(seconds: 3),
-        backgroundColor: Colors.cyan.shade900,
-      ),
+
+    // Mostrar la barra de feedback con 👍 / 👎.
+    _showFeedbackBar(
+      context: context,
+      message: '🎯 $label → ${preset.name}'
+          '${volDelta != 0 ? '   ·   Vol ${volDelta.toStringAsFixed(0)} dB' : ''}'
+          '${fromLearning ? '   ·   📚 Aprendido' : ''}',
+      entryId: entryId,
     );
 
     setState(() => _busy = false);
+  }
+
+  /// Muestra una `MaterialBanner` con botones 👍 / 👎 que persisten hasta
+  /// que el usuario responda o pasen 12 segundos.
+  void _showFeedbackBar({
+    required BuildContext context,
+    required String message,
+    required int entryId,
+  }) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearMaterialBanners();
+    final controller = messenger.showMaterialBanner(
+      MaterialBanner(
+        backgroundColor: const Color(0xFF0f3460),
+        leading: const Icon(Icons.auto_awesome, color: Colors.amberAccent),
+        content: Text(
+          '$message\n¿Quedó bien?',
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () async {
+              await _learning.recordFeedback(
+                entryId: entryId,
+                positive: false,
+              );
+              messenger.hideCurrentMaterialBanner();
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text('Anotado: 👎 — la app va a evitar este preset'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            icon: const Icon(Icons.thumb_down, color: Colors.redAccent, size: 18),
+            label: const Text(
+              'No',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: () async {
+              await _learning.recordFeedback(
+                entryId: entryId,
+                positive: true,
+              );
+              messenger.hideCurrentMaterialBanner();
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text('Anotado: 👍 — la app va a preferirlo aquí'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            icon: const Icon(Icons.thumb_up, color: Colors.greenAccent, size: 18),
+            label: const Text(
+              'Sí',
+              style: TextStyle(color: Colors.greenAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // Auto-dismiss tras 12 s sin respuesta.
+    Future.delayed(const Duration(seconds: 12), () {
+      try {
+        controller.close(MaterialBannerClosedReason.dismiss);
+      } catch (_) {}
+    });
   }
 
   @override
@@ -1769,6 +1863,13 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
         : Colors.amber.withOpacity(0.12);
     return GestureDetector(
       onTap: _measureAndApply,
+      onLongPress: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const PresetLearningScreen(),
+          ),
+        );
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(

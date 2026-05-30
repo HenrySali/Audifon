@@ -1,4 +1,5 @@
 import '../entities/eq_preset.dart';
+import '../../data/services/preset_learning_service.dart';
 
 /// Asesor de presets — mapea ambiente acústico detectado a preset recomendado
 /// y calcula loudness compensation entre presets para que cambiar de preset
@@ -114,5 +115,32 @@ class PresetAdvisor {
     final mean = speechBandMeanGainDb(preset);
     final neutralOffset = -mean;
     return neutralOffset.clamp(-10.0, 0.0);
+  }
+
+  /// Sugiere un preset para [envClass] consultando primero el aprendizaje
+  /// local del usuario via [learning].
+  ///
+  /// Si el usuario ya votó suficientes veces y prefirió un preset alternativo
+  /// al default, devuelve ese alternativo. Si no, devuelve el default
+  /// hardcodeado de [suggestFor].
+  ///
+  /// Devuelve un `({EqPreset preset, bool fromLearning})` para que la UI
+  /// pueda indicar al usuario que la sugerencia surge del aprendizaje.
+  static ({EqPreset preset, bool fromLearning}) suggestForUser({
+    required int envClass,
+    required PresetLearningService learning,
+  }) {
+    final defaultPreset = suggestFor(envClass);
+    final altName = learning.suggestAlternative(
+      envClass: envClass,
+      defaultName: defaultPreset.name,
+    );
+    if (altName != null) {
+      final alt = EqPreset.findByName(altName);
+      if (alt != null) {
+        return (preset: alt, fromLearning: true);
+      }
+    }
+    return (preset: defaultPreset, fromLearning: false);
   }
 }
