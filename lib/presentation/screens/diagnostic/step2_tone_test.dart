@@ -15,7 +15,12 @@ import '../../../domain/entities/diagnostic_result.dart';
 ///
 /// Frecuencias: 500, 1000, 2000, 3000, 4000, 8000 Hz.
 /// Evalúa cada oído por separado.
-/// Máximo: 50 dB SPL — si no escucha, marca "no detectado".
+///
+/// Máximos por frecuencia:
+///  - Frecuencias bajas (< 2 kHz): hasta 50 dB SPL.
+///  - Frecuencias altas (≥ 2 kHz): hasta 70 dB SPL — permite detectar
+///    pérdidas en agudos sin saturar el auricular.
+/// Si no detecta al máximo, marca "no detectado".
 class Step2ToneTest extends StatefulWidget {
   final void Function(
     Map<int, double> leftThresholds,
@@ -44,9 +49,19 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
   // Parámetros del método ascendente ISO 8253-1
   static const double _startLevelDbSpl = 15.0;
   static const double _stepSizeDb = 5.0;
-  static const double _maxLevelDbSpl = 50.0;
+  // Máximo por frecuencia: bajas hasta 50 dB SPL, altas (≥2000 Hz) hasta 70 dB SPL.
+  // Esto refleja la práctica clínica donde las pérdidas en altas frecuencias
+  // requieren mayor margen para detectar el umbral.
+  static const double _maxLevelLowFreqDbSpl = 50.0;
+  static const double _maxLevelHighFreqDbSpl = 70.0;
+  static const int _highFreqThresholdHz = 2000;
   static const int _requiredResponses = 2; // de 3 presentaciones
   static const int _presentationsPerLevel = 3;
+
+  /// Máximo nivel testeable para la frecuencia actual.
+  double get _currentMaxLevelDbSpl => _currentFrequency >= _highFreqThresholdHz
+      ? _maxLevelHighFreqDbSpl
+      : _maxLevelLowFreqDbSpl;
 
   // Estado de la prueba actual
   int _currentEarIndex = 0; // 0 = derecho, 1 = izquierdo
@@ -214,9 +229,10 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
   /// Sube el nivel 5 dB SPL.
   void _ascendLevel() {
     final nextLevel = _currentLevelDbSpl + _stepSizeDb;
+    final maxLevel = _currentMaxLevelDbSpl;
 
-    if (nextLevel > _maxLevelDbSpl) {
-      // No detectado al máximo nivel
+    if (nextLevel > maxLevel) {
+      // No detectado al máximo nivel para esta frecuencia
       _recordThreshold(-1); // -1 indica "no detectado"
       return;
     }
@@ -237,8 +253,11 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
   /// Registra el umbral para la frecuencia y oído actual.
   void _recordThreshold(double thresholdDbSpl) {
     final freq = _currentFrequency;
-    // Si es -1, registrar como 55 dB (por encima del máximo testeado)
-    final value = thresholdDbSpl < 0 ? 55.0 : thresholdDbSpl;
+    // Si es -1 (no detectado), usar el máximo testeado + 5 dB como marcador
+    // de "peor que el límite" para esa frecuencia.
+    final value = thresholdDbSpl < 0
+        ? _currentMaxLevelDbSpl + 5.0
+        : thresholdDbSpl;
 
     setState(() {
       if (_currentEarIndex == 0) {
@@ -410,7 +429,8 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
                   'Escuchará tonos a diferentes frecuencias.\n'
                   'Presione "Escucho" cada vez que oiga un tono.\n\n'
                   'Método: ascendente (ISO 8253-1)\n'
-                  'Rango: 15–50 dB SPL${_isCalibrated ? ' (calibrado)' : ''}',
+                  'Rango: 15–50 dB SPL en bajas / 15–70 dB SPL en altas (≥2 kHz)'
+                  '${_isCalibrated ? ' (calibrado)' : ''}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white70,
