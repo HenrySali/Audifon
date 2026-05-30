@@ -3,9 +3,13 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../domain/entities/eq_preset.dart';
 import '../../domain/services/preset_advisor.dart';
+import '../bloc/amplification_bloc.dart';
+import '../bloc/amplification_event.dart' show ChangeVolume, UpdateEqGains;
+import '../bloc/amplification_state.dart';
 
 /// Pantalla de diagnóstico del pipeline DSP — muestra métricas en tiempo real
 /// de cada etapa para cada preset EQ.
@@ -223,12 +227,73 @@ class _DspTestScreenState extends State<DspTestScreen> {
   // Apply suggested preset
   // ────────────────────────────────────────────────────────────────────────
 
+  /// Aplica el preset sugerido al **sistema completo** (no solo al engine
+  /// como hace [_startTest]). Despacha por [AmplificationBloc] igual que el
+  /// botón Auto Suggest de la pantalla principal: persiste el preset,
+  /// actualiza el estado/UI globales y aplica el volumen efectivo de la
+  /// prueba como nuevo volumen del usuario.
+  ///
+  /// Volumen aplicado:
+  ///   nuevoVolumen = volumenActualUsuario
+  ///                  + tope del test (`_testCeilingDeltaDb`)
+  ///                  + compensación de loudness del preset (si está ON)
+  ///
+  /// El valor se clamp-ea solo a los límites físicos [-20, +10] dB pero **no
+  /// se impone como techo permanente**: el usuario puede subirlo o bajarlo
+  /// libremente después desde el slider de volumen.
   Future<void> _applySuggested() async {
     if (_envClass < 0) return;
     final suggested = PresetAdvisor.suggestFor(_envClass);
-    final idx = EqPreset.allPresets.indexWhere((p) => p.name == suggested.name);
-    if (idx < 0) return;
-    await _startTest(idx);
+
+    final bloc = context.read<AmplificationBloc>();
+
+    // Detener el polling de métricas y descartar el "savedVolume" del modo
+    // test: ya no vamos a restaurar nada en dispose, vamos a comprometernos
+    // con el volumen del test como volumen real.
+    _pollTimer?.cancel();
+    _savedVolumeDb = null;
+    if (mounted) {
+      setState(() {
+        _activePresetIndex = null;
+        _metrics = null;
+      });
+    }
+
+    // 1. Aplicar preset EQ por el bloc (persiste + actualiza estado +
+    //    llama al engine si está activo).
+    bloc.add(UpdateEqGains(
+      gains: suggested.gains,
+      presetName: suggested.name,
+    ));
+
+    // 2. Calcular el volumen efectivo del test para el preset sugerido y
+    //    aplicarlo al sistema (sin imponer un cap, solo el rango físico).
+    final st = bloc.state;
+    final compensation = _loudnessCompensation
+        ? PresetAdvisor.loudnessNormalizationOffsetDb(suggested)
+        : 0.0;
+    if (st is AmplificationActive) {
+      final base = st.volumeDb; // volumen real actual del usuario
+      final newVolume =
+          (base + _testCeilingDeltaDb + compensation).clamp(-20.0, 10.0);
+      bloc.add(ChangeVolume(volumeDb: newVolume));
+    }
+
+    if (!mounted) return;
+    final label = PresetAdvisor.labelFor(_envClass);
+    final parts = <String>[
+      '🎯 $label → ${suggested.name}',
+      'Tope ${_testCeilingDeltaDb.toStringAsFixed(0)} dB',
+    ];
+    if (compensation != 0) {
+      parts.add('LC ${compensation.toStringAsFixed(1)} dB');
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(parts.join('   ·   ')),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   // ────────────────────────────────────────────────────────────────────────
