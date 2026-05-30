@@ -1,10 +1,10 @@
 {
   "version": "1.0.0",
-  "generatedAt": "2026-05-30T03:51:49.688Z",
-  "totalDocuments": 36,
+  "generatedAt": "2026-05-30T12:48:15.374Z",
+  "totalDocuments": 44,
   "categories": {
     "clinica": {
-      "count": 9,
+      "count": 11,
       "docs": [
         "docs\\clinica\\01_Audiometria_Tonal.md",
         "docs\\clinica\\02_Logoaudiometria.md",
@@ -14,6 +14,8 @@
         "docs\\clinica\\06_Criterios_Candidatura_Audifonos.md",
         "docs\\clinica\\07_Prescripcion_Ganancia_NAL_DSL.md",
         "docs\\clinica\\08_Evaluacion_Pediatrica.md",
+        "docs\\clinica\\09_Programas_Audiologia_Internacional.md",
+        "docs\\clinica\\10_Pediatric_Fitting_Protocols_DSL.md",
         "docs\\clinica\\README.md"
       ]
     },
@@ -30,16 +32,28 @@
       ]
     },
     "investigacion": {
-      "count": 8,
+      "count": 12,
       "docs": [
         "docs\\investigacion\\ANSI_S3.6_Reference.md",
+        "docs\\investigacion\\Bimodal_Fitting_Pediatric.md",
         "docs\\investigacion\\DIAGNOSTICO_REALTIME_CALIBRACION.md",
         "docs\\investigacion\\Investigacion_Audifonos_Lideres_DSP.md",
         "docs\\investigacion\\notebooklm-psk-hearing-aid.md",
+        "docs\\investigacion\\Oldenburg_Hearing_Technology_Research.md",
+        "docs\\investigacion\\Programas_Audiologia_Mundial.md",
         "docs\\investigacion\\Simulacion_DSP_MATLAB_LabVIEW_Web.md",
         "docs\\investigacion\\Speech_Enhancement_Single_Mic_Cocktail_Party.md",
+        "docs\\investigacion\\Speech_in_Noise_Cognitive_Load.md",
         "docs\\investigacion\\Validacion_Academica_Auditoria_DSP.md",
         "docs\\investigacion\\WDRC_Research_Expansion.md"
+      ]
+    },
+    "general": {
+      "count": 3,
+      "docs": [
+        "docs\\nitidezsonido.md",
+        "docs\\ruidoexterno.md",
+        "README.md"
       ]
     },
     "proyecto": {
@@ -60,12 +74,6 @@
         "docs\\sesiones\\Simulador octave - simulador.md",
         "docs\\sesiones\\Spec digital-hearing-aid-v2.1.md",
         "docs\\sesiones\\Spec digital-hearing-aid-v2.2.md"
-      ]
-    },
-    "general": {
-      "count": 1,
-      "docs": [
-        "README.md"
       ]
     },
     "firmware": {
@@ -253,6 +261,59 @@
       ],
       "charCount": 18932,
       "summary": "# Evaluación Audiológica Pediátrica (Pediatric Audiological Assessment) La evaluación audiológica pediátrica comprende un conjunto de técnicas especializadas diseñadas para determinar los umbrales auditivos en niños que, por su edad o desarrollo, no pueden participar en audiometría convencional. La selección del método depende de la **edad de desarrollo** del niño, no necesariamente de su edad cronológica."
+    },
+    {
+      "path": "docs\\clinica\\09_Programas_Audiologia_Internacional.md",
+      "title": "Programas de Audiología Internacionales — Referencia Académica",
+      "category": "clinica",
+      "keywords": [
+        "EQ",
+        "NAL-NL2",
+        "DSL",
+        "ANSI",
+        "IEC",
+        "feedback",
+        "BLE",
+        "Phonak",
+        "Oticon",
+        "pediátrico",
+        "niños",
+        "audífono"
+      ],
+      "charCount": 6728,
+      "summary": "# Programas de Audiología Internacionales — Referencia Académica Documento de referencia sobre los programas académicos de audiología más prestigiosos a nivel mundial. Útil para entender el ecosistema clínico-académico que valida prácticas, prescripciones y tecnología auditiva."
+    },
+    {
+      "path": "docs\\clinica\\10_Pediatric_Fitting_Protocols_DSL.md",
+      "title": "Protocolos de Fitting Pediátrico — DSL v5.0 + Mejores Prácticas",
+      "category": "clinica",
+      "keywords": [
+        "WDRC",
+        "MPO",
+        "EQ",
+        "NAL-NL2",
+        "DSL",
+        "ANSI",
+        "feedback",
+        "NR",
+        "AFC",
+        "audiograma",
+        "prescripción",
+        "compresión",
+        "kneepoint",
+        "ganancia",
+        "dB SPL",
+        "frecuencia",
+        "pipeline",
+        "BLE",
+        "Phonak",
+        "Oticon",
+        "pediátrico",
+        "niños",
+        "audífono"
+      ],
+      "charCount": 9909,
+      "summary": "# Protocolos de Fitting Pediátrico — DSL v5.0 + Mejores Prácticas Referencia técnica detallada sobre los protocolos de adaptación de audífonos para población pediátrica, basada en **DSL v5.0** (Desired Sensation Level, Western University Canada) y mejores prácticas internacionales para verificación, seguimiento y validación."
     },
     {
       "path": "docs\\clinica\\README.md",
@@ -526,6 +587,33 @@
       "summary": "ANSI S3.6 (American National Standard Specification for Audiometers) define los requisitos para audiómetros, incluyendo los niveles de referencia equivalentes de presión sonora umbral (RETSPL) que establecen el 0 dB HL para cada frecuencia y tipo de transductor. La norma especifica qué nivel de presión sonora (dB SPL) corresponde al umbral auditivo normal (0 dB HL) en cada frecuencia. Estos valores son fundamentales para:\r - Calibración de audiómetros\r - Conversión entre dB SPL y dB HL\r - Prescr"
     },
     {
+      "path": "docs\\investigacion\\Bimodal_Fitting_Pediatric.md",
+      "title": "Fitting Bimodal en Niños — Audífono + Implante Coclear",
+      "category": "investigacion",
+      "keywords": [
+        "WDRC",
+        "MPO",
+        "EQ",
+        "DSL",
+        "ANSI",
+        "NR",
+        "prescripción",
+        "compresión",
+        "kneepoint",
+        "ganancia",
+        "dB SPL",
+        "frecuencia",
+        "BLE",
+        "Phonak",
+        "Oticon",
+        "pediátrico",
+        "niños",
+        "audífono"
+      ],
+      "charCount": 5142,
+      "summary": "# Fitting Bimodal en Niños — Audífono + Implante Coclear Estimulación bimodal: combinar un **implante coclear (CI)** en un oído con un\r **audífono convencional (HA)** en el otro. Aprovecha la audición residual de baja\r frecuencia (típicamente <1 kHz) en el oído no implantado mientras el CI provee la\r banda de alta frecuencia eléctricamente."
+    },
+    {
       "path": "docs\\investigacion\\DIAGNOSTICO_REALTIME_CALIBRACION.md",
       "title": "Diagnóstico Completo: Modo Realtime No Amplifica",
       "category": "investigacion",
@@ -634,6 +722,51 @@
       "summary": "## Documento optimizado para NotebookLM (generación de audio explicativo) PSK Hearing Aid es una aplicación móvil para Android que convierte un teléfono celular en un audífono digital para niños con pérdida auditiva en frecuencias altas. El sistema captura sonido del micrófono del teléfono, lo procesa en tiempo real con un pipeline de procesamiento digital de señales (DSP), y lo reproduce amplificado a través de auriculares Bluetooth o con cable."
     },
     {
+      "path": "docs\\investigacion\\Oldenburg_Hearing_Technology_Research.md",
+      "title": "Investigación en Tecnología Auditiva — Universidad de Oldenburg & Hearing4all",
+      "category": "investigacion",
+      "keywords": [
+        "WDRC",
+        "MPO",
+        "EQ",
+        "NAL-NL2",
+        "DSL",
+        "ANSI",
+        "biquad",
+        "feedback",
+        "NR",
+        "compresión",
+        "dB SPL",
+        "frecuencia",
+        "pipeline",
+        "BLE",
+        "micrófono",
+        "niños",
+        "audífono"
+      ],
+      "charCount": 13180,
+      "summary": "# Investigación en Tecnología Auditiva — Universidad de Oldenburg & Hearing4all Documento de referencia sobre las líneas de investigación más relevantes en la Universidad de Oldenburg (Alemania) y el Cluster of Excellence Hearing4all, líderes europeos en tecnología auditiva. Sirve como guía de estado del arte para algoritmos DSP, validación ecológica y evaluación de audífonos."
+    },
+    {
+      "path": "docs\\investigacion\\Programas_Audiologia_Mundial.md",
+      "title": "Programas de Audiología en el Mundo",
+      "category": "investigacion",
+      "keywords": [
+        "WDRC",
+        "EQ",
+        "NAL-NL2",
+        "DSL",
+        "ANSI",
+        "calibración",
+        "pipeline",
+        "BLE",
+        "Phonak",
+        "audífono"
+      ],
+      "charCount": 4761,
+      "summary": "En EE. UU., para ejercer como audiólogo clínico se requiere un título de posgrado tipo **Doctor of Audiology (AuD)**. Estos programas combinan formación clínica intensa con investigación. | Universidad | Ubicación | Características |\r |-------------|-----------|-----------------|\r | **Vanderbilt University** | Nashville, TN | #1 del país (U.S. News). Instalaciones de investigación excepcionales y hospital adjunto. Programa de 4 años con tracks de especialización (vestibular, pediátrica, etc.) |\r"
+    },
+    {
       "path": "docs\\investigacion\\Simulacion_DSP_MATLAB_LabVIEW_Web.md",
       "title": "Simulación DSP para Audífonos Digitales: MATLAB, LabVIEW y Web",
       "category": "investigacion",
@@ -706,6 +839,28 @@
       "summary": "# Técnicas Avanzadas de Filtrado de Audio para Aislamiento de Voz\r # Solución al Cocktail Party Problem con Un Solo Micrófono **Escenario:** Usuario con pérdida auditiva en frecuencias altas usa un audífono-app\r móvil (Android + Oboe C++) y necesita escuchar claramente a su esposa (voz suave,\r ~55 dB SPL) en un subte lleno de gente hablando (babble noise ~70-75 dB SPL)."
     },
     {
+      "path": "docs\\investigacion\\Speech_in_Noise_Cognitive_Load.md",
+      "title": "Speech-in-Noise & Carga Cognitiva — Investigación Aplicada",
+      "category": "investigacion",
+      "keywords": [
+        "WDRC",
+        "MPO",
+        "EQ",
+        "ANSI",
+        "NR",
+        "compresión",
+        "expansión",
+        "dB SPL",
+        "frecuencia",
+        "pipeline",
+        "BLE",
+        "micrófono",
+        "audífono"
+      ],
+      "charCount": 7433,
+      "summary": "# Speech-in-Noise & Carga Cognitiva — Investigación Aplicada Documento técnico sobre la inteligibilidad del habla en ruido, la carga cognitiva asociada al uso de audífonos, y técnicas de mitigación. Sirve como base para el chatbot en consultas sobre por qué algunos pacientes refieren \"fatiga auditiva\" o no entienden bien en ambientes complejos."
+    },
+    {
       "path": "docs\\investigacion\\Validacion_Academica_Auditoria_DSP.md",
       "title": "Validación Académica de Recomendaciones de Auditoría DSP",
       "category": "investigacion",
@@ -770,6 +925,31 @@
       ],
       "charCount": 29219,
       "summary": "# WDRC Expansion Research: Preventing Noise Floor Amplification Research-backed analysis of the noise amplification problem in our WDRC implementation,\r with a concrete design proposal based on published clinical literature and standards."
+    },
+    {
+      "path": "docs\\nitidezsonido.md",
+      "title": "Nitidez del Sonido — Investigación y Plan de Mejoras",
+      "category": "general",
+      "keywords": [
+        "WDRC",
+        "MPO",
+        "EQ",
+        "NAL-NL2",
+        "DSL",
+        "ANSI",
+        "NR",
+        "compresión",
+        "ganancia",
+        "dB SPL",
+        "frecuencia",
+        "pipeline",
+        "BLE",
+        "Phonak",
+        "Oticon",
+        "audífono"
+      ],
+      "charCount": 11956,
+      "summary": "# Nitidez del Sonido — Investigación y Plan de Mejoras **\"Cuando la persona habla se escucha lejos\"** — La voz amplificada suena distante, sin presencia, opaca. El usuario escucha pero no percibe la voz como cercana o nítida."
     },
     {
       "path": "docs\\proyecto\\API.txt",
@@ -883,6 +1063,35 @@
       ],
       "charCount": 13442,
       "summary": "Este documento registra paso a paso cómo se construyó el proyecto, qué decisiones se tomaron, y en qué orden se implementó cada componente. **Objetivo:** Definir la arquitectura completa de un audífono digital programable."
+    },
+    {
+      "path": "docs\\ruidoexterno.md",
+      "title": "Investigación: Mejora de Audición en Ambientes Ruidosos (Parque, Subte, Calle)",
+      "category": "general",
+      "keywords": [
+        "WDRC",
+        "MPO",
+        "EQ",
+        "ANSI",
+        "IEC",
+        "THD",
+        "feedback",
+        "NR",
+        "compresión",
+        "ganancia",
+        "dB SPL",
+        "frecuencia",
+        "pipeline",
+        "realtime",
+        "BLE",
+        "micrófono",
+        "Phonak",
+        "Starkey",
+        "Oticon",
+        "audífono"
+      ],
+      "charCount": 32986,
+      "summary": "# Investigación: Mejora de Audición en Ambientes Ruidosos (Parque, Subte, Calle) El audífono PSK Hearing Aid amplifica todo por igual en ambientes ruidosos:\r - **No se escucha bien** la persona que habla al lado\r - **Amplifica ruidos fuertes** (timbre del subte, bocinas, puertas)\r - El usuario necesita escuchar la voz cercana sin que el ruido ambiental sea insoportable"
     },
     {
       "path": "docs\\sesiones\\CRIOFREEZER.md",
