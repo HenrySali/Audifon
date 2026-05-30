@@ -12,6 +12,7 @@ import '../widgets/safety_warning_widget.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
 import 'dsp_config_detail_screen.dart';
+import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
 import 'spectrum_analyzer_screen.dart';
 
@@ -164,6 +165,25 @@ class _StatusBar extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const SpectrumAnalyzerScreen(),
+                  ),
+                );
+              },
+            ),
+          ),
+          // Botón de test del pipeline DSP
+          Builder(
+            builder: (context) => IconButton(
+              icon: const Icon(Icons.bug_report, color: Colors.white70, size: 22),
+              tooltip: 'DSP Pipeline Test',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => BlocProvider.value(
+                      value: context.read<AmplificationBloc>(),
+                      child: const DspTestScreen(),
+                    ),
                   ),
                 );
               },
