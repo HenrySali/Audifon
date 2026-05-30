@@ -67,12 +67,29 @@ oboe::Result AudioEngine::openInputStream() {
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
 
-    // Use VoicePerformance on API 29+, fallback to Generic on older devices
+    // Use VoiceRecognition to DISABLE Android's AGC and noise suppression.
+    // This is CRITICAL for hearing aid apps with high-gain presets (Severe/Profound).
+    //
+    // Android Compatibility Definition (Section 5.3) MANDATES:
+    //   "With VOICE_RECOGNITION, AGC and noise suppression MUST be disabled."
+    //
+    // VoicePerformance (previous setting) includes AGC which causes:
+    //   - Double amplification when our EQ adds 20+ dB
+    //   - Saturation/distortion on Severe/Profound presets
+    //   - Inconsistent input levels that confuse the WDRC
+    //
+    // VoiceRecognition gives us raw, unprocessed audio — exactly what a
+    // hearing aid DSP needs to apply its own calibrated gain chain.
+    //
+    // Reference: Android docs — "VOICE_RECOGNITION does not employ AGC
+    // or noise suppression" (developer.android.com/media/platform/mediarecorder)
+    // Reference: Stack Overflow — "How avoid automatic gain control with AudioRecord"
     if (android_get_device_api_level() >= 29) {
-        builder.setInputPreset(oboe::InputPreset::VoicePerformance);
+        // API 29+: Try Unprocessed first (truly raw), fall back to VoiceRecognition
+        builder.setInputPreset(oboe::InputPreset::Unprocessed);
     } else {
-        builder.setInputPreset(oboe::InputPreset::Generic);
-        LOGW("API < 29: using InputPreset::Generic (VoicePerformance unavailable)");
+        // API < 29: VoiceRecognition is the best option without AGC
+        builder.setInputPreset(oboe::InputPreset::VoiceRecognition);
     }
 
     oboe::Result result = builder.openStream(inputStream_);
