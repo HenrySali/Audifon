@@ -456,14 +456,24 @@ class AmplificationBloc
     switch (presetName) {
       case 'Normal':
         return (compressionRatio: 1.2, compressionKnee: 60.0, expansionKnee: 35.0);
-      case 'Mild':
+      case 'Mild High':
+        return (compressionRatio: 1.3, compressionKnee: 58.0, expansionKnee: 35.0);
+      case 'Mild Flat':
+        return (compressionRatio: 1.4, compressionKnee: 56.0, expansionKnee: 35.0);
+      case 'Moderate High':
         return (compressionRatio: 1.5, compressionKnee: 55.0, expansionKnee: 35.0);
-      case 'Moderate':
+      case 'Moderate Flat':
+        return (compressionRatio: 1.8, compressionKnee: 52.0, expansionKnee: 35.0);
+      case 'Moderate+':
         return (compressionRatio: 2.0, compressionKnee: 50.0, expansionKnee: 35.0);
-      case 'Severe':
-        return (compressionRatio: 2.5, compressionKnee: 45.0, expansionKnee: 35.0);
-      case 'Profound':
-        return (compressionRatio: 3.0, compressionKnee: 40.0, expansionKnee: 35.0);
+      case 'Voice Clarity':
+        return (compressionRatio: 1.6, compressionKnee: 53.0, expansionKnee: 35.0);
+      case 'Music':
+        return (compressionRatio: 1.3, compressionKnee: 58.0, expansionKnee: 35.0);
+      case 'Outdoor':
+        return (compressionRatio: 1.7, compressionKnee: 52.0, expansionKnee: 35.0);
+      case 'TV/Media':
+        return (compressionRatio: 1.5, compressionKnee: 55.0, expansionKnee: 35.0);
       default:
         return null;
     }
