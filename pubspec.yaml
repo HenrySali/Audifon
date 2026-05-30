@@ -18,6 +18,7 @@ dependencies:
   url_launcher: ^6.2.1
   just_audio: ^0.9.36
   flutter_tts: ^4.0.2
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:

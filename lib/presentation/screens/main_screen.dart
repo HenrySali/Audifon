@@ -9,6 +9,7 @@ import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 import '../widgets/safety_warning_widget.dart';
+import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
 import 'dsp_config_detail_screen.dart';
@@ -142,6 +143,22 @@ class _StatusBar extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  // Botón de AI Chat
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.smart_toy, color: Colors.cyan, size: 21),
+                      tooltip: 'AI Assistant',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AiChatScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                   // Botón de diagnóstico auditivo
                   Builder(
                     builder: (context) => IconButton(
