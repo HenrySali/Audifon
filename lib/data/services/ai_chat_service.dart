@@ -69,6 +69,14 @@ class AiChatService {
     }
   }
 
+  /// Resetea la conversación actual.
+  /// El servidor RAG es stateless (no mantiene historial entre mensajes),
+  /// así que esto simplemente es un placeholder para limpieza local.
+  void resetConversation() {
+    // No hay estado de conversación que resetear en el servicio actual.
+    // El historial de mensajes se mantiene en el widget que llama.
+  }
+
   /// Preguntas sugeridas
   List<String> get suggestedQuestions => [
         '¿Qué es el WDRC y cómo funciona?',
