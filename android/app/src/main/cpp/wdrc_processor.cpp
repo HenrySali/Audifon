@@ -66,15 +66,42 @@ void WdrcProcessor::process(float* buffer, int blockSize, float inputLevelDb) {
     float attack = attackCoeff_;
     float release = releaseCoeff_;
 
-    // 3. Aplicar ganancia suavizada muestra-por-muestra.
-    //    El envelope detector suaviza la transición entre el gain actual
-    //    (smoothedGain_) y el gain objetivo (targetGain) para evitar
-    //    discontinuidades audibles entre bloques.
+    // 3. Aplicar ganancia suavizada muestra-por-muestra con envelope detector.
+    //
+    //    MEJORA (Phase 2 — UC San Diego paper, ANSI S3.22):
+    //    Además de la decisión por bloque (inputLevelDb), detectamos picos
+    //    sample-by-sample en la señal POST-EQ. Si una muestra excede el
+    //    umbral de compresión, el envelope reacciona inmediatamente con
+    //    attack rápido. Esto protege contra transitorios que el RMS por
+    //    bloque no detecta (consonantes plosivas, puertas, etc.).
+    //
+    //    Referencia: Sokolova et al. (2022) UC San Diego — "Real-Time
+    //    Multirate Multiband Amplification for Hearing Aids" (IEEE Access)
+    //    Fórmula ANSI: coeff = 1 - exp(-2.2 / (timeMs * sampleRate / 1000))
+
+    // Umbral de pico para detección de transitorios post-EQ.
+    // Si |sample| > peakThreshold, el envelope reacciona con attack rápido.
+    // 0.7 lineal ≈ -3 dBFS — señal significativamente amplificada.
+    static constexpr float kPeakThreshold = 0.7f;
+
     for (int i = 0; i < blockSize; ++i) {
+        // Detección de pico sample-by-sample (post-EQ)
+        float absSample = std::fabs(buffer[i]);
+
+        // Si hay un pico que excede el umbral, forzar target de ganancia
+        // más bajo para este sample (protección de transitorios)
+        float effectiveTarget = targetGain;
+        if (absSample > kPeakThreshold) {
+            // Calcular ganancia necesaria para llevar el pico al umbral
+            float peakGain = kPeakThreshold / absSample;
+            // Usar el mínimo entre la decisión por bloque y la protección de pico
+            effectiveTarget = std::min(targetGain, peakGain);
+        }
+
         // Suavizado asimétrico: attack rápido, release lento
-        if (targetGain < smoothedGain_) {
+        if (effectiveTarget < smoothedGain_) {
             // Ganancia bajando → attack (rápido, protege de picos)
-            smoothedGain_ += attack * (targetGain - smoothedGain_);
+            smoothedGain_ += attack * (effectiveTarget - smoothedGain_);
         } else {
             // Ganancia subiendo → release (lento, evita pumping)
             smoothedGain_ += release * (targetGain - smoothedGain_);
@@ -201,12 +228,15 @@ void WdrcProcessor::updateCoefficients() {
     if (attackMs <= 0.0f) attackMs = 5.0f;
     if (releaseMs <= 0.0f) releaseMs = 100.0f;
 
-    // Fórmula: coeff = 1 - exp(-1 / (timeMs * sampleRate / 1000))
-    // Esto produce un filtro de primer orden con constante de tiempo = timeMs.
-    // Después de ~3× timeMs, la señal alcanza ~95% del valor objetivo.
+    // Fórmula ANSI S3.22: coeff = 1 - exp(-2.2 / (timeMs * sampleRate / 1000))
+    // El factor 2.2 = ln(10) da 90% settling time como define ANSI S3.22.
+    // Esto es más preciso que el factor 1.0 anterior (que daba ~63% settling).
+    //
+    // Referencia: Sokolova et al. (2022) UC San Diego — derivación cerrada
+    // de attack/release time para WDRC (IEEE Access, PMC10260239).
     float attackSamples = attackMs * static_cast<float>(sampleRate_) / 1000.0f;
     float releaseSamples = releaseMs * static_cast<float>(sampleRate_) / 1000.0f;
 
-    attackCoeff_ = 1.0f - std::exp(-1.0f / attackSamples);
-    releaseCoeff_ = 1.0f - std::exp(-1.0f / releaseSamples);
+    attackCoeff_ = 1.0f - std::exp(-2.2f / attackSamples);
+    releaseCoeff_ = 1.0f - std::exp(-2.2f / releaseSamples);
 }

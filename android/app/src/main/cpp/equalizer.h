@@ -99,17 +99,21 @@ struct BiquadCoeffs {
     }
 };
 
-/// Estado interno de un filtro biquad (Direct Form I).
-/// Almacena las últimas 2 muestras de entrada y salida.
+/// Estado interno de un filtro biquad (Transposed Direct Form II).
+///
+/// TDF2 usa solo 2 variables de estado (vs 4 en DF1), tiene mejor
+/// comportamiento numérico con float32 en frecuencias bajas, y es la
+/// estructura usada internamente por DSP Concepts Audio Weaver.
+///
+/// Referencia: Stanford CCRMA — Julius Smith "Introduction to Digital Filters"
+/// Referencia: DSP Concepts — "All Biquad filters use Direct Form 2 structure"
 struct BiquadState {
-    float x1 = 0.0f;  ///< x[n-1]
-    float x2 = 0.0f;  ///< x[n-2]
-    float y1 = 0.0f;  ///< y[n-1]
-    float y2 = 0.0f;  ///< y[n-2]
+    float s1 = 0.0f;  ///< State variable 1 (delay element 1)
+    float s2 = 0.0f;  ///< State variable 2 (delay element 2)
 
     /// Resetea el estado del filtro a cero.
     void reset() {
-        x1 = x2 = y1 = y2 = 0.0f;
+        s1 = s2 = 0.0f;
     }
 };
 
@@ -163,7 +167,9 @@ private:
     /// Recalcula coeficientes TARGET para todas las bandas que cambiaron.
     void updateTargetCoefficients();
 
-    /// Procesa una muestra a través de un filtro biquad (Direct Form I).
+    /// Procesa una muestra a través de un filtro biquad (Transposed Direct Form II).
+    /// TDF2: y = b0*x + s1; s1 = b1*x - a1*y + s2; s2 = b2*x - a2*y
+    /// Referencia: DSP Concepts Audio Weaver, Stanford CCRMA Julius Smith.
     static float processBiquadSample(float sample, const BiquadCoeffs& coeffs,
                                      BiquadState& state);
 

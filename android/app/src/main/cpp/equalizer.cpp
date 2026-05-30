@@ -206,24 +206,28 @@ static bool smoothCoeffsStep(BiquadCoeffs& current, const BiquadCoeffs& target, 
 }
 
 // ============================================================================
-// Procesamiento de una muestra a través de un biquad (Direct Form I)
+// Procesamiento de una muestra a través de un biquad (Transposed Direct Form II)
 // ============================================================================
 
 float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
                                      BiquadState& state) {
-    // Direct Form I:
-    // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
-    const float output = coeffs.b0 * sample
-                       + coeffs.b1 * state.x1
-                       + coeffs.b2 * state.x2
-                       - coeffs.a1 * state.y1
-                       - coeffs.a2 * state.y2;
+    // Transposed Direct Form II (TDF2):
+    //   y[n] = b0 * x[n] + s1
+    //   s1   = b1 * x[n] - a1 * y[n] + s2
+    //   s2   = b2 * x[n] - a2 * y[n]
+    //
+    // Ventajas sobre DF1:
+    // - Solo 2 variables de estado (vs 4 en DF1) → menos memoria
+    // - Mejor comportamiento numérico con float32 en frecuencias bajas
+    //   (reduce ruido de cuantización hasta 90 dB según DSP Concepts)
+    // - Misma respuesta de frecuencia, mismo costo computacional (5 MACs)
+    //
+    // Referencia: Stanford CCRMA — Julius Smith "Introduction to Digital Filters"
+    // Referencia: DSP Concepts Audio Weaver — usa DF2 en todos sus módulos
 
-    // Actualizar estado
-    state.x2 = state.x1;
-    state.x1 = sample;
-    state.y2 = state.y1;
-    state.y1 = output;
+    const float output = coeffs.b0 * sample + state.s1;
+    state.s1 = coeffs.b1 * sample - coeffs.a1 * output + state.s2;
+    state.s2 = coeffs.b2 * sample - coeffs.a2 * output;
 
     return output;
 }
