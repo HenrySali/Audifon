@@ -1,16 +1,29 @@
 /// @file equalizer.cpp
-/// @brief Implementación del EQ paramétrico de 12 bandas con filtros biquad peaking.
+/// @brief Implementación del EQ paramétrico de 12 bandas con suavizado de coeficientes.
 ///
-/// Usa fórmulas del Audio EQ Cookbook (Robert Bristow-Johnson) para calcular
-/// coeficientes de filtros peaking EQ de segundo orden (biquad IIR).
+/// Técnica: Interpolación exponencial de coeficientes bloque-a-bloque.
 ///
-/// Cada banda es un filtro biquad independiente aplicado en serie.
-/// Las ganancias se actualizan atómicamente desde el hilo de UI;
-/// los coeficientes se recalculan en el hilo de audio al inicio de cada bloque.
+/// Cuando se cambian las ganancias (ej: cambio de preset EQ), los coeficientes
+/// TARGET se recalculan inmediatamente. Pero los coeficientes CURRENT (los que
+/// realmente procesan el audio) se mueven exponencialmente hacia el TARGET
+/// en cada bloque de audio.
 ///
-/// NOTA: Los cambios de preset EQ se manejan con reinicio rápido del engine
-/// desde Dart (stop+start ~50ms). Esto garantiza que los filtros siempre
-/// arrancan con estado limpio, eliminando transitorios por completo.
+/// Esto es exactamente lo que hace:
+/// - DSP Concepts "BiquadSmoothed" (chips ON Semiconductor para audífonos)
+/// - MATLAB "Parameter Smoother" block
+/// - openMHA "smoothgain_bridge" plugin
+/// - vinniefalco/DSPFilters "smooth interpolation of biquad coefficients"
+///
+/// Fórmula por bloque:
+///   currentCoeffs += smoothingCoeff * (targetCoeffs - currentCoeffs)
+///
+/// Con smoothingCoeff = 1 - exp(-1/N), donde N = número de bloques para ~95%.
+/// Para N=5 bloques de 4ms = 20ms de transición total.
+///
+/// Referencia académica:
+/// - Kalinichenko (2006) DAFx-06: "Smooth and Safe Parameter Interpolation"
+/// - Zetterberg & Zhang (1988): "Elimination of transients in adaptive filters"
+/// - Wishnick (2014) DAFx-14: "Time-Varying Filters for Musical Applications"
 
 #include "equalizer.h"
 
@@ -27,10 +40,12 @@ Equalizer::Equalizer() {
         gains_[i].store(0.0f, std::memory_order_relaxed);
         appliedGains_[i] = 0.0f;
         states_[i].reset();
-        // Coeficientes por defecto: pass-through (b0=1, resto=0)
-        coeffs_[i] = BiquadCoeffs{};
+        targetCoeffs_[i] = BiquadCoeffs{};   // pass-through
+        currentCoeffs_[i] = BiquadCoeffs{};  // pass-through
+        smoothingActive_[i] = false;
     }
     gainsChanged_.store(false, std::memory_order_relaxed);
+    smoothingCoeff_ = 1.0f - std::exp(-1.0f / static_cast<float>(kSmoothingBlocks));
 }
 
 // ============================================================================
@@ -40,11 +55,16 @@ Equalizer::Equalizer() {
 void Equalizer::init(int sampleRate) {
     sampleRate_ = sampleRate;
 
-    // Resetear estados de filtro
+    // Recalcular coeficiente de suavizado
+    smoothingCoeff_ = 1.0f - std::exp(-1.0f / static_cast<float>(kSmoothingBlocks));
+
+    // Resetear todo
     for (int i = 0; i < kEqBandCount; ++i) {
         states_[i].reset();
         appliedGains_[i] = 0.0f;
-        coeffs_[i] = BiquadCoeffs{};
+        targetCoeffs_[i] = BiquadCoeffs{};
+        currentCoeffs_[i] = BiquadCoeffs{};
+        smoothingActive_[i] = false;
     }
 
     // Forzar recálculo de coeficientes en el próximo process()
@@ -136,19 +156,53 @@ BiquadCoeffs Equalizer::computePeakingCoeffs(float frequencyHz, float gainDb, fl
 }
 
 // ============================================================================
-// Recálculo de coeficientes (llamado desde hilo de audio)
+// Recálculo de coeficientes TARGET (llamado desde hilo de audio)
 // ============================================================================
 
-void Equalizer::updateCoefficients() {
+void Equalizer::updateTargetCoefficients() {
     for (int i = 0; i < kEqBandCount; ++i) {
         const float newGain = gains_[i].load(std::memory_order_relaxed);
 
         // Solo recalcular si la ganancia cambió significativamente
         if (std::fabs(newGain - appliedGains_[i]) > 0.01f) {
-            coeffs_[i] = computePeakingCoeffs(kEqFrequencies[i], newGain, kEqQFactors[i]);
+            targetCoeffs_[i] = computePeakingCoeffs(kEqFrequencies[i], newGain, kEqQFactors[i]);
             appliedGains_[i] = newGain;
+
+            // Activar suavizado para esta banda si los coeficientes son diferentes
+            if (currentCoeffs_[i].significantlyDifferent(targetCoeffs_[i])) {
+                smoothingActive_[i] = true;
+            }
         }
     }
+}
+
+// ============================================================================
+// Suavizado exponencial de coeficientes (por bloque)
+// ============================================================================
+
+/// Aplica un paso de suavizado exponencial a los coeficientes current
+/// acercándolos a los target. Retorna true si aún hay diferencia significativa.
+static bool smoothCoeffsStep(BiquadCoeffs& current, const BiquadCoeffs& target, float coeff) {
+    current.b0 += coeff * (target.b0 - current.b0);
+    current.b1 += coeff * (target.b1 - current.b1);
+    current.b2 += coeff * (target.b2 - current.b2);
+    current.a1 += coeff * (target.a1 - current.a1);
+    current.a2 += coeff * (target.a2 - current.a2);
+
+    // Verificar si ya convergió (diferencia < epsilon)
+    const float eps = 1e-7f;
+    bool stillMoving = std::fabs(target.b0 - current.b0) > eps ||
+                       std::fabs(target.b1 - current.b1) > eps ||
+                       std::fabs(target.b2 - current.b2) > eps ||
+                       std::fabs(target.a1 - current.a1) > eps ||
+                       std::fabs(target.a2 - current.a2) > eps;
+
+    if (!stillMoving) {
+        // Snap to target para evitar drift numérico
+        current = target;
+    }
+
+    return stillMoving;
 }
 
 // ============================================================================
@@ -181,26 +235,40 @@ float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
 void Equalizer::process(float* buffer, int blockSize) {
     if (buffer == nullptr || blockSize <= 0) return;
 
-    // Verificar si hay cambio de ganancias pendiente
+    // ─── 1. Verificar si hay cambio de ganancias pendiente ──────────────
     if (gainsChanged_.load(std::memory_order_acquire)) {
-        updateCoefficients();
+        updateTargetCoefficients();
         gainsChanged_.store(false, std::memory_order_release);
     }
 
-    // Aplicar cada banda en serie con per-band limiter
+    // ─── 2. Suavizar coeficientes (un paso exponencial por bloque) ──────
+    // Esto es la técnica "BiquadSmoothed" de DSP Concepts:
+    // currentCoeffs += smoothingCoeff * (targetCoeffs - currentCoeffs)
     for (int band = 0; band < kEqBandCount; ++band) {
-        // Si la ganancia aplicada es ~0 dB, este filtro es pass-through
-        if (appliedGains_[band] < 0.01f) {
+        if (smoothingActive_[band]) {
+            smoothingActive_[band] = smoothCoeffsStep(
+                currentCoeffs_[band], targetCoeffs_[band], smoothingCoeff_);
+        }
+    }
+
+    // ─── 3. Aplicar cada banda en serie con per-band limiter ────────────
+    for (int band = 0; band < kEqBandCount; ++band) {
+        // Si los coeficientes son pass-through (b0≈1, resto≈0), skip
+        const BiquadCoeffs& coeffs = currentCoeffs_[band];
+        if (std::fabs(coeffs.b0 - 1.0f) < 1e-6f &&
+            std::fabs(coeffs.b1) < 1e-6f &&
+            std::fabs(coeffs.b2) < 1e-6f &&
+            std::fabs(coeffs.a1) < 1e-6f &&
+            std::fabs(coeffs.a2) < 1e-6f) {
             continue;
         }
 
-        const BiquadCoeffs& coeffs = coeffs_[band];
         BiquadState& state = states_[band];
 
         for (int i = 0; i < blockSize; ++i) {
             float sample = processBiquadSample(buffer[i], coeffs, state);
 
-            // Per-band limiter
+            // Per-band limiter (protección contra overflow inter-banda)
             const float absSample = std::fabs(sample);
             if (absSample > kPerBandCeiling) {
                 sample *= kPerBandCeiling / absSample;

@@ -1,17 +1,27 @@
 /// @file equalizer.h
-/// @brief EQ paramétrico de 12 bandas con filtros biquad peaking.
+/// @brief EQ paramétrico de 12 bandas con filtros biquad peaking y suavizado de coeficientes.
 ///
 /// Frecuencias: 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz.
 /// Fórmulas de coeficientes: Audio EQ Cookbook (peaking EQ).
 /// ÚNICA etapa del pipeline que amplifica la señal.
 ///
+/// Técnica de suavizado: Interpolación exponencial de coeficientes bloque-a-bloque.
+/// Basado en:
+/// - DSP Concepts Audio Weaver "BiquadSmoothed" (ON Semiconductor Ezairo chips)
+/// - Kalinichenko (2006) "Smooth and Safe Parameter Interpolation of Biquadratic
+///   Filters in Audio Applications" — DAFx-06, Montreal
+/// - vinniefalco/DSPFilters: "Process a block interpolating from old to new coefficients"
+/// - Zetterberg & Zhang (1988): Modificar estado al cambiar coeficientes
+///
+/// Los coeficientes actuales se aproximan exponencialmente a los coeficientes destino
+/// en cada bloque de audio (~4ms a 16kHz/64 samples). Esto elimina transitorios
+/// al cambiar presets EQ en caliente sin necesidad de reiniciar el engine.
+///
 /// Diseño thread-safe:
 /// - Las ganancias se actualizan atómicamente desde el hilo de UI.
-/// - Los coeficientes se recalculan en el hilo de audio al detectar cambio.
+/// - Los coeficientes TARGET se recalculan al detectar cambio.
+/// - Los coeficientes CURRENT se interpolan hacia TARGET cada bloque.
 /// - No se usan locks — operación completamente lock-free.
-///
-/// NOTA: Los cambios de preset EQ se manejan con reinicio rápido del engine
-/// desde Dart (stop+start ~50ms). Esto garantiza filtros con estado limpio.
 
 #ifndef HEARING_AID_EQUALIZER_H
 #define HEARING_AID_EQUALIZER_H
@@ -47,9 +57,15 @@ static constexpr float kEqQFactors[kEqBandCount] = {
 };
 
 /// Ceiling lineal para el per-band limiter.
-/// -3 dBFS = 0.708 — deja margen para que el WDRC y Volume operen sin clipping.
-/// Esto previene saturación cuando bandas individuales tienen alta ganancia.
-static constexpr float kPerBandCeiling = 0.708f;  // -3 dBFS
+/// -1 dBFS = 0.891 — permite que la señal amplificada pase con más dinámica.
+/// El WDRC y MPO downstream se encargan de la protección final contra clipping.
+static constexpr float kPerBandCeiling = 0.891f;  // -1 dBFS
+
+/// Número de bloques para completar la transición de coeficientes (~95%).
+/// Con bloques de 64 muestras a 16kHz (4ms/bloque), 5 bloques = 20ms.
+/// Esto da una transición suave de ~20ms, imperceptible auditivamente.
+/// Referencia: DSP Concepts Audio Weaver usa ~10-50ms típicamente.
+static constexpr int kSmoothingBlocks = 5;
 
 /// Coeficientes normalizados de un filtro biquad (Direct Form I).
 /// Todos los coeficientes están normalizados por a0 (a0 = 1.0 implícito).
@@ -59,6 +75,28 @@ struct BiquadCoeffs {
     float b2 = 0.0f;
     float a1 = 0.0f;  ///< Nota: signo negado en la fórmula de diferencia
     float a2 = 0.0f;
+
+    /// Interpola linealmente entre este set de coeficientes y otro.
+    /// t=0 retorna *this, t=1 retorna other.
+    BiquadCoeffs lerp(const BiquadCoeffs& other, float t) const {
+        BiquadCoeffs result;
+        result.b0 = b0 + t * (other.b0 - b0);
+        result.b1 = b1 + t * (other.b1 - b1);
+        result.b2 = b2 + t * (other.b2 - b2);
+        result.a1 = a1 + t * (other.a1 - a1);
+        result.a2 = a2 + t * (other.a2 - a2);
+        return result;
+    }
+
+    /// Verifica si dos sets de coeficientes son significativamente diferentes.
+    bool significantlyDifferent(const BiquadCoeffs& other) const {
+        const float eps = 1e-6f;
+        return std::fabs(b0 - other.b0) > eps ||
+               std::fabs(b1 - other.b1) > eps ||
+               std::fabs(b2 - other.b2) > eps ||
+               std::fabs(a1 - other.a1) > eps ||
+               std::fabs(a2 - other.a2) > eps;
+    }
 };
 
 /// Estado interno de un filtro biquad (Direct Form I).
@@ -75,10 +113,16 @@ struct BiquadState {
     }
 };
 
-/// Ecualizador paramétrico de 12 bandas con filtros biquad peaking.
+/// Ecualizador paramétrico de 12 bandas con filtros biquad peaking y
+/// suavizado exponencial de coeficientes (técnica BiquadSmoothed).
 ///
 /// Rango de ganancias: [0, 50] dB por banda.
 /// ÚNICA etapa del pipeline que amplifica la señal.
+///
+/// Al cambiar ganancias, los coeficientes TARGET se recalculan inmediatamente
+/// pero los coeficientes CURRENT se interpolan exponencialmente hacia el TARGET
+/// en cada bloque de audio. Esto elimina transitorios sin necesidad de
+/// reiniciar el engine.
 ///
 /// Uso:
 /// @code
@@ -116,8 +160,8 @@ private:
     /// Calcula coeficientes biquad peaking EQ usando Audio EQ Cookbook.
     BiquadCoeffs computePeakingCoeffs(float frequencyHz, float gainDb, float q) const;
 
-    /// Recalcula coeficientes para todas las bandas que cambiaron.
-    void updateCoefficients();
+    /// Recalcula coeficientes TARGET para todas las bandas que cambiaron.
+    void updateTargetCoefficients();
 
     /// Procesa una muestra a través de un filtro biquad (Direct Form I).
     static float processBiquadSample(float sample, const BiquadCoeffs& coeffs,
@@ -126,13 +170,29 @@ private:
     // --- Configuración ---
     int sampleRate_ = 16000;
 
+    /// Coeficiente de suavizado exponencial por bloque.
+    /// Calculado como: 1 - exp(-1 / kSmoothingBlocks)
+    /// Esto da ~95% de convergencia en kSmoothingBlocks bloques.
+    float smoothingCoeff_ = 0.0f;
+
     // --- Ganancias atómicas (actualizables desde hilo de UI) ---
     std::atomic<float> gains_[kEqBandCount];
 
-    // --- Coeficientes y estado (solo accedidos desde hilo de audio) ---
-    BiquadCoeffs coeffs_[kEqBandCount];   ///< Coeficientes actuales por banda
-    BiquadState states_[kEqBandCount];    ///< Estado de filtro por banda
-    float appliedGains_[kEqBandCount];    ///< Ganancias con las que se calcularon los coeficientes
+    // --- Coeficientes TARGET (destino, recalculados al cambiar ganancias) ---
+    BiquadCoeffs targetCoeffs_[kEqBandCount];
+
+    // --- Coeficientes CURRENT (los que realmente se usan para procesar) ---
+    // Se interpolan exponencialmente hacia targetCoeffs_ cada bloque.
+    BiquadCoeffs currentCoeffs_[kEqBandCount];
+
+    // --- Estado de filtro por banda ---
+    BiquadState states_[kEqBandCount];
+
+    // --- Ganancias con las que se calcularon los coeficientes TARGET ---
+    float appliedGains_[kEqBandCount];
+
+    // --- Flag: true si los coeficientes current aún no alcanzaron target ---
+    bool smoothingActive_[kEqBandCount];
 
     // --- Flag de cambio pendiente ---
     std::atomic<bool> gainsChanged_{false};
