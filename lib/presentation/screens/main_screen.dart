@@ -1536,11 +1536,44 @@ class _MiniEqBarChart extends StatelessWidget {
 
 /// Indicador compacto del preset de EQ y NR activos.
 /// Al tocarlo abre la pantalla de detalle completo de configuración DSP.
-class _EqPresetIndicator extends StatelessWidget {
+/// Anima un destello cyan cuando cambia el preset (visualmente confirma
+/// que la sugerencia "Auto" se aplicó).
+class _EqPresetIndicator extends StatefulWidget {
   final String presetName;
   final int nrLevel;
 
   const _EqPresetIndicator({required this.presetName, required this.nrLevel});
+
+  @override
+  State<_EqPresetIndicator> createState() => _EqPresetIndicatorState();
+}
+
+class _EqPresetIndicatorState extends State<_EqPresetIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _flashController;
+
+  @override
+  void initState() {
+    super.initState();
+    _flashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _EqPresetIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.presetName != widget.presetName) {
+      _flashController.forward(from: 0.0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _flashController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1557,29 +1590,62 @@ class _EqPresetIndicator extends StatelessWidget {
           ),
         );
       },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF16213e),
-          borderRadius: BorderRadius.circular(12),
-        ),
+      child: AnimatedBuilder(
+        animation: _flashController,
+        builder: (context, child) {
+          // Pulso de luz: 0 → 1 → 0 en 1.2 s.
+          final t = _flashController.value;
+          final pulse = (t < 0.5 ? t * 2 : (1 - t) * 2).clamp(0.0, 1.0);
+          final borderColor = Color.lerp(
+            Colors.transparent,
+            Colors.cyan,
+            pulse,
+          )!;
+          final bg = Color.lerp(
+            const Color(0xFF16213e),
+            Colors.cyan.withOpacity(0.20),
+            pulse * 0.6,
+          )!;
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: borderColor, width: 2 * pulse),
+              boxShadow: pulse > 0
+                  ? [
+                      BoxShadow(
+                        color: Colors.cyan.withOpacity(0.3 * pulse),
+                        blurRadius: 8 * pulse,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: child,
+          );
+        },
         child: Row(
           children: [
             const Icon(Icons.equalizer, color: Colors.cyan, size: 18),
             const SizedBox(width: 8),
-            Text(
-              'EQ: $presetName',
-              style: const TextStyle(
-                color: Colors.cyan,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  'EQ: ${widget.presetName}',
+                  key: ValueKey(widget.presetName),
+                  style: const TextStyle(
+                    color: Colors.cyan,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
-            const Spacer(),
             const Icon(Icons.noise_aware, color: Colors.white54, size: 16),
             const SizedBox(width: 4),
             Text(
-              'NR: ${nrLabels[nrLevel.clamp(0, 3)]}',
+              'NR: ${nrLabels[widget.nrLevel.clamp(0, 3)]}',
               style: const TextStyle(
                 color: Colors.white54,
                 fontSize: 12,
@@ -1701,6 +1767,20 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
     if (_busy) return;
     setState(() => _busy = true);
 
+    final bloc = context.read<AmplificationBloc>();
+    final isActive = bloc.state is AmplificationActive;
+
+    if (!isActive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Activá el audífono primero para detectar el ambiente.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      setState(() => _busy = false);
+      return;
+    }
+
     // Asegurar que el clasificador esté activo
     try {
       await _channel.invokeMethod('updateAutoClassify', {'enabled': true});
@@ -1729,7 +1809,7 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
     if (classCounts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No se pudo leer el ambiente. Probá activar el audífono primero.'),
+          content: Text('No se pudo leer el ambiente. Revisá permisos del micrófono.'),
           duration: Duration(seconds: 2),
         ),
       );
@@ -1752,7 +1832,6 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
     final volDelta = PresetAdvisor.volumeDeltaFor(dominant);
 
     // Aplicar preset
-    final bloc = context.read<AmplificationBloc>();
     bloc.add(UpdateEqGains(gains: preset.gains, presetName: preset.name));
 
     // Aplicar delta de volumen sobre el actual si hay estado activo

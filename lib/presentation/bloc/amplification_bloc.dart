@@ -415,34 +415,31 @@ class AmplificationBloc
   /// Usa la misma lógica que UpdateAudiogram: solo llama updateEqGains()
   /// directamente al bridge nativo. Esto funciona sin ruido porque el engine
   /// maneja la transición internamente (igual que la pantalla de audiometría).
+  ///
+  /// Funciona en cualquier estado: si el audífono está activo aplica al engine
+  /// y emite el nuevo estado; si está inactivo solo persiste para usar al
+  /// próximo encendido.
   Future<void> _onUpdateEqGains(
     UpdateEqGains event,
     Emitter<AmplificationState> emit,
   ) async {
-    if (state is! AmplificationActive) return;
-    final currentState = state as AmplificationActive;
-
     try {
-      // Aplicar ganancias al engine (igual que _onUpdateAudiogram)
-      await _audioBridge.updateEqGains(event.gains);
+      final presetName = event.presetName ?? 'Custom';
 
-      // Persistir el preset
-      if (event.presetName != null) {
-        await _settingsRepository.setLastEqPreset({
-          'name': event.presetName,
-          'gains': event.gains,
-        });
-      } else {
-        await _settingsRepository.setLastEqPreset({
-          'name': 'Custom',
-          'gains': event.gains,
-        });
+      // 1. Persistir el preset SIEMPRE (independiente del estado)
+      await _settingsRepository.setLastEqPreset({
+        'name': presetName,
+        'gains': event.gains,
+      });
+
+      // 2. Aplicar al engine solo si está activo
+      if (state is AmplificationActive) {
+        await _audioBridge.updateEqGains(event.gains);
+        // Actualizar estado con el nombre del preset activo
+        emit((state as AmplificationActive).copyWith(
+          activeEqPreset: presetName,
+        ));
       }
-
-      // Actualizar estado con el nombre del preset activo
-      emit(currentState.copyWith(
-        activeEqPreset: event.presetName ?? 'Custom',
-      ));
     } catch (_) {
       // No interrumpir por error de actualización de EQ
     }
