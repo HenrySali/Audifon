@@ -117,6 +117,9 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
     nr_.process(buffer, blockSize);
 
+    // Métrica: nivel post-NR
+    lastPostNrLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+
     // ─── 2. Medir nivel PRE-EQ (para WDRC y Environment Classifier) ─────
     // Este nivel refleja la señal REAL de entrada, sin amplificación del EQ.
     // El WDRC usa este valor para decidir en qué región operar.
@@ -156,16 +159,25 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // la amplificación prescrita innecesariamente (validado: audioXpress OTC DSP paper).
     eq_.process(buffer, blockSize);
 
+    // Métrica: nivel post-EQ + peak
+    lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+
     // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
     // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
     // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
     // dispare compresión innecesaria.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
+    // Métrica: nivel post-WDRC
+    lastPostWdrcLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+
     // ─── 6. Volume master ───────────────────────────────────────────────
     // Rango: -20 a +10 dB. Puede amplificar hasta +10 dB (3.16×).
     float volLinear = volumeLinear_.load(std::memory_order_relaxed);
     applyVolume(buffer, blockSize, volLinear);
+
+    // Métrica: nivel post-Volume
+    lastPostVolumeLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
     // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede
@@ -174,6 +186,30 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // FDA 21 CFR 800.30 limita output OTC a 111 dB SPL en el oído;
     // con auriculares, 0.85 lineal es conservador y seguro.
     mpo_.process(buffer, blockSize);
+
+    // Métricas finales: output level, peak, clip count
+    {
+        float peak = 0.0f;
+        int clips = 0;
+        for (int i = 0; i < blockSize; ++i) {
+            float abs = std::fabs(buffer[i]);
+            if (abs > peak) peak = abs;
+            if (abs >= 1.0f) clips++;
+        }
+        lastOutputLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+        lastPeakSample_.store(peak, std::memory_order_relaxed);
+        lastClipCount_.store(clips, std::memory_order_relaxed);
+    }
+
+    // Métrica WDRC: determinar región basada en inputLevelDb
+    {
+        float expKnee = 35.0f;  // default
+        float compKnee = 55.0f; // default
+        int region = 1; // linear
+        if (inputLevelDb < expKnee) region = 0; // expansion
+        else if (inputLevelDb > compKnee) region = 2; // compression
+        lastWdrcRegion_.store(region, std::memory_order_relaxed);
+    }
 
     // ─── 8. Spectrum Analyzer (post-pipeline) ───────────────────────────
     // Alimentar el analizador con buffers pre y post procesamiento.
@@ -227,6 +263,23 @@ void DspPipeline::setSplOffset(float offset) {
 
 float DspPipeline::getLastInputLevelDb() const {
     return lastInputLevelDb_.load(std::memory_order_relaxed);
+}
+
+DspPipeline::StageMetrics DspPipeline::getStageMetrics() const {
+    StageMetrics m;
+    m.inputLevel = lastInputLevelDb_.load(std::memory_order_relaxed);
+    m.postNrLevel = lastPostNrLevelDb_.load(std::memory_order_relaxed);
+    m.postEqLevel = lastPostEqLevelDb_.load(std::memory_order_relaxed);
+    m.postWdrcLevel = lastPostWdrcLevelDb_.load(std::memory_order_relaxed);
+    m.postVolumeLevel = lastPostVolumeLevelDb_.load(std::memory_order_relaxed);
+    m.outputLevel = lastOutputLevelDb_.load(std::memory_order_relaxed);
+    m.peakSample = lastPeakSample_.load(std::memory_order_relaxed);
+    m.clipCount = lastClipCount_.load(std::memory_order_relaxed);
+    m.wdrcGainFactor = lastWdrcGainFactor_.load(std::memory_order_relaxed);
+    m.wdrcRegion = lastWdrcRegion_.load(std::memory_order_relaxed);
+    m.eqMaxGain = eq_.getMaxGain();
+    m.environmentClass = envClassifier_.getCurrentClass();
+    return m;
 }
 
 void DspPipeline::setAutoClassifyEnabled(bool enabled) {

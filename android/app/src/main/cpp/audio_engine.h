@@ -52,6 +52,9 @@ public:
     void setSplOffset(float offset);
     float getLastInputLevel() const;
 
+    // ─── DSP Stage Metrics (para diagnóstico) ────────────────────────────
+    DspPipeline::StageMetrics getStageMetrics() const { return pipeline_.getStageMetrics(); }
+
     // ─── Environment Classifier (thread-safe) ───────────────────────────
     void setAutoClassifyEnabled(bool enabled);
     int getCurrentEnvironmentClass() const;

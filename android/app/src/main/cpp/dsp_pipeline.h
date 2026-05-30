@@ -100,6 +100,23 @@ public:
     /// Actualizado cada bloque. Seguro para leer desde cualquier hilo.
     float getLastInputLevelDb() const;
 
+    /// Obtiene métricas de todas las etapas del pipeline (para diagnóstico).
+    struct StageMetrics {
+        float inputLevel;
+        float postNrLevel;
+        float postEqLevel;
+        float postWdrcLevel;
+        float postVolumeLevel;
+        float outputLevel;
+        float peakSample;
+        int clipCount;
+        float wdrcGainFactor;
+        int wdrcRegion;  // 0=expansion, 1=linear, 2=compression
+        float eqMaxGain;
+        int environmentClass;
+    };
+    StageMetrics getStageMetrics() const;
+
     /// Habilita/deshabilita la clasificación automática de entorno.
     /// Cuando está habilitada, NR y WDRC se ajustan automáticamente.
     /// @param enabled true para habilitar, false para deshabilitar
@@ -148,6 +165,17 @@ private:
 
     // --- Estado de salida (legible desde cualquier hilo) ---
     std::atomic<float> lastInputLevelDb_{0.0f}; ///< Último nivel PRE-EQ medido
+
+    // --- Métricas por etapa del pipeline (para diagnóstico DSP) ---
+    std::atomic<float> lastPostNrLevelDb_{0.0f};     ///< Nivel post-NR
+    std::atomic<float> lastPostEqLevelDb_{0.0f};     ///< Nivel post-EQ
+    std::atomic<float> lastPostWdrcLevelDb_{0.0f};   ///< Nivel post-WDRC
+    std::atomic<float> lastPostVolumeLevelDb_{0.0f}; ///< Nivel post-Volume
+    std::atomic<float> lastOutputLevelDb_{0.0f};     ///< Nivel final (post-MPO)
+    std::atomic<float> lastPeakSample_{0.0f};        ///< Pico máximo del último bloque
+    std::atomic<int> lastClipCount_{0};              ///< Muestras clipeadas en último bloque
+    std::atomic<float> lastWdrcGainFactor_{1.0f};    ///< Último gainFactor del WDRC
+    std::atomic<int> lastWdrcRegion_{1};             ///< 0=expansion, 1=linear, 2=compression
 
     // --- Estado interno para el clasificador ---
     int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada

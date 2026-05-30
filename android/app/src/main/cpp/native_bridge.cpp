@@ -473,4 +473,41 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetCurrentSpectrum(
     return result;
 }
 
+/// Retorna métricas de todas las etapas del pipeline DSP como float array.
+/// Orden: [inputLevel, postNrLevel, postEqLevel, postWdrcLevel, postVolumeLevel,
+///         outputLevel, peakSample, clipCount, wdrcGainFactor, wdrcRegion,
+///         eqMaxGain, environmentClass]
+/// Total: 12 floats.
+JNIEXPORT jfloatArray JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return env->NewFloatArray(0);
+    }
+
+    auto m = g_engine->getStageMetrics();
+
+    jfloatArray result = env->NewFloatArray(12);
+    if (result != nullptr) {
+        float data[12] = {
+            m.inputLevel,
+            m.postNrLevel,
+            m.postEqLevel,
+            m.postWdrcLevel,
+            m.postVolumeLevel,
+            m.outputLevel,
+            m.peakSample,
+            static_cast<float>(m.clipCount),
+            m.wdrcGainFactor,
+            static_cast<float>(m.wdrcRegion),
+            m.eqMaxGain,
+            static_cast<float>(m.environmentClass),
+        };
+        env->SetFloatArrayRegion(result, 0, 12, data);
+    }
+    return result;
+}
+
 } // extern "C"

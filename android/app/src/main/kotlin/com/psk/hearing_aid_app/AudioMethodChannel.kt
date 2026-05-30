@@ -163,6 +163,8 @@ class AudioMethodChannel(
                 "stopSpectrumRecording" -> { val count = nativeBridge.nativeStopSpectrumRecording(); result.success(count) }
                 "getRecordingData" -> { val data = nativeBridge.nativeGetRecordingData(); result.success(data) }
                 "getCurrentSpectrum" -> { val data = nativeBridge.nativeGetCurrentSpectrum(); result.success(data) }
+                // DSP Stage Metrics (para diagnóstico del pipeline)
+                "getDspStageMetrics" -> { val metrics = nativeBridge.getDspStageMetrics(); result.success(metrics) }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

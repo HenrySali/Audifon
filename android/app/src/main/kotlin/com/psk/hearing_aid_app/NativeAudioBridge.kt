@@ -295,4 +295,33 @@ class NativeAudioBridge {
     external fun nativeGetRecordingData(): ByteArray
 
     external fun nativeGetCurrentSpectrum(): ByteArray
+
+    // ─── DSP Stage Metrics (para diagnóstico del pipeline) ───────────────
+
+    external fun nativeGetDspStageMetrics(): FloatArray
+
+    /**
+     * Retorna métricas de todas las etapas del pipeline DSP como Map.
+     * Útil para la pantalla de diagnóstico DSP.
+     */
+    fun getDspStageMetrics(): Map<String, Any>? {
+        if (!isRunning) return null
+        val data = nativeGetDspStageMetrics()
+        if (data.isEmpty()) return null
+        val regions = arrayOf("expansion", "linear", "compression")
+        return mapOf(
+            "inputLevel" to data[0],
+            "postNrLevel" to data[1],
+            "postEqLevel" to data[2],
+            "postWdrcLevel" to data[3],
+            "postVolumeLevel" to data[4],
+            "outputLevel" to data[5],
+            "peakSample" to data[6],
+            "clipCount" to data[7].toInt(),
+            "wdrcGainFactor" to data[8],
+            "wdrcRegion" to (regions.getOrNull(data[9].toInt()) ?: "unknown"),
+            "eqMaxGain" to data[10],
+            "environmentClass" to data[11].toInt(),
+        )
+    }
 }
