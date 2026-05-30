@@ -35,6 +35,9 @@ class _DspTestScreenState extends State<DspTestScreen> {
 
   void _startTest(int idx) {
     setState(() { _activePresetIndex = idx; _metrics = null; });
+    // Aplicar las ganancias del preset al engine nativo
+    final preset = EqPreset.allPresets[idx];
+    _channel.invokeMethod('updateEqGains', {'gains': preset.gains});
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _fetch());
   }
@@ -59,14 +62,25 @@ class _DspTestScreenState extends State<DspTestScreen> {
       if (!mounted || !_runningAll) break;
       setState(() => _runAllIndex = i);
       _startTest(i);
-      await Future.delayed(const Duration(seconds: 3));
+      // Esperar 1s para que el engine se estabilice con el nuevo preset
+      await Future.delayed(const Duration(seconds: 1));
+      // Tomar 5 muestras durante 2s y promediar
+      final samples = <Map<String, dynamic>>[];
+      for (int s = 0; s < 5; s++) {
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (_metrics != null) samples.add(Map<String, dynamic>.from(_metrics!));
+      }
       _testLog.add({
         'preset': EqPreset.allPresets[i].name,
+        'gains': EqPreset.allPresets[i].gains,
         'ts': DateTime.now().toIso8601String(),
-        'metrics': _metrics ?? {'status': 'native_not_available'},
+        'metrics': samples.isNotEmpty ? samples.last : {'status': 'no_data'},
+        'sampleCount': samples.length,
       });
     }
     _stopTest();
+    // Restaurar preset Normal al finalizar
+    _channel.invokeMethod('updateEqGains', {'gains': EqPreset.allPresets[0].gains});
     if (mounted) setState(() => _runningAll = false);
   }
 
