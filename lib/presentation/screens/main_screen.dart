@@ -1929,7 +1929,7 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
     // Auto-dismiss tras 12 s sin respuesta.
     Future.delayed(const Duration(seconds: 12), () {
       try {
-        controller.close(MaterialBannerClosedReason.dismiss);
+        controller.close();
       } catch (_) {}
     });
   }
