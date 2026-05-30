@@ -5,6 +5,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
+import '../../domain/entities/eq_preset.dart';
+import '../../domain/services/preset_advisor.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
@@ -1110,6 +1112,9 @@ class _ProcessingReport extends StatelessWidget {
               // Botón TNR (Transient Noise Reducer) — toggle on/off
               _TnrToggleButton(),
               const SizedBox(width: 6),
+              // Botón Auto Suggest — sugiere preset según ambiente
+              _AutoSuggestButton(),
+              const SizedBox(width: 6),
               GestureDetector(
                 onTap: () => _copyReport(context, inputSpl, outputSpl,
                     estimatedGain, volumeDb, wdrcState, mpoActive, nrLevel, nrLabels),
@@ -1659,6 +1664,136 @@ class _TnrToggleButtonState extends State<_TnrToggleButton> {
             const SizedBox(width: 4),
             Text(
               _enabled ? 'TNR ON' : 'TNR OFF',
+              style: TextStyle(color: color, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Botón "Auto" — clasifica el ambiente acústico actual y aplica el preset
+/// EQ recomendado, ajustando además el master volume con un delta sugerido.
+///
+/// Funciona consultando `getDspStageMetrics` cada 100 ms durante 1 segundo,
+/// promediando la clase de ambiente devuelta por el clasificador C++. Luego
+/// usa [PresetAdvisor] para mapear ambiente → preset y aplica vía bloc.
+class _AutoSuggestButton extends StatefulWidget {
+  @override
+  State<_AutoSuggestButton> createState() => _AutoSuggestButtonState();
+}
+
+class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
+  bool _busy = false;
+  static const _channel = MethodChannel('com.psk.hearing_aid/audio');
+
+  Future<void> _measureAndApply() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+
+    // Asegurar que el clasificador esté activo
+    try {
+      await _channel.invokeMethod('updateAutoClassify', {'enabled': true});
+    } catch (_) {}
+
+    // Esperar 500 ms a que el clasificador estabilice tras un cambio
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Medir 1 segundo, tomar la clase de ambiente más frecuente.
+    final classCounts = <int, int>{};
+    for (int i = 0; i < 10; i++) {
+      try {
+        final r = await _channel.invokeMethod<Map>('getDspStageMetrics');
+        if (r != null) {
+          final ec = r['environmentClass'];
+          if (ec is int && ec >= 0) {
+            classCounts[ec] = (classCounts[ec] ?? 0) + 1;
+          }
+        }
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    if (!mounted) return;
+
+    if (classCounts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo leer el ambiente. Probá activar el audífono primero.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      setState(() => _busy = false);
+      return;
+    }
+
+    final dominant = classCounts.entries
+        .reduce((a, b) => a.value >= b.value ? a : b)
+        .key;
+    final preset = PresetAdvisor.suggestFor(dominant);
+    final volDelta = PresetAdvisor.volumeDeltaFor(dominant);
+
+    // Aplicar preset
+    final bloc = context.read<AmplificationBloc>();
+    bloc.add(UpdateEqGains(gains: preset.gains, presetName: preset.name));
+
+    // Aplicar delta de volumen sobre el actual si hay estado activo
+    final st = bloc.state;
+    if (st is AmplificationActive && volDelta != 0) {
+      final newVol = (st.volumeDb + volDelta).clamp(-20.0, 10.0);
+      bloc.add(ChangeVolume(volumeDb: newVol));
+    }
+
+    final label = PresetAdvisor.labelFor(dominant);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '🎯 Ambiente: $label   →   ${preset.name}'
+          '${volDelta != 0 ? '   ·   Vol ${volDelta.toStringAsFixed(0)} dB' : ''}',
+        ),
+        duration: const Duration(seconds: 3),
+        backgroundColor: Colors.cyan.shade900,
+      ),
+    );
+
+    setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _busy ? Colors.white38 : Colors.amberAccent;
+    final bgColor = _busy
+        ? Colors.white.withOpacity(0.05)
+        : Colors.amber.withOpacity(0.12);
+    return GestureDetector(
+      onTap: _measureAndApply,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(6),
+          border: _busy
+              ? null
+              : Border.all(color: Colors.amber.withOpacity(0.4), width: 0.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _busy
+                ? const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white38,
+                    ),
+                  )
+                : Icon(Icons.auto_awesome, color: color, size: 14),
+            const SizedBox(width: 4),
+            Text(
+              _busy ? 'Midiendo…' : 'Auto',
               style: TextStyle(color: color, fontSize: 11),
             ),
           ],
