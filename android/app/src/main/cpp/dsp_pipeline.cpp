@@ -76,6 +76,15 @@ void DspPipeline::init(const AudioConfig& config) {
     volumeDb_.store(0.0f, std::memory_order_relaxed);
     volumeLinear_.store(1.0f, std::memory_order_relaxed);
 
+    // Inicializar volume smoother (5ms simétrico — cambio de usuario)
+    // Referencia: openMHA smoothgain_bridge, DSP Concepts Audio Weaver
+    volumeSmoother_.init(config.sampleRate, 5.0f, 5.0f);
+    volumeSmoother_.reset(1.0f);  // Ganancia unitaria inicial
+
+    // Inicializar NR level smoother (20ms attack, 50ms release)
+    nrLevelSmoother_.init(config.sampleRate, 20.0f, 50.0f);
+    nrLevelSmoother_.reset(1.0f);  // Sin atenuación inicial
+
     // Inicializar analizador de espectro
     spectrumAnalyzer_.init(config.sampleRate, config.splOffset);
 
@@ -115,6 +124,9 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     }
 
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
+    // El NR ya tiene suavizado temporal interno (prevGain_ con attack/release
+    // por bloque). Cuando cambia el nivel de NR, el gainFloor cambia pero
+    // el suavizado interno del NR maneja la transición gradualmente.
     nr_.process(buffer, blockSize);
 
     // ─── 2. Medir nivel PRE-EQ (para WDRC y Environment Classifier) ─────
@@ -162,10 +174,17 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // dispare compresión innecesaria.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
-    // ─── 6. Volume master ───────────────────────────────────────────────
+    // ─── 6. Volume master (smoothed, sample-by-sample) ────────────────
     // Rango: -20 a +10 dB. Puede amplificar hasta +10 dB (3.16×).
-    float volLinear = volumeLinear_.load(std::memory_order_relaxed);
-    applyVolume(buffer, blockSize, volLinear);
+    // El GainSmoother elimina clicks al cambiar volumen rápidamente.
+    // Referencia: openMHA smoothgain_bridge, DSP Concepts Audio Weaver.
+    {
+        float volTarget = volumeLinear_.load(std::memory_order_relaxed);
+        volumeSmoother_.setTarget(volTarget);
+        for (int i = 0; i < blockSize; ++i) {
+            buffer[i] *= volumeSmoother_.next();
+        }
+    }
 
     // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede

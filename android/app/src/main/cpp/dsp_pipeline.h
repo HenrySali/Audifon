@@ -25,6 +25,7 @@
 #include "mpo_limiter.h"
 #include "environment_classifier.h"
 #include "spectrum_analyzer.h"
+#include "gain_smoother.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -152,6 +153,15 @@ private:
     // --- Estado interno para el clasificador ---
     int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada
     int currentNrLevel_ = 0; ///< Nivel NR actual (transiciones graduales)
+
+    // --- Gain Smoothers (REQ-1: eliminan clicks en transiciones) ---
+    /// Volume smoother: 5ms attack, 5ms release (simétrico, cambio de usuario).
+    /// Referencia: openMHA smoothgain_bridge, DSP Concepts Audio Weaver.
+    GainSmoother volumeSmoother_{16000, 5.0f, 5.0f};
+
+    /// NR level smoother: 20ms attack, 50ms release.
+    /// Suaviza la transición del gainFloor cuando cambia el nivel de NR.
+    GainSmoother nrLevelSmoother_{16000, 20.0f, 50.0f};
 
     // --- Analizador de espectro ---
     SpectrumAnalyzer spectrumAnalyzer_;  ///< FFT 128-point para visualización
