@@ -1033,7 +1033,15 @@ class _ProcessingReport extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
+              // Botones de acción — scroll horizontal si no caben
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  reverse: true, // mostrar el final primero (más cerca al usuario)
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
               GestureDetector(
                 onTap: () => _showDebugInfo(context),
                 child: Container(
@@ -1100,6 +1108,10 @@ class _ProcessingReport extends StatelessWidget {
                       Icon(Icons.copy, color: Colors.cyan, size: 14),
                       SizedBox(width: 4),
                       Text('Copiar', style: TextStyle(color: Colors.cyan, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
                     ],
                   ),
                 ),
