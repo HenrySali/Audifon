@@ -10,16 +10,16 @@ import '../../../domain/entities/diagnostic_result.dart';
 /// Paso 2: Test de Tonos Puros — Audiometría Calibrada (ISO 8253-1).
 ///
 /// Usa la tabla de calibración del auricular para emitir niveles reales
-/// en dB SPL. Método ASCENDENTE: empieza en 15 dB SPL, sube de 5 en 5.
+/// en dB SPL. Método ASCENDENTE: empieza en 10 dB SPL, sube de 5 en 5.
 /// Umbral = nivel más bajo donde el usuario responde 2 de 3 veces.
 ///
 /// Frecuencias: 500, 1000, 2000, 3000, 4000, 8000 Hz.
 /// Evalúa cada oído por separado.
 ///
 /// Máximos por frecuencia:
-///  - Frecuencias bajas (< 2 kHz): hasta 50 dB SPL.
-///  - Frecuencias altas (≥ 2 kHz): hasta 70 dB SPL — permite detectar
-///    pérdidas en agudos sin saturar el auricular.
+///  - Frecuencias bajas (< 1 kHz, p.ej. 500 Hz): hasta 50 dB SPL.
+///  - Frecuencias medias y altas (≥ 1 kHz): hasta 70 dB SPL — permite
+///    detectar pérdidas en agudos sin saturar el auricular.
 /// Si no detecta al máximo, marca "no detectado".
 class Step2ToneTest extends StatefulWidget {
   final void Function(
@@ -47,14 +47,15 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
   bool _isCalibrated = false;
 
   // Parámetros del método ascendente ISO 8253-1
-  static const double _startLevelDbSpl = 15.0;
+  static const double _startLevelDbSpl = 10.0;
   static const double _stepSizeDb = 5.0;
-  // Máximo por frecuencia: bajas hasta 50 dB SPL, altas (≥2000 Hz) hasta 70 dB SPL.
-  // Esto refleja la práctica clínica donde las pérdidas en altas frecuencias
-  // requieren mayor margen para detectar el umbral.
+  // Máximo por frecuencia: bajas (< 1 kHz) hasta 50 dB SPL,
+  // medias y altas (≥ 1 kHz) hasta 70 dB SPL.
+  // Esto refleja la práctica clínica donde las pérdidas en frecuencias
+  // medias/altas requieren mayor margen para detectar el umbral.
   static const double _maxLevelLowFreqDbSpl = 50.0;
   static const double _maxLevelHighFreqDbSpl = 70.0;
-  static const int _highFreqThresholdHz = 2000;
+  static const int _highFreqThresholdHz = 1000;
   static const int _requiredResponses = 2; // de 3 presentaciones
   static const int _presentationsPerLevel = 3;
 
@@ -429,7 +430,7 @@ class _Step2ToneTestState extends State<Step2ToneTest> {
                   'Escuchará tonos a diferentes frecuencias.\n'
                   'Presione "Escucho" cada vez que oiga un tono.\n\n'
                   'Método: ascendente (ISO 8253-1)\n'
-                  'Rango: 15–50 dB SPL en bajas / 15–70 dB SPL en altas (≥2 kHz)'
+                  'Rango: 10–50 dB SPL en bajas / 10–70 dB SPL en ≥1 kHz'
                   '${_isCalibrated ? ' (calibrado)' : ''}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
