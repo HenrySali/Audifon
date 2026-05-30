@@ -115,11 +115,11 @@ class _StatusBar extends StatelessWidget {
         children: [
           // Indicador de auriculares (Req 5.5 — permanente, visible)
           _HeadphoneIndicator(connected: headphonesConnected),
-          const Spacer(),
+          const SizedBox(width: 8),
           // Perfil activo
           if (profileName.isNotEmpty)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
                 color: Colors.cyan.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(16),
@@ -129,108 +129,119 @@ class _StatusBar extends StatelessWidget {
                 profileName,
                 style: const TextStyle(
                   color: Colors.cyan,
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),
               ),
             ),
-          const SizedBox(width: 8),
-          // Botón de diagnóstico auditivo
-          Builder(
-            builder: (context) => IconButton(
-              icon: const Icon(Icons.hearing, color: Colors.white70, size: 22),
-              tooltip: 'Diagnóstico Auditivo',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: context.read<AmplificationBloc>(),
-                      child: const DiagnosticFlowScreen(),
+          const SizedBox(width: 4),
+          // Botones de navegación — scrollable para pantallas pequeñas
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // Botón de diagnóstico auditivo
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.hearing, color: Colors.white70, size: 21),
+                      tooltip: 'Diagnóstico Auditivo',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const DiagnosticFlowScreen(),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
-            ),
-          ),
-          // Botón de analizador de espectro
-          Builder(
-            builder: (context) => IconButton(
-              icon: const Icon(Icons.graphic_eq, color: Colors.white70, size: 22),
-              tooltip: 'Spectrum Analyzer',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const SpectrumAnalyzerScreen(),
-                  ),
-                );
-              },
-            ),
-          ),
-          // Botón de test del pipeline DSP
-          Builder(
-            builder: (context) => IconButton(
-              icon: const Icon(Icons.bug_report, color: Colors.white70, size: 22),
-              tooltip: 'DSP Pipeline Test',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: context.read<AmplificationBloc>(),
-                      child: const DspTestScreen(),
+                  // Botón de analizador de espectro
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.graphic_eq, color: Colors.white70, size: 21),
+                      tooltip: 'Spectrum Analyzer',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SpectrumAnalyzerScreen(),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
-            ),
-          ),
-          // Botón de simulador avanzado
-          Builder(
-            builder: (context) => IconButton(
-              icon: const Icon(Icons.tune, color: Colors.white70, size: 22),
-              tooltip: 'Configuración Avanzada',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: context.read<AmplificationBloc>(),
-                      child: const SimulatorScreen(),
+                  // Botón de test del pipeline DSP
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.bug_report, color: Colors.white70, size: 21),
+                      tooltip: 'DSP Pipeline Test',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const DspTestScreen(),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
-            ),
-          ),
-          // Botón de configuración de audiograma (Req 4.1, 4.3)
-          Builder(
-            builder: (context) => IconButton(
-              icon: const Icon(Icons.settings, color: Colors.white70, size: 22),
-              tooltip: 'Configurar Audiograma',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              onPressed: () async {
-                final bloc = context.read<AmplificationBloc>();
-                final savedAudiogram =
-                    await bloc.audiogramRepository.getAudiogram();
-                if (!context.mounted) return;
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: bloc,
-                      child: AudiogramScreen(
-                        currentAudiogram: savedAudiogram,
-                      ),
+                  // Botón de simulador avanzado
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.tune, color: Colors.white70, size: 21),
+                      tooltip: 'Configuración Avanzada',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const SimulatorScreen(),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
+                  // Botón de configuración de audiograma (Req 4.1, 4.3)
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.settings, color: Colors.white70, size: 21),
+                      tooltip: 'Configurar Audiograma',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () async {
+                        final bloc = context.read<AmplificationBloc>();
+                        final savedAudiogram =
+                            await bloc.audiogramRepository.getAudiogram();
+                        if (!context.mounted) return;
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: bloc,
+                              child: AudiogramScreen(
+                                currentAudiogram: savedAudiogram,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
