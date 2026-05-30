@@ -25,6 +25,7 @@
 #include "mpo_limiter.h"
 #include "environment_classifier.h"
 #include "spectrum_analyzer.h"
+#include "transient_reducer.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -92,6 +93,19 @@ public:
     /// @param level 0=off, 1=bajo, 2=medio, 3=alto
     void setNrLevel(int level);
 
+    /// Habilita/deshabilita el Transient Noise Reducer (TNR).
+    /// El TNR atenúa impulsos abruptos como timbres del subte, puertas, bocinas.
+    void setTnrEnabled(bool enabled) { tnr_.setEnabled(enabled); }
+    bool isTnrEnabled() const { return tnr_.isEnabled(); }
+
+    /// Configura el umbral del TNR (ratio fast/slow envelope).
+    /// Default: 8.0. Rango: 4.0 (sensible) a 12.0 (conservador).
+    void setTnrThreshold(float ratio) { tnr_.setThreshold(ratio); }
+
+    /// Configura la atenuación del TNR en dB (negativo).
+    /// Default: -12 dB. Rango: -6 a -18 dB.
+    void setTnrAttenuationDb(float db) { tnr_.setAttenuationDb(db); }
+
     /// Actualiza offset de calibración SPL (dBFS → dB SPL).
     /// @param offset Offset en dB (120 para mic real, 76 para WAV)
     void setSplOffset(float offset);
@@ -156,6 +170,7 @@ private:
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)
     EnvironmentClassifier envClassifier_; ///< Clasificador automático de entorno
+    TransientReducer tnr_;    ///< Transient Noise Reducer (impulsos abruptos)
 
     // --- Parámetros atómicos (actualizables desde hilo de UI) ---
     std::atomic<float> volumeDb_{0.0f};       ///< Volumen maestro en dB

@@ -60,6 +60,12 @@ void DspPipeline::init(const AudioConfig& config) {
     // Inicializar EQ con sample rate
     eq_.init(config.sampleRate);
 
+    // Inicializar TNR (Transient Noise Reducer) — para impulsos abruptos
+    tnr_.init(config.sampleRate);
+    tnr_.setEnabled(true); // Activado por default
+    tnr_.setThreshold(8.0f);
+    tnr_.setAttenuationDb(-12.0f);
+
     // Inicializar WDRC con sample rate (para coeficientes attack/release correctos)
     wdrc_.init(config.sampleRate);
 
@@ -113,6 +119,13 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         hpY2_ = hpY1_; hpY1_ = y;
         buffer[i] = y;
     }
+
+    // ─── 0.7. Transient Noise Reducer (TNR) ─────────────────────────────
+    // Atenúa impulsos abruptos (timbre subte, puertas, bocinas) sample-by-sample.
+    // Detecta cuando la energía instantánea es 8× sobre el promedio de fondo
+    // y aplica -12 dB durante 20ms con recovery de 30ms.
+    // Referencia: Phonak SoundRelax (2006), Acta Acustica 2023.
+    tnr_.process(buffer, blockSize);
 
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
     nr_.process(buffer, blockSize);

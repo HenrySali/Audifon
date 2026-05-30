@@ -55,6 +55,11 @@ public:
     // ─── DSP Stage Metrics (para diagnóstico) ────────────────────────────
     DspPipeline::StageMetrics getStageMetrics() const { return pipeline_.getStageMetrics(); }
 
+    // ─── Transient Noise Reducer (TNR) ───────────────────────────────────
+    void setTnrEnabled(bool enabled) { pipeline_.setTnrEnabled(enabled); }
+    void setTnrThreshold(float ratio) { pipeline_.setTnrThreshold(ratio); }
+    void setTnrAttenuationDb(float db) { pipeline_.setTnrAttenuationDb(db); }
+
     // ─── Environment Classifier (thread-safe) ───────────────────────────
     void setAutoClassifyEnabled(bool enabled);
     int getCurrentEnvironmentClass() const;
