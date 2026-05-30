@@ -255,7 +255,7 @@ void Equalizer::process(float* buffer, int blockSize) {
         }
     }
 
-    // ─── 3. Aplicar cada banda en serie con per-band limiter ────────────
+    // ─── 3. Aplicar cada banda en serie ────────────────────────────────
     for (int band = 0; band < kEqBandCount; ++band) {
         // Si los coeficientes son pass-through (b0≈1, resto≈0), skip
         const BiquadCoeffs& coeffs = currentCoeffs_[band];
@@ -270,15 +270,25 @@ void Equalizer::process(float* buffer, int blockSize) {
         BiquadState& state = states_[band];
 
         for (int i = 0; i < blockSize; ++i) {
-            float sample = processBiquadSample(buffer[i], coeffs, state);
+            buffer[i] = processBiquadSample(buffer[i], coeffs, state);
+        }
+    }
 
-            // Per-band limiter (protección contra overflow inter-banda)
-            const float absSample = std::fabs(sample);
-            if (absSample > kPerBandCeiling) {
-                sample *= kPerBandCeiling / absSample;
-            }
-
-            buffer[i] = sample;
+    // ─── 4. Post-EQ limiter (una sola vez después de todas las bandas) ──
+    // En vez de limitar per-band (que causa distorsión masiva con ganancias
+    // altas como Severe/Profound), limitamos UNA VEZ al final del EQ.
+    // El MPO downstream es la protección final, pero este soft-clip previene
+    // que la señal post-EQ sea absurdamente alta (>1.0) antes del WDRC.
+    //
+    // Ceiling de 0.95 (-0.4 dBFS): permite que la señal amplificada pase
+    // con dinámica completa. El WDRC y MPO se encargan de la protección.
+    // Con ganancias de 20-24 dB (Severe/Profound), la señal puede llegar
+    // a 10-16× su valor original. Sin este limiter, podría exceder ±10.0.
+    static constexpr float kPostEqCeiling = 0.95f;
+    for (int i = 0; i < blockSize; ++i) {
+        const float absSample = std::fabs(buffer[i]);
+        if (absSample > kPostEqCeiling) {
+            buffer[i] *= kPostEqCeiling / absSample;
         }
     }
 }
