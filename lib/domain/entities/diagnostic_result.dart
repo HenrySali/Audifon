@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:equatable/equatable.dart';
 
 /// Resultado completo del diagnóstico auditivo de 5 pasos.
@@ -108,27 +110,68 @@ class DiagnosticResult extends Equatable {
     return 'Profunda';
   }
 
-  /// Determina el preset recomendado basado en el promedio de umbrales.
+  /// Determina el preset recomendado basado en el patrón de pérdida.
+  ///
+  /// Analiza:
+  ///  - Promedio de bajas (500, 1000 Hz)
+  ///  - Promedio de altas (2000, 3000, 4000, 8000 Hz)
+  ///  - Diferencia (sloping vs flat)
+  ///  - Severidad
+  ///
+  /// Mapea a uno de los 10 presets disponibles.
   static String getRecommendedPreset(
     Map<int, double> leftThresholds,
     Map<int, double> rightThresholds,
   ) {
-    // Promedio de umbrales del peor oído
-    final leftAvg = leftThresholds.values.isEmpty
-        ? 0.0
-        : leftThresholds.values.reduce((a, b) => a + b) /
-            leftThresholds.values.length;
-    final rightAvg = rightThresholds.values.isEmpty
-        ? 0.0
-        : rightThresholds.values.reduce((a, b) => a + b) /
-            rightThresholds.values.length;
-    final worstAvg = leftAvg > rightAvg ? leftAvg : rightAvg;
+    // Tomamos el peor oído por banda como referencia conservadora.
+    final worst = <int, double>{};
+    for (final freq in testFrequencies) {
+      final l = leftThresholds[freq] ?? 0;
+      final r = rightThresholds[freq] ?? 0;
+      worst[freq] = l > r ? l : r;
+    }
 
-    if (worstAvg <= 25) return 'Normal';
-    if (worstAvg <= 40) return 'Mild';
-    if (worstAvg <= 55) return 'Moderate';
-    if (worstAvg <= 70) return 'Severe';
-    return 'Profound';
+    // Promedios por rango.
+    final lowFreqs = [500, 1000];
+    final highFreqs = [2000, 3000, 4000, 8000];
+    double lowAvg = 0;
+    int lowCount = 0;
+    double highAvg = 0;
+    int highCount = 0;
+    for (final f in lowFreqs) {
+      if (worst.containsKey(f)) {
+        lowAvg += worst[f]!;
+        lowCount++;
+      }
+    }
+    for (final f in highFreqs) {
+      if (worst.containsKey(f)) {
+        highAvg += worst[f]!;
+        highCount++;
+      }
+    }
+    if (lowCount > 0) lowAvg /= lowCount;
+    if (highCount > 0) highAvg /= highCount;
+
+    final overallAvg = (lowAvg + highAvg) / 2;
+    final slopeDb = highAvg - lowAvg; // positivo = pérdida en agudos
+    final isSloping = slopeDb >= 10;
+
+    // Audición normal — sin amplificación necesaria.
+    if (overallAvg <= 20) return 'Normal';
+
+    // Pérdida leve.
+    if (overallAvg <= 35) {
+      return isSloping ? 'Mild High' : 'Mild Flat';
+    }
+
+    // Pérdida moderada.
+    if (overallAvg <= 55) {
+      return isSloping ? 'Moderate High' : 'Moderate Flat';
+    }
+
+    // Pérdida moderada-severa o severa: usar preset más fuerte disponible.
+    return 'Moderate+';
   }
 
   /// Determina si debe visitar un audiólogo.
@@ -143,6 +186,85 @@ class DiagnosticResult extends Equatable {
       if (threshold > 40) return true;
     }
     return false;
+  }
+
+  /// Construye un mapa con los umbrales del peor oído por banda audiométrica
+  /// estándar (250 a 8000 Hz). Si no se midió cierta frecuencia se completa
+  /// por interpolación / extrapolación lineal para uso con NAL-NL2.
+  ///
+  /// Las 12 frecuencias finales son las del audiograma estándar:
+  /// 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+  static Map<int, double> buildAudiogramThresholds(
+    Map<int, double> leftThresholds,
+    Map<int, double> rightThresholds,
+  ) {
+    // Tomar el peor oído por frecuencia medida.
+    final worst = <int, double>{};
+    for (final f in testFrequencies) {
+      final l = leftThresholds[f] ?? 0;
+      final r = rightThresholds[f] ?? 0;
+      worst[f] = l > r ? l : r;
+    }
+    if (worst.isEmpty) return const {};
+
+    // Frecuencias estándar del audiograma de la app.
+    const standardFrequencies = [
+      250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000,
+    ];
+
+    final sortedMeasured = worst.keys.toList()..sort();
+    final out = <int, double>{};
+
+    for (final f in standardFrequencies) {
+      if (worst.containsKey(f)) {
+        out[f] = worst[f]!;
+        continue;
+      }
+      // Interpolar / extrapolar log-frecuencia.
+      if (f <= sortedMeasured.first) {
+        // Por debajo del mínimo medido — usar el mínimo (250 Hz suele ser
+        // similar a 500 Hz en presbiacusia).
+        out[f] = worst[sortedMeasured.first]!;
+        continue;
+      }
+      if (f >= sortedMeasured.last) {
+        out[f] = worst[sortedMeasured.last]!;
+        continue;
+      }
+      // Buscar bracket.
+      for (int i = 0; i < sortedMeasured.length - 1; i++) {
+        final a = sortedMeasured[i];
+        final b = sortedMeasured[i + 1];
+        if (f >= a && f <= b) {
+          // Interpolar lineal en log-frecuencia.
+          final logA = math.log(a.toDouble()) / math.ln10;
+          final logB = math.log(b.toDouble()) / math.ln10;
+          final logF = math.log(f.toDouble()) / math.ln10;
+          final ratio = (logF - logA) / (logB - logA);
+          out[f] = worst[a]! + ratio * (worst[b]! - worst[a]!);
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Sugerencia de volumen inicial en dB respecto del default (0 dB).
+  /// Más pérdida → arrancar con un poco más de volumen.
+  static double suggestInitialVolumeDb(
+    Map<int, double> leftThresholds,
+    Map<int, double> rightThresholds,
+  ) {
+    if (leftThresholds.isEmpty && rightThresholds.isEmpty) return 0;
+    final allValues = [
+      ...leftThresholds.values,
+      ...rightThresholds.values,
+    ];
+    final avg = allValues.reduce((a, b) => a + b) / allValues.length;
+    if (avg <= 20) return 0;
+    if (avg <= 35) return 2;
+    if (avg <= 55) return 4;
+    return 6;
   }
 
   /// Genera un resumen textual del resultado.

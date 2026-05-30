@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 
 import '../../domain/entities/audiogram.dart';
 import '../bloc/amplification_bloc.dart';
@@ -33,10 +34,42 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
   /// Indica si hubo cambios sin guardar.
   bool _hasChanges = false;
 
+  /// Última prescripción guardada por el diagnóstico (si existe).
+  /// Indexada por frecuencia EQ (Hz) → ganancia en dB.
+  Map<int, double> _prescribedGains = {};
+  String? _prescribedPresetName;
+  DateTime? _prescribedTimestamp;
+
   @override
   void initState() {
     super.initState();
     _initializeThresholds();
+    _loadPrescription();
+  }
+
+  /// Carga la última prescripción guardada por el diagnóstico (si existe).
+  Future<void> _loadPrescription() async {
+    try {
+      final box = await Hive.openBox<dynamic>('last_prescription');
+      final raw = box.get('prescribed_gains');
+      if (raw is List) {
+        // Las gains están en orden de las 12 bandas estándar.
+        final gains = raw.map((e) => (e as num).toDouble()).toList();
+        if (gains.length == Audiogram.standardFrequencies.length) {
+          final m = <int, double>{};
+          for (int i = 0; i < gains.length; i++) {
+            m[Audiogram.standardFrequencies[i]] = gains[i];
+          }
+          _prescribedGains = m;
+        }
+      }
+      _prescribedPresetName = box.get('preset_name') as String?;
+      final ts = box.get('timestamp') as String?;
+      if (ts != null) {
+        _prescribedTimestamp = DateTime.tryParse(ts);
+      }
+      if (mounted) setState(() {});
+    } catch (_) {}
   }
 
   /// Inicializa los umbrales desde el audiograma actual o los valores por defecto.
@@ -178,6 +211,9 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
             ),
           ),
 
+          // Banner del último diagnóstico (si existe).
+          if (_prescribedGains.isNotEmpty) _buildDiagnosticBanner(),
+
           // Audiogram editor con sliders verticales
           Expanded(
             child: _buildAudiogramEditor(),
@@ -237,27 +273,47 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
     final threshold = _thresholds[freq] ?? 0.0;
     // Color basado en severidad de la pérdida
     final color = _getThresholdColor(threshold);
+    final prescribed = _prescribedGains[freq];
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Column(
         children: [
-          // Valor actual
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              '${threshold.round()}',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: color,
+          // Valor actual + ganancia prescrita
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${threshold.round()}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          // Ganancia prescrita (línea cian, si hay diagnóstico).
+          if (prescribed != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '+${prescribed.round()}',
+                style: const TextStyle(
+                  fontSize: 9,
+                  color: Color(0xFF00e5ff),
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-          ),
 
           const SizedBox(height: 4),
 
@@ -308,6 +364,91 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
               fontSize: 8,
               color: Colors.grey[600],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Banner que aparece cuando hay un diagnóstico previo guardado.
+  /// Muestra la fecha, el preset recomendado y un mini gráfico de las
+  /// ganancias prescritas.
+  Widget _buildDiagnosticBanner() {
+    final maxGain = _prescribedGains.values.isEmpty
+        ? 1.0
+        : _prescribedGains.values
+            .reduce((a, b) => a > b ? a : b)
+            .clamp(1.0, 50.0);
+    final ts = _prescribedTimestamp;
+    final tsStr = ts != null
+        ? '${ts.day.toString().padLeft(2, "0")}/${ts.month.toString().padLeft(2, "0")}/${ts.year}'
+        : '—';
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0f3460).withOpacity(0.6),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.cyan.withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.medical_information,
+                color: Color(0xFF00e5ff), size: 16),
+            const SizedBox(width: 6),
+            const Expanded(
+              child: Text(
+                'Última prescripción del diagnóstico',
+                style: TextStyle(
+                  color: Color(0xFF00e5ff),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              tsStr,
+              style: const TextStyle(color: Colors.white54, fontSize: 10),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          if (_prescribedPresetName != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'Preset: ${_prescribedPresetName!}',
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+              ),
+            ),
+          // Mini-gráfico de las ganancias prescritas (overlay).
+          SizedBox(
+            height: 30,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: Audiogram.standardFrequencies.map((freq) {
+                final g = _prescribedGains[freq] ?? 0.0;
+                final h = (g / maxGain * 26).clamp(2.0, 26.0);
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1),
+                    child: Container(
+                      height: h,
+                      decoration: BoxDecoration(
+                        color: Colors.cyan.withOpacity(g > 0 ? 0.85 : 0.2),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Las cifras +X dB sobre cada barra muestran la ganancia prescrita por frecuencia.',
+            style: TextStyle(color: Colors.white54, fontSize: 9),
           ),
         ],
       ),
