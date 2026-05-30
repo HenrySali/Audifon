@@ -1025,6 +1025,35 @@ class _ProcessingReport extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
+              // Botón DSP Pipeline Test
+              GestureDetector(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => BlocProvider.value(
+                        value: context.read<AmplificationBloc>(),
+                        child: const DspTestScreen(),
+                      ),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.cyan.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.science, color: Colors.cyan, size: 14),
+                      SizedBox(width: 4),
+                      Text('DSP Test', style: TextStyle(color: Colors.cyan, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
               GestureDetector(
                 onTap: () => _copyReport(context, inputSpl, outputSpl,
                     estimatedGain, volumeDb, wdrcState, mpoActive, nrLevel, nrLabels),
