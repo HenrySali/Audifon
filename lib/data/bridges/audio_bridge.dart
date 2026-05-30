@@ -69,6 +69,12 @@ abstract class AudioBridge {
   /// [level] valores: 0=off, 1=bajo, 2=medio, 3=alto.
   Future<void> updateNrLevel(int level);
 
+  /// Habilita/deshabilita el Transient Noise Reducer (TNR).
+  ///
+  /// Cuando está habilitado, atenúa automáticamente impulsos abruptos como
+  /// timbre del subte, puertas que se cierran, bocinas. No afecta la voz.
+  Future<void> updateTnrEnabled(bool enabled);
+
   /// Stream del nivel de entrada del micrófono en dB SPL.
   ///
   /// Emitido aproximadamente 10 veces por segundo (~10 Hz).

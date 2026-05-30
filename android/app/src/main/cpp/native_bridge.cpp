@@ -510,4 +510,19 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
     return result;
 }
 
+/// Habilita/deshabilita el Transient Noise Reducer (TNR).
+/// El TNR atenúa impulsos abruptos como timbre del subte, puertas, bocinas.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetTnrEnabled(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setTnrEnabled(enabled == JNI_TRUE);
+}
+
 } // extern "C"

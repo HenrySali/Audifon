@@ -1082,6 +1082,9 @@ class _ProcessingReport extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
+              // Botón TNR (Transient Noise Reducer) — toggle on/off
+              _TnrToggleButton(),
+              const SizedBox(width: 6),
               GestureDetector(
                 onTap: () => _copyReport(context, inputSpl, outputSpl,
                     estimatedGain, volumeDb, wdrcState, mpoActive, nrLevel, nrLabels),
@@ -1548,6 +1551,87 @@ class _EqPresetIndicator extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Botón toggle para activar/desactivar el Transient Noise Reducer (TNR).
+///
+/// El TNR atenúa automáticamente impulsos abruptos como timbre del subte,
+/// puertas, bocinas, sin afectar la voz normal.
+class _TnrToggleButton extends StatefulWidget {
+  @override
+  State<_TnrToggleButton> createState() => _TnrToggleButtonState();
+}
+
+class _TnrToggleButtonState extends State<_TnrToggleButton> {
+  bool _enabled = true; // Activado por default
+
+  @override
+  void initState() {
+    super.initState();
+    // Asegurar que el estado nativo coincida con el inicial
+    _applyToNative(_enabled);
+  }
+
+  Future<void> _applyToNative(bool enabled) async {
+    try {
+      const channel = MethodChannel('com.psk.hearing_aid/audio');
+      await channel.invokeMethod('updateTnrEnabled', {'enabled': enabled});
+    } catch (_) {
+      // Ignorar errores si el engine no está activo
+    }
+  }
+
+  void _toggle() {
+    setState(() => _enabled = !_enabled);
+    _applyToNative(_enabled);
+    final msg = _enabled
+        ? '🛡️ TNR activado — atenúa impulsos (timbre, puertas)'
+        : '🔊 TNR desactivado — escucha sin filtrar';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 2),
+        backgroundColor: _enabled ? Colors.cyan.shade900 : Colors.grey.shade800,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _enabled ? Colors.cyan : Colors.white38;
+    final bgColor = _enabled
+        ? Colors.cyan.withOpacity(0.15)
+        : Colors.white.withOpacity(0.05);
+    return GestureDetector(
+      onTap: _toggle,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(6),
+          border: _enabled
+              ? Border.all(color: Colors.cyan.withOpacity(0.4), width: 0.5)
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _enabled ? Icons.shield : Icons.shield_outlined,
+              color: color,
+              size: 14,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              _enabled ? 'TNR ON' : 'TNR OFF',
+              style: TextStyle(color: color, fontSize: 11),
+            ),
           ],
         ),
       ),

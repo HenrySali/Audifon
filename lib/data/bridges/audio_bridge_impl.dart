@@ -117,6 +117,13 @@ class AudioBridgeImpl implements AudioBridge {
   }
 
   @override
+  Future<void> updateTnrEnabled(bool enabled) async {
+    await _methodChannel.invokeMethod<void>('updateTnrEnabled', {
+      'enabled': enabled,
+    });
+  }
+
+  @override
   Stream<double> get inputLevelStream {
     _inputLevelStreamCache ??= _levelEventChannel
         .receiveBroadcastStream()

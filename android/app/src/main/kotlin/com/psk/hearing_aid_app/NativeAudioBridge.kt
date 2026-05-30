@@ -300,6 +300,10 @@ class NativeAudioBridge {
 
     external fun nativeGetDspStageMetrics(): FloatArray
 
+    // ─── Transient Noise Reducer (TNR) ──────────────────────────────────
+
+    external fun nativeSetTnrEnabled(enabled: Boolean)
+
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.

@@ -165,6 +165,12 @@ class AudioMethodChannel(
                 "getCurrentSpectrum" -> { val data = nativeBridge.nativeGetCurrentSpectrum(); result.success(data) }
                 // DSP Stage Metrics (para diagnóstico del pipeline)
                 "getDspStageMetrics" -> { val metrics = nativeBridge.getDspStageMetrics(); result.success(metrics) }
+                // Transient Noise Reducer (TNR)
+                "updateTnrEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: true
+                    nativeBridge.nativeSetTnrEnabled(enabled)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
