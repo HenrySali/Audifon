@@ -525,4 +525,34 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetTnrEnabled(
     g_engine->setTnrEnabled(enabled == JNI_TRUE);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Smart Scene Engine — Fase 1
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Devuelve el último SceneSnapshot del Smart Scene Engine como ByteArray
+/// crudo (memcpy del struct POD). Dart parsea con `ByteData` siguiendo el
+/// layout definido en `scene_types.h` y `lib/scene/scene_snapshot.dart`.
+///
+/// @return ByteArray con sizeof(smart_scene::SceneSnapshot) bytes,
+///         o array vacío si el engine no está activo.
+JNIEXPORT jbyteArray JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetSceneSnapshot(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return env->NewByteArray(0);
+    }
+
+    smart_scene::SceneSnapshot snap = g_engine->getSceneSnapshot();
+    const jint size = static_cast<jint>(sizeof(smart_scene::SceneSnapshot));
+
+    jbyteArray result = env->NewByteArray(size);
+    if (result != nullptr) {
+        env->SetByteArrayRegion(result, 0, size,
+                                reinterpret_cast<const jbyte*>(&snap));
+    }
+    return result;
+}
+
 } // extern "C"

@@ -171,6 +171,11 @@ class AudioMethodChannel(
                     nativeBridge.nativeSetTnrEnabled(enabled)
                     result.success(null)
                 }
+                // Smart Scene Engine (Fase 1)
+                "getSceneSnapshot" -> {
+                    val data = nativeBridge.nativeGetSceneSnapshot()
+                    result.success(data)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

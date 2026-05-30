@@ -11,6 +11,7 @@
 
 #include <oboe/Oboe.h>
 #include "dsp_pipeline.h"
+#include "smart_scene/scene_analyzer.h"
 
 /// Configuración del motor de audio (updated for Oboe).
 struct AudioEngineConfig {
@@ -64,6 +65,10 @@ public:
     void setAutoClassifyEnabled(bool enabled);
     int getCurrentEnvironmentClass() const;
 
+    // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
+    /// Devuelve el snapshot crudo del Smart Scene Engine (lock-free seqlock).
+    smart_scene::SceneSnapshot getSceneSnapshot() const { return sceneAnalyzer_.getSnapshot(); }
+
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
     void stopSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(false); }
@@ -105,6 +110,9 @@ private:
 
     // ─── Pipeline DSP ───────────────────────────────────────────────────
     DspPipeline pipeline_;
+
+    // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
+    smart_scene::SceneAnalyzer sceneAnalyzer_;
 
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;

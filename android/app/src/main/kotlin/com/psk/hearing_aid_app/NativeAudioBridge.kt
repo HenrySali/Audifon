@@ -304,6 +304,15 @@ class NativeAudioBridge {
 
     external fun nativeSetTnrEnabled(enabled: Boolean)
 
+    // ─── Smart Scene Engine (Fase 1) ────────────────────────────────────
+
+    /**
+     * Retorna el último snapshot del Smart Scene Engine (~10 Hz).
+     * Layout binario definido en `cpp/smart_scene/scene_types.h`.
+     * Dart parsea con `SceneSnapshot.fromBytes`.
+     */
+    external fun nativeGetSceneSnapshot(): ByteArray
+
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.

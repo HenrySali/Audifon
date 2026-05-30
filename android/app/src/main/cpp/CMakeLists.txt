@@ -33,6 +33,11 @@ add_library(
     environment_classifier.cpp
     # Analizador de espectro (FFT 128-point Cooley-Tukey)
     spectrum_analyzer.cpp
+    # Smart Scene Engine (Fase 1) — análisis espectral + VAD pitch-based
+    smart_scene/spectral_features.cpp
+    smart_scene/vad_detector.cpp
+    smart_scene/noise_profile.cpp
+    smart_scene/scene_analyzer.cpp
 )
 
 # Enlazar con Oboe y librerías del sistema Android
