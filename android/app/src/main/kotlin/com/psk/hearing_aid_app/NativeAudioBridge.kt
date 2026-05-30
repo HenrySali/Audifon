@@ -305,8 +305,7 @@ class NativeAudioBridge {
      * Útil para la pantalla de diagnóstico DSP.
      */
     fun getDspStageMetrics(): Map<String, Any>? {
-        if (!isRunning) return null
-        val data = nativeGetDspStageMetrics()
+        val data = try { nativeGetDspStageMetrics() } catch (_: Exception) { return null }
         if (data.isEmpty()) return null
         val regions = arrayOf("expansion", "linear", "compression")
         return mapOf(

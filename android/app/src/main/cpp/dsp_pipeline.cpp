@@ -192,9 +192,9 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         float peak = 0.0f;
         int clips = 0;
         for (int i = 0; i < blockSize; ++i) {
-            float abs = std::fabs(buffer[i]);
-            if (abs > peak) peak = abs;
-            if (abs >= 1.0f) clips++;
+            float absSample = std::fabs(buffer[i]);
+            if (absSample > peak) peak = absSample;
+            if (absSample >= 1.0f) clips++;
         }
         lastOutputLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
         lastPeakSample_.store(peak, std::memory_order_relaxed);
