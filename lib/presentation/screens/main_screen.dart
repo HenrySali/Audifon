@@ -16,6 +16,7 @@ import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
 import 'spectrum_analyzer_screen.dart';
+import 'technical_service_screen.dart';
 
 /// Pantalla principal de amplificación del PSK Mobile Hearing Aid.
 ///
@@ -208,6 +209,22 @@ class _StatusBar extends StatelessWidget {
                               value: context.read<AmplificationBloc>(),
                               child: const DspTestScreen(),
                             ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Botón de Servicio Técnico (calibración, info del sistema)
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.build_circle, color: Colors.white70, size: 21),
+                      tooltip: 'Servicio Técnico',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const TechnicalServiceScreen(),
                           ),
                         );
                       },

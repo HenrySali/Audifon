@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../../data/services/headphone_calibrator.dart';
 import '../../../domain/entities/diagnostic_result.dart';
 import 'calibration_step.dart';
 import 'step1_questionnaire.dart';
@@ -52,12 +51,12 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
   }
 
   Future<void> _checkCalibrationStatus() async {
-    final calibrator = HeadphoneCalibrator();
-    final isCalibrated = await calibrator.isCalibrated();
-    await calibrator.dispose();
+    // La calibración fue movida a "Servicio Técnico" — no es parte
+    // del flujo de diagnóstico médico del paciente.
+    // Siempre saltamos la calibración aquí.
     if (mounted) {
       setState(() {
-        _skipCalibration = isCalibrated;
+        _skipCalibration = true;
         _calibrationChecked = true;
       });
     }
