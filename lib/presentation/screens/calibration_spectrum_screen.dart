@@ -191,7 +191,7 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: !_running,
-      onPopInvokedWithResult: (didPop, result) async {
+      onPopInvoked: (didPop) async {
         if (didPop) return;
         final confirm = await showDialog<bool>(
           context: context,
