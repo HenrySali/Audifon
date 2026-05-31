@@ -176,6 +176,40 @@ class AudioMethodChannel(
                     val data = nativeBridge.nativeGetSceneSnapshot()
                     result.success(data)
                 }
+                // Calibration Spectrum Validator (Fase 2)
+                "configureToneAnalyzer" -> {
+                    val sr = call.argument<Int>("sampleRate") ?: 48000
+                    val fft = call.argument<Int>("fftSize") ?: 4096
+                    val wt = call.argument<Int>("windowType") ?: 0
+                    val hc = call.argument<Int>("harmonicsCount") ?: 4
+                    val off = (call.argument<Double>("dbfsToDbsplOffset") ?: 76.0).toFloat()
+                    val ok = nativeBridge.nativeConfigureToneAnalyzer(sr, fft, wt, hc, off)
+                    result.success(ok)
+                }
+                "setToneAnalyzerActive" -> {
+                    val active = call.argument<Boolean>("active") ?: false
+                    nativeBridge.nativeSetToneAnalyzerActive(active)
+                    result.success(null)
+                }
+                "setToneExpectedFrequency" -> {
+                    val hz = (call.argument<Double>("freqHz") ?: 1000.0).toFloat()
+                    nativeBridge.nativeSetToneExpectedFrequency(hz)
+                    result.success(null)
+                }
+                "setToneNoiseFloor" -> {
+                    val lin = (call.argument<Double>("amplitudeLin") ?: 0.0).toFloat()
+                    val dbfs = (call.argument<Double>("dbfs") ?: -120.0).toFloat()
+                    nativeBridge.nativeSetToneNoiseFloor(lin, dbfs)
+                    result.success(null)
+                }
+                "resetToneAnalyzer" -> {
+                    nativeBridge.nativeResetToneAnalyzer()
+                    result.success(null)
+                }
+                "getToneSnapshot" -> {
+                    val data = nativeBridge.nativeGetToneSnapshot()
+                    result.success(data)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

@@ -38,6 +38,11 @@ add_library(
     smart_scene/vad_detector.cpp
     smart_scene/noise_profile.cpp
     smart_scene/scene_analyzer.cpp
+    # Calibration Spectrum Validator (Fase 1+2) — motor matemático autocontenido
+    calibration_spectrum/fft_engine.cpp
+    calibration_spectrum/peak_detector.cpp
+    calibration_spectrum/thd_calculator.cpp
+    calibration_spectrum/tone_analyzer.cpp
 )
 
 # Enlazar con Oboe y librerías del sistema Android

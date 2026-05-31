@@ -313,6 +313,39 @@ class NativeAudioBridge {
      */
     external fun nativeGetSceneSnapshot(): ByteArray
 
+    // ─── Calibration Spectrum Validator (Fase 2) ────────────────────────
+
+    /**
+     * Configura el ToneAnalyzer para una sesión de validación.
+     * @return true si configuró correctamente.
+     */
+    external fun nativeConfigureToneAnalyzer(
+        sampleRate: Int,
+        fftSize: Int,
+        windowType: Int,        // 0=Hann, 1=BlackmanHarris
+        harmonicsCount: Int,    // 4 o 7
+        dbfsToDbsplOffset: Float
+    ): Boolean
+
+    /** Activa o desactiva el procesamiento del ToneAnalyzer. */
+    external fun nativeSetToneAnalyzerActive(active: Boolean)
+
+    /** Establece la frecuencia esperada del tono actual (Hz). */
+    external fun nativeSetToneExpectedFrequency(freqHz: Float)
+
+    /** Establece el piso de ruido medido pre-secuencia. */
+    external fun nativeSetToneNoiseFloor(amplitudeLin: Float, dbfs: Float)
+
+    /** Resetea el ToneAnalyzer entre tonos. */
+    external fun nativeResetToneAnalyzer()
+
+    /**
+     * Retorna el último ToneSnapshot serializado (84 bytes, little-endian).
+     * Layout documentado en `cpp/native_bridge.cpp::serializeToneSnapshot`.
+     * Dart parsea con `ToneSnapshot.fromBytes`.
+     */
+    external fun nativeGetToneSnapshot(): ByteArray
+
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.

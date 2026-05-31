@@ -387,6 +387,10 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
     sceneAnalyzer_.process(inPtr, numFrames);
 
+    // ─── Calibration Spectrum Validator (Fase 2, read-only on input) ─────
+    // Sólo procesa si el técnico activó una secuencia de validación.
+    toneAnalyzer_.process(inPtr, numFrames);
+
     // ─── Zero any remaining output frames beyond what we processed ───────
     if (numOutputFrames > numFrames) {
         std::memset(outPtr + numFrames, 0, (numOutputFrames - numFrames) * sizeof(float));

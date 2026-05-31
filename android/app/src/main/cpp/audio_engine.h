@@ -12,6 +12,7 @@
 #include <oboe/Oboe.h>
 #include "dsp_pipeline.h"
 #include "smart_scene/scene_analyzer.h"
+#include "calibration_spectrum/tone_analyzer.h"
 
 /// Configuración del motor de audio (updated for Oboe).
 struct AudioEngineConfig {
@@ -69,6 +70,19 @@ public:
     /// Devuelve el snapshot crudo del Smart Scene Engine (lock-free seqlock).
     smart_scene::SceneSnapshot getSceneSnapshot() const { return sceneAnalyzer_.getSnapshot(); }
 
+    // ─── Calibration Spectrum Validator (Fase 2) ─────────────────────────
+    /// Acceso directo al ToneAnalyzer del validador de calibración.
+    /// El analyzer está siempre inicializado pero solo procesa cuando active=true.
+    cal_spectrum::ToneAnalyzer& getToneAnalyzer() { return toneAnalyzer_; }
+    cal_spectrum::ToneSnapshot getToneSnapshot() const { return toneAnalyzer_.getSnapshot(); }
+    void setToneAnalyzerActive(bool active) { toneAnalyzer_.setActive(active); }
+    void setToneAnalyzerExpectedFreq(float hz) { toneAnalyzer_.setExpectedFrequency(hz); }
+    void setToneAnalyzerNoiseFloor(float lin, float dbfs) { toneAnalyzer_.setNoiseFloor(lin, dbfs); }
+    void resetToneAnalyzer() { toneAnalyzer_.reset(); }
+    bool configureToneAnalyzer(const cal_spectrum::ToneAnalyzerConfig& cfg) {
+        return toneAnalyzer_.configure(cfg);
+    }
+
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
     void stopSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(false); }
@@ -113,6 +127,11 @@ private:
 
     // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
     smart_scene::SceneAnalyzer sceneAnalyzer_;
+
+    // ─── Calibration Spectrum Validator (Fase 2) ─────────────────────────
+    /// ToneAnalyzer integrado al callback de audio. Siempre presente,
+    /// sólo activo cuando el técnico inicia una secuencia de validación.
+    cal_spectrum::ToneAnalyzer toneAnalyzer_;
 
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;

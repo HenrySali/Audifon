@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "audio_engine.h"
+#include "calibration_spectrum/tone_types.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logging
@@ -551,6 +552,182 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetSceneSnapshot(
     if (result != nullptr) {
         env->SetByteArrayRegion(result, 0, size,
                                 reinterpret_cast<const jbyte*>(&snap));
+    }
+    return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Calibration Spectrum Validator — Fase 2
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+/// Serializa un ToneSnapshot a un buffer plano de 92 bytes (sin padding del compilador).
+/// Layout:
+///   [0..7]   timestamp_us (uint64)
+///   [8..11]  sample_rate_hz (float)
+///   [12..13] fft_size (uint16)
+///   [14]     window_type (uint8)
+///   [15]     reserved0 (uint8)
+///   [16..19] expected_freq_hz (float)
+///   [20..23] peak_freq_hz (float)
+///   [24..27] peak_magnitude_dbfs (float)
+///   [28..31] peak_magnitude_dbspl (float)
+///   [32..35] noise_floor_dbfs (float)
+///   [36..39] snr_db (float)
+///   [40..43] thd_percent (float)
+///   [44..75] harmonics_dbfs[8] (8 × float = 32 bytes)
+///   [76]     harmonics_count (uint8)
+///   [77..79] reserved1 (3 bytes)
+///   [80]     verdict (uint8)
+///   [81]     failure_mask (uint8)
+///   [82..83] reserved2 (2 bytes)
+constexpr int kToneSnapshotWireSize = 84;
+
+void writeUInt64Le(uint8_t* dst, uint64_t v) {
+    for (int i = 0; i < 8; ++i) dst[i] = static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
+}
+void writeFloatLe(uint8_t* dst, float v) {
+    uint32_t bits;
+    std::memcpy(&bits, &v, sizeof(float));
+    for (int i = 0; i < 4; ++i) dst[i] = static_cast<uint8_t>((bits >> (8 * i)) & 0xFF);
+}
+void writeUInt16Le(uint8_t* dst, uint16_t v) {
+    dst[0] = static_cast<uint8_t>(v & 0xFF);
+    dst[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+}
+
+void serializeToneSnapshot(const cal_spectrum::ToneSnapshot& s, uint8_t* out) {
+    std::memset(out, 0, kToneSnapshotWireSize);
+    writeUInt64Le(out + 0, s.timestamp_us);
+    writeFloatLe (out + 8, s.sample_rate_hz);
+    writeUInt16Le(out + 12, s.fft_size);
+    out[14] = s.window_type;
+    out[15] = 0;
+    writeFloatLe(out + 16, s.expected_freq_hz);
+    writeFloatLe(out + 20, s.peak_freq_hz);
+    writeFloatLe(out + 24, s.peak_magnitude_dbfs);
+    writeFloatLe(out + 28, s.peak_magnitude_dbspl);
+    writeFloatLe(out + 32, s.noise_floor_dbfs);
+    writeFloatLe(out + 36, s.snr_db);
+    writeFloatLe(out + 40, s.thd_percent);
+    for (int i = 0; i < 8; ++i) {
+        writeFloatLe(out + 44 + i * 4, s.harmonics_dbfs[i]);
+    }
+    out[76] = s.harmonics_count;
+    out[80] = s.verdict;
+    out[81] = s.failure_mask;
+}
+
+}  // namespace anónimo
+
+/// Configura el ToneAnalyzer para una sesión de validación.
+/// @param sampleRate Sample rate del audio (16000 o 48000).
+/// @param fftSize Tamaño de FFT (1024, 4096, 8192).
+/// @param windowType 0=Hann, 1=BlackmanHarris.
+/// @param harmonicsCount 4 (clínico H2-H5) o 7 (premium H2-H8).
+/// @param dbfsToDbsplOffset Offset dBFS → dB SPL (76 WAV, 120 mic real).
+/// @return true si configuró correctamente.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeConfigureToneAnalyzer(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jint sampleRate,
+        jint fftSize,
+        jint windowType,
+        jint harmonicsCount,
+        jfloat dbfsToDbsplOffset) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+
+    cal_spectrum::ToneAnalyzerConfig cfg;
+    cfg.sample_rate_hz       = static_cast<float>(sampleRate);
+    cfg.fft_size             = fftSize;
+    cfg.window               = (windowType == 1) ? cal_spectrum::WindowType::BlackmanHarris
+                                                  : cal_spectrum::WindowType::Hann;
+    cfg.harmonics_count      = harmonicsCount;
+    cfg.dbfs_to_dbspl_offset = dbfsToDbsplOffset;
+
+    bool ok = g_engine->configureToneAnalyzer(cfg);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Activa o desactiva el procesamiento del ToneAnalyzer.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetToneAnalyzerActive(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean active) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setToneAnalyzerActive(active == JNI_TRUE);
+}
+
+/// Establece la frecuencia esperada del tono actual (Hz).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetToneExpectedFrequency(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jfloat freqHz) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setToneAnalyzerExpectedFreq(freqHz);
+}
+
+/// Establece el piso de ruido medido pre-secuencia.
+/// @param amplitudeLin Amplitud lineal RMS (0..1).
+/// @param dbfs Mismo valor expresado en dB FS.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetToneNoiseFloor(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jfloat amplitudeLin,
+        jfloat dbfs) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setToneAnalyzerNoiseFloor(amplitudeLin, dbfs);
+}
+
+/// Resetea el ToneAnalyzer (limpia buffer de acumulación y snapshot).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeResetToneAnalyzer(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->resetToneAnalyzer();
+}
+
+/// Devuelve el último ToneSnapshot serializado (84 bytes, little-endian).
+/// Layout documentado en `serializeToneSnapshot()`.
+JNIEXPORT jbyteArray JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetToneSnapshot(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return env->NewByteArray(0);
+    }
+
+    cal_spectrum::ToneSnapshot snap = g_engine->getToneSnapshot();
+
+    uint8_t buffer[kToneSnapshotWireSize];
+    serializeToneSnapshot(snap, buffer);
+
+    jbyteArray result = env->NewByteArray(kToneSnapshotWireSize);
+    if (result != nullptr) {
+        env->SetByteArrayRegion(result, 0, kToneSnapshotWireSize,
+                                reinterpret_cast<const jbyte*>(buffer));
     }
     return result;
 }
