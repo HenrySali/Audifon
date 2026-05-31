@@ -13,7 +13,7 @@
 class IsoTargets {
   /// Tabla de RETSPL para campo libre frontal (ISO 389-7:2019, Tabla 1).
   /// Frecuencia (Hz) → dB SPL para 0 dB HL.
-  static const Map<double, double> retsplFrontalFreeField = {
+  static const Map<int, double> retsplFrontalFreeField = {
     125: 22.1,
     250: 11.4,
     500: 4.4,
@@ -30,13 +30,13 @@ class IsoTargets {
   /// Calcula el target dB SPL para una frecuencia y nivel HL deseado.
   /// Si la freq no está en la tabla, devuelve null.
   static double? targetDbSplForHL(double freqHz, double levelHL) {
-    final ref = retsplFrontalFreeField[freqHz];
+    final ref = retsplFrontalFreeField[freqHz.toInt()];
     if (ref == null) return null;
     return ref + levelHL;
   }
 
   /// Frecuencias estándar para test biológico de calibración.
-  static const List<double> standardFreqs = [
+  static const List<int> standardFreqs = [
     125,
     250,
     500,
