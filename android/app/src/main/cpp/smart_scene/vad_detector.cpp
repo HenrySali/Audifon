@@ -233,16 +233,19 @@ void VadDetector::process(const float* samples,
         hangoverActive_ = false;
         onsetSustain_  = 0;
     } else if (stationarity_ > kStationarityGate &&
-               midSnrDb_ < kMidSnrGateDb) {
+               midSnrDb_ < kMidSnrGateDb &&
+               !voiceActive_) {
         // Gate 2: ruido continuo dominante (ventilador, AC, motores).
+        // Sólo aplica al ARRANQUE — si ya estamos en voz, no la matamos
+        // por estacionariedad puntual; la histéresis del score lo hará
+        // de forma natural cuando termine el enunciado.
         voiceActive_   = false;
         hangover_      = 0;
         hangoverActive_ = false;
         onsetSustain_  = 0;
-    } else if (nonVocalGateBlock) {
-        // Gate 3 (NUEVO): respiración / roce / viento / fricativa
-        // sostenida. Cualquiera de los tres sub-gates (flatness, ZCR,
-        // tilt) declara la señal "no vocal" en ausencia de pitch real.
+    } else if (nonVocalGateBlock && !voiceActive_) {
+        // Gate 3: respiración / roce / viento / fricativa sostenida.
+        // Idem Gate 2: sólo bloquea ARRANQUE de voz.
         voiceActive_   = false;
         hangover_      = 0;
         hangoverActive_ = false;
@@ -261,12 +264,18 @@ void VadDetector::process(const float* samples,
         }
     } else {
         // Onset: requiere sustain de N frames consecutivos arriba del
-        // threshold high Y voicing sostenido (pitch > 0.35 durante ≥ 5
-        // frames). Sin pitch sostenido no puede ser voz humana.
+        // threshold high. La condición es voicingOk (pitch sostenido)
+        // O voiceLikelyByLrt (evidencia espectral fuerte). Esta segunda
+        // rama cubre voz real saturada por el AGC del celular, donde
+        // el autocorrelograma colapsa a < 0.18 a pesar de que LRT,
+        // midSnr y LTSD son claramente vocales.
         // pitchDensity_ NO se exige aquí — sirve solo como diagnóstico,
         // porque al inicio del primer enunciado el ringbuffer está vacío
         // y bloquearíamos los primeros 200 ms de voz tras el silencio.
-        if (smoothedScore_ > kVoiceThresholdHigh && voicingOk) {
+        const bool voiceLikelyByLrt =
+            (lrtScore_ > 3.0f) && (midSnrDb_ > 6.0f);
+        const bool onsetCondOk = voicingOk || voiceLikelyByLrt;
+        if (smoothedScore_ > kVoiceThresholdHigh && onsetCondOk) {
             ++onsetSustain_;
             if (onsetSustain_ >= kSustainFramesForOnset) {
                 voiceActive_   = true;

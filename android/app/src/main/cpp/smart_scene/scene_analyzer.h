@@ -61,6 +61,11 @@ public:
     /// Configura el offset SPL (cuando cambia la calibración).
     void setSplOffset(float offset);
 
+    /// Acceso de lectura al VadDetector interno (solo para tests offline).
+    /// No usar desde código de producción — el snapshot ya expone los
+    /// indicadores que el resto del sistema necesita.
+    const VadDetector& getVad() const { return vad_; }
+
 private:
     /// Tamaño del FFT — coincide con kSceneFftSize.
     static constexpr int kFftSize = kSceneFftSize;

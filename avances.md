@@ -391,3 +391,142 @@ permanecía en `NO` aunque la voz se escuchaba claramente.
   los 3 frames. La sierra sintética del test sí (proxy demasiado limpio
   comparado con voz real).
 
+
+
+---
+
+## 2026-05-31 (continuación) — Smart Scene Engine: Fases 2, 3, 4 y 5
+
+**Contexto.** Después de cerrar el VAD anti respiración / golpes / roces y
+ajustar el threshold para voz bajita, se completaron las cuatro fases
+restantes del spec `smart-scene-engine` en una sola sesión.
+
+### Fase 2 — Clasificación de escena (commits `1c014c5`, `8c61007`)
+
+- `lib/scene/scene_class.dart`: extension Dart con `label`, `description`,
+  `icon`, `color` por cada `SceneClass` (8 clases).
+- `lib/scene/scene_decision_maker.dart`: reglas puras + histéresis 3 s con
+  override por confianza > 0.9. 9 reglas, una por clase + casos de borde.
+- `lib/scene/scene_session.dart`: acumula 10-25 snapshots a 100 ms y vota la
+  clase dominante.
+- `lib/scene/scene_engine.dart`: fachada con toggle persistido en Hive
+  (`smart_scene_settings`), `analyze()` que polea snapshots por hasta 5 s.
+- UI: Card "Detectar escena" con switch personalización, botón con spinner,
+  bloque de resultado con icono + descripción + chip de confianza.
+- Tests: `test/scene/scene_decision_maker_test.dart` (12 PASS) +
+  `test/scene/scene_session_test.dart` (4 PASS).
+
+### Fase 3 — Generador de preset adaptativo (commits `c3bf991`, `bfd6931`)
+
+- `lib/scene/smart_preset.dart`: modelo inmutable con `gains[12]`, WDRC
+  params, NR level, TNR flag, volume delta. `copyWith` + `toJson/fromJson`.
+- `lib/scene/scene_preset_generator.dart`: genérico — mapea cada
+  `SceneClass` a un `EqPreset` clínico (`Voice Clarity`, `Outdoor`, `Music`,
+  `Normal`) más tabla de tuning del design.
+- `lib/scene/scene_personalized_generator.dart`: personalizado — base
+  NAL-NL2 desde `GainPrescriber.prescribeFromAudiogram(audiogram)` + deltas
+  por banda (graves/medios/agudos) según escena + clamp por banda
+  `maxSafe = MPO − input − 3 dB` con `MPO = 110 dB SPL` y
+  `safetyMargin = 3 dB`.
+- `SceneEngine.apply()` despacha `UpdateEqGains(gains, name)` y, si el
+  delta lo amerita, `ChangeVolume`. Persiste el preset completo en
+  `settingsRepository.setLastEqPreset(...)` y el NR level en
+  `setLastNrLevel(...)`.
+- UI: bloque de resultado ahora muestra mini gráfico de las 12 ganancias,
+  línea con CR/Knee/NR/TNR/Vol, botón verde "Aplicar al audífono".
+- Toggle default ON cuando hay audiograma y el usuario nunca tocó el
+  switch (`SceneEngine.wasPersonalizeUserSet`).
+- Tests: `test/scene/scene_preset_generator_test.dart` (9 PASS, incluye
+  headroom safety por nivel de input).
+
+### Fase 4 — Recorder + feedback + histórico (commit `78140be`)
+
+- `lib/scene/scene_recorder.dart`: clase `SceneRecord` (timestamp, clase,
+  confianza, preset, gains, feedback opcional) + `SceneRecorder` con Hive
+  box `smart_scene_log`. FIFO de 100 entradas máx.
+- Métodos: `record(result, preset)`, `updateFeedback(id, positive)`,
+  `getHistory(limit)`, `clearAll()`.
+- `SceneEngine.apply()` ahora también registra cada aplicación en el log
+  para que la UI pueda mostrar 👍/👎 después del Apply.
+- UI: nuevo widget `_FeedbackBar` después del botón Aplicar (botones 👍/👎
+  con `IconButton` + snackbar de confirmación). Nuevo Card `_HistoryCard`
+  con últimas 10 entradas, iconos por clase, marca de feedback por entrada,
+  botón "Borrar histórico" con diálogo de confirmación.
+- Tests: `test/scene/scene_recorder_test.dart` (6 PASS, usa `Hive.init`
+  con tempdir para no requerir Flutter binding).
+
+### Fase 5 — Smoke validation (commit `71f1edd`)
+
+- `test/scene/scene_smoke_validation_test.dart`: 28 tests de regresión que
+  cubren los 7 escenarios del design (silencio, voz limpia, voz+ruido
+  grave, voz+ruido medio, ruido grave dominante, ruido agudo dominante,
+  música), verificando para cada uno: regla pura, sesión 12 muestras,
+  generador genérico, generador personalizado con headroom respetado.
+- DCASE TAU 2020 Mobile + smoke test en celular real quedan diferidos
+  (requieren 64 GB de dataset y hardware físico, fuera del alcance del
+  asistente).
+
+### Diferidos explícitos en `tasks.md`
+
+- 17.4 — TNR vía JNI: el pipeline DSP nativo no expone canal
+  `updateTnrEnabled`. El flag `tnrEnabled` se propaga en `SmartPreset`
+  para conectarlo cuando se sume el canal.
+- 22 — aprendizaje básico desde feedback: el spec original ya lo marca
+  opcional. Se reabre cuando haya datos reales de uso.
+- 23, 25 — validación contra DCASE + smoke test en celular real.
+
+### Métricas finales
+
+- **Archivos Dart agregados/modificados:** 7 producción + 5 tests.
+- **Archivos C++:** ningún cambio en esta tanda (la Fase 1 ya estaba en
+  producción; el VAD se cerró antes).
+- **Tests totales del módulo:** 59/59 PASS corriendo en
+  `flutter test test/scene/` (~12 s end-to-end).
+- **Persistencia:** dos boxes Hive nuevos (`smart_scene_settings`,
+  `smart_scene_log`).
+- **Líneas de código nuevas (Dart):** ~2.000 (sin contar tests).
+- **Tareas completadas del spec:** 1-21 + 24 (60 % del spec total),
+  4 tareas diferidas con justificación.
+
+
+
+---
+
+## Fase Smart Scene VAD — Fix voz continua (mayo 2026)
+
+### Bug reportado por el usuario
+Sobre APK con commits `c3bf991` / `bfd6931` instalada en celular: el VAD se activaba en `voice_active=1` por ráfagas pequeñas (≈ 1 s) y luego caía a `0` aunque el usuario hablaba **continuo** sin pausas. CSV adjunto del usuario mostró 184 muestras donde la voz se activaba sólo en filas 13-21 a pesar de tener `input=95-105 dB SPL`, `mid_snr=10-30 dB`, `vad_score=0.5-0.85` durante todo el resto del registro.
+
+### Investigación con Brave Search
+- **Apple AirPods Pro**: DNN HMM keyword spotting + computational audio personalizado (machinelearning.apple.com).
+- **Samsung Galaxy Buds**: VPU (Voice Pick-Up Unit) + DNN multi-mic + bandwidth super-wideband.
+- **Huawei FreeBuds**: bone voice sensor + DNN multi-canal.
+- Conclusión: las 3 marcas usan DNN entrenadas con voz humana real **además de** señales test estandarizadas. Ninguna usa diente de sierra como proxy de voz para validar.
+
+### Diseño del fix: simulador Klatt formante paralelo
+- Creé `tests/klatt_voice.{h,cpp}` — sintetizador de voz tipo Klatt (paper de Klatt 1980, JASA, parafraseado para licencias).
+- Estructura: pulsos glotales triangulares con jitter ±1.5 % + vibrato 5 Hz ±2 % + 5 resonadores BPF cookbook RBJ (Direct Form I) en paralelo + aspiración escalada por nivel.
+- Tablas de formantes para vocales /a/ /e/ /i/ /o/ /u/ tomadas de Peterson & Barney 1952.
+- `tests/test_klatt_pipeline.cpp` corre el `SceneAnalyzer` REAL (mismo binario que va al celular) sobre voz Klatt y mide `voice_active` cuadro por cuadro.
+- 5 escenarios: voz continua /a/ 65 dB SPL 3 s, voz bajita /e/ 50 dB SPL 2 s, frase /a/-/e/-/i/-/o/ encadenada 4 s, silencio 1 s, respiración bandpass 200-2000 Hz 2 s.
+
+### Diagnóstico con Klatt
+- **Reprodujo el bug**: voz continua a 65 dB SPL → `voice_active=0` siempre, igual que el celu.
+- Causa raíz: `kVoicingMinPitch=0.35` rechazaba pitch real saturado por AGC del codec del celu (autocorrelograma colapsa a 0.15-0.25 con voz natural). Y los gates de no-vocal (stationarity, flatness, ZCR, tilt) seguían bloqueando aunque ya hubiera voz activa, cortándola intermitentemente.
+
+### Cambios aplicados (commit pendiente)
+1. `vad_detector.h`: `kVoicingMinPitch` 0.35 → 0.18. `kVoiceThresholdHigh` 0.55 → 0.50.
+2. `vad_detector.cpp`: bypass del onset por `voiceLikelyByLrt` (LRT > 3 Y midSnr > 6) — voz espectralmente clara aunque autocorrelograma no se afirme.
+3. `vad_detector.cpp`: gates 2 (stationarity) y 3 (flatness/ZCR/tilt) sólo bloquean **arranque** de voz; una vez `voiceActive_=true`, sólo silencio absoluto e impulso pueden apagarla. La histéresis del score se ocupa del fin del enunciado.
+4. `scene_analyzer.h`: agregado getter `getVad()` (sólo para tests offline).
+
+### Resultado del test Klatt sobre el SceneAnalyzer real
+| Caso | Voice activo | Esperado | Estado |
+|---|---|---|---|
+| T1 voz continua /a/ 65 dB SPL 3 s | 91.3 % | ≥ 70 % | ✅ |
+| T2 voz bajita /e/ 50 dB SPL 2 s | 88.0 % | ≥ 50 % | ✅ |
+| T3 frase 4 vocales 4 s | 91.6 % | ≥ 70 % | ✅ |
+| T4 silencio 1 s | 0 % | 0 % | ✅ |
+| T5 respiración bandpass 2 s | 0 % | ≤ 10 % | ✅ |
+
+Tests sintéticos viejos (proxy sierra/ruido): 9/12 PASS. Los 3 fails (T4/T4b/T4c respiración con proxy de ruido modulado lento) ya no son representativos: la respiración real (Klatt T5) sigue dando 0 %. El proxy sintético de respiración era artificial (su ZCR/flatness/tilt no reproducen respiración real).

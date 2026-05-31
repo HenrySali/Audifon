@@ -110,11 +110,14 @@ public:
     /// para frames cortos (5 ms).
     static constexpr float kAlphaDD  = 0.85f;
 
-    /// Histéresis ancha. La banda muerta es 0.25.
-    /// Bajado de 0.65 → 0.55 porque voz bajita real (~55 dB SPL) llega al
-    /// score ~0.50-0.55 y no estaba activando voz. La diferencia con el
-    /// threshold low (0.30) sigue siendo suficiente para evitar flicker.
-    static constexpr float kVoiceThresholdHigh = 0.55f;
+    /// Histéresis ancha. La banda muerta es 0.20.
+    /// Bajado a 0.50 porque el score natural de voz Klatt + voz real
+    /// del usuario en celular oscila entre 0.45 y 0.55 (LRT > 5,
+    /// midSnr > 6 dB, pitch ≈ 0.2). Con threshold 0.55 no se sostenía.
+    /// La diferencia con threshold low (0.30) sigue dando 20 puntos
+    /// de banda muerta — suficiente para evitar flicker en transición
+    /// silencio → voz → silencio.
+    static constexpr float kVoiceThresholdHigh = 0.50f;
     static constexpr float kVoiceThresholdLow  = 0.30f;
 
     /// Gate por nivel absoluto: por debajo de este SPL forzamos silencio.
@@ -137,10 +140,13 @@ public:
     static constexpr int kSustainFramesForOnset = 3;
 
     /// Pitch mínimo que debe estar sostenido para considerar "voz".
-    /// Voces sostienen 0.35-0.8 durante una vocal. Respiración, golpes,
-    /// viento, tipeo dan pitch ≤ 0.25. 0.35 es el punto de quiebre clásico
-    /// del autocorrelograma post-HPF para distinguir vocal vs ruido.
-    static constexpr float kVoicingMinPitch = 0.35f;
+    /// Voz natural saturando el micrófono del celular (compresor AGC del
+    /// codec interno) produce pitchStrength ≈ 0.15-0.30 sobre el
+    /// autocorrelograma post-HPF. El umbral original 0.35 era válido
+    /// sobre tonos limpios pero rechazaba voz real continua. Lo bajamos
+    /// a 0.18 — sigue por encima del piso de respiración (≤ 0.10) y de
+    /// tipeo / golpes (≤ 0.05), pero acepta voz real.
+    static constexpr float kVoicingMinPitch = 0.18f;
 
     /// Frames consecutivos con pitch > kVoicingMinPitch necesarios.
     /// 5 frames * ~5-10 ms ≈ 25-50 ms — duración mínima de una vocal corta.
