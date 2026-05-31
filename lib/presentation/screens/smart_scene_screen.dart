@@ -1,16 +1,20 @@
-/// Smart Scene Engine — UI mínima de Fase 1.
+/// Smart Scene Engine — UI Fase 2.
 ///
 /// Muestra los números crudos del clasificador C++ actualizados a 10 Hz:
 /// dB SPL, SNR, VAD score, tilt espectral, centroide, energía por banda.
-/// No toma decisiones — la lógica de clasificación llega en Fase 2.
 ///
-/// Incluye herramientas de diagnóstico para reportar bugs:
-///   - Buffer rolling de los últimos 30 s de snapshots (siempre activo).
-///   - Botón "Grabar" para capturar una sesión más larga (hasta 5 min).
-///   - "Copiar CSV" copia los datos al portapapeles para pegar en chat.
-///   - "Copiar log de errores" copia los errores acumulados.
+/// Fase 2 agrega:
+///   - Toggle "Personalizar con mi audiograma" (persistido en Hive).
+///   - Botón "Detectar y aplicar" que dispara `SceneEngine.analyze()` y
+///     muestra clase + confianza + descripción.
+///   - Aún NO aplica preset al pipeline (eso llega en Fase 3 con
+///     `SceneEngine.apply()`).
 ///
-/// Validates: Requirements 1.1, 6.2
+/// Mantiene las herramientas de diagnóstico de Fase 1:
+///   - Buffer rolling de los últimos 30 s de snapshots.
+///   - "Grabar" + "Copiar CSV" + "Copiar errores".
+///
+/// Validates: Requirements 1.1, 1.6, 5.1, 5.2, 6.2
 
 import 'dart:async';
 import 'dart:collection';
@@ -18,6 +22,8 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../scene/scene_class.dart';
+import '../../scene/scene_engine.dart';
 import '../../scene/scene_snapshot.dart';
 
 class SmartSceneScreen extends StatefulWidget {
@@ -55,10 +61,18 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   bool _isRecording = false;
   DateTime? _recordingStartedAt;
 
+  // ─── Smart Scene Engine (Fase 2) ────────────────────────────────────
+  final SceneEngine _engine = SceneEngine();
+  bool _engineLoaded = false;
+  bool _isAnalyzing = false;
+  SceneAnalysisResult? _lastResult;
+  String? _analysisError;
+
   @override
   void initState() {
     super.initState();
     _startPolling();
+    _loadEngineSettings();
   }
 
   @override
@@ -134,6 +148,58 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     _errorLog.addLast(_ErrorEntry(DateTime.now(), message));
     while (_errorLog.length > _errorLogCapacity) {
       _errorLog.removeFirst();
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Smart Scene Engine (Fase 2)
+  // ────────────────────────────────────────────────────────────────────
+
+  Future<void> _loadEngineSettings() async {
+    await _engine.loadSettings();
+    if (!mounted) return;
+    setState(() {
+      _engineLoaded = true;
+    });
+  }
+
+  Future<void> _togglePersonalize(bool value) async {
+    await _engine.setPersonalize(value);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _runAnalysis() async {
+    if (_isAnalyzing) return;
+    setState(() {
+      _isAnalyzing = true;
+      _analysisError = null;
+    });
+    try {
+      final result = await _engine.analyze();
+      if (!mounted) return;
+      setState(() {
+        _lastResult = result;
+        _isAnalyzing = false;
+      });
+      _showSnack(
+        'Detectado: ${result.sceneClass.label} '
+        '(confianza ${(result.confidence * 100).toStringAsFixed(0)}%)',
+      );
+    } on SceneEngineException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _analysisError = e.message;
+        _isAnalyzing = false;
+      });
+      _logError(e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _analysisError = e.toString();
+        _isAnalyzing = false;
+      });
+      _logError(e.toString());
     }
   }
 
@@ -283,6 +349,16 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
               if (!_enginePresent) _engineOffBanner(),
               if (_errorMessage != null) _errorBanner(_errorMessage!),
               const SizedBox(height: 8),
+              _DetectCard(
+                isAnalyzing: _isAnalyzing,
+                personalize: _engine.personalizeWithAudiogram,
+                personalizeReady: _engineLoaded,
+                onPersonalizeChanged: _togglePersonalize,
+                onDetect: _runAnalysis,
+                analysisError: _analysisError,
+                lastResult: _lastResult,
+              ),
+              const SizedBox(height: 12),
               _LevelsCard(snapshot: _snapshot),
               const SizedBox(height: 12),
               _VadCard(snapshot: _snapshot),
@@ -769,4 +845,162 @@ class _ErrorEntry {
   final DateTime timestamp;
   final String message;
   const _ErrorEntry(this.timestamp, this.message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Card "Detectar y aplicar" — Smart Scene Fase 2
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DetectCard extends StatelessWidget {
+  final bool isAnalyzing;
+  final bool personalize;
+  final bool personalizeReady;
+  final ValueChanged<bool> onPersonalizeChanged;
+  final VoidCallback onDetect;
+  final String? analysisError;
+  final SceneAnalysisResult? lastResult;
+
+  const _DetectCard({
+    required this.isAnalyzing,
+    required this.personalize,
+    required this.personalizeReady,
+    required this.onPersonalizeChanged,
+    required this.onDetect,
+    required this.analysisError,
+    required this.lastResult,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _SceneCard(
+      icon: Icons.psychology_alt,
+      title: 'Detectar escena y preparar preset',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SwitchListTile.adaptive(
+            value: personalize,
+            onChanged: personalizeReady ? onPersonalizeChanged : null,
+            activeColor: Colors.cyanAccent,
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Personalizar con mi audiograma',
+              style: TextStyle(color: Colors.white, fontSize: 13),
+            ),
+            subtitle: const Text(
+              'Si está activo y hay audiograma cargado, el preset se basa en NAL-NL2 + deltas de la escena.',
+              style: TextStyle(color: Colors.white60, fontSize: 11),
+            ),
+          ),
+          const SizedBox(height: 4),
+          ElevatedButton.icon(
+            onPressed: isAnalyzing ? null : onDetect,
+            icon: isAnalyzing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.search),
+            label: Text(
+              isAnalyzing ? 'Analizando 2.5 s…' : 'Detectar escena',
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.cyan.shade700,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+          if (analysisError != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              analysisError!,
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            ),
+          ],
+          if (lastResult != null) ...[
+            const Divider(color: Colors.white12, height: 24),
+            _ResultBlock(result: lastResult!, personalize: personalize),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ResultBlock extends StatelessWidget {
+  final SceneAnalysisResult result;
+  final bool personalize;
+
+  const _ResultBlock({required this.result, required this.personalize});
+
+  @override
+  Widget build(BuildContext context) {
+    final cls = result.sceneClass;
+    final pct = (result.confidence * 100).toStringAsFixed(0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(cls.icon, color: cls.color, size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    cls.label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    cls.description,
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: cls.color.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: cls.color.withOpacity(0.5)),
+              ),
+              child: Text(
+                '$pct%',
+                style: TextStyle(
+                  color: cls.color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Muestras: ${result.sampleCount} · '
+          '${personalize ? "Personalización ON" : "Genérico"}',
+          style: const TextStyle(color: Colors.white60, fontSize: 11),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'La aplicación del preset al audífono llega en Fase 3.',
+          style: TextStyle(color: Colors.white38, fontSize: 11),
+        ),
+      ],
+    );
+  }
 }
