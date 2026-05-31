@@ -1,0 +1,8 @@
+# Artefactos de compilación local del test runner offline.
+# El binario se reconstruye con run_tests.bat cuando hace falta.
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
