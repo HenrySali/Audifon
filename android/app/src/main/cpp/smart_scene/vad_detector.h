@@ -15,9 +15,21 @@
 ///   5) Noise stationarity gating — varianza temporal en bandas vocales,
 ///      bloquea voiceActive cuando el espectro no se mueve durante > 1 s.
 ///
+/// Anti respiración / golpes / roces (NUEVO):
+///   - Flatness gate: respiración / roce / viento dan flatness > 0.55
+///     sostenida durante varios frames sin pitch real → bloquear.
+///   - ZCR gate: respiración y fricativas tienen ZCR alta (> 6 % de
+///     muestras), voz vocal tiene ZCR baja. Sin pitch + ZCR alta = ruido.
+///   - Pitch density: voz natural sostiene ≥ 30 % de frames con pitch
+///     fuerte sobre una ventana de 200 ms. Respiración no.
+///   - Tilt gate: voz tiene tilt fuertemente negativo (-6..-12 dB/oct).
+///     Respiración, roce y viento tienen tilt cerca de 0 o positivo.
+///
 /// La decisión final aplica:
 ///   - Gate SPL duro a 30 dB SPL (silencio absoluto).
+///   - Gate de impulso (golpes / clicks).
 ///   - Gate de stationarity + mid SNR (ruido continuo dominante).
+///   - Gate de respiración / roce (flatness OR ZCR OR tilt sin pitch).
 ///   - Histéresis ancha 0.65/0.35.
 ///   - Hangover de 12 frames (60-120 ms a tasas típicas).
 ///
@@ -29,9 +41,14 @@
 ///   - Sohn, Kim, Sung 1999 (LRT estadístico).
 ///   - Martin 2001 (minimum statistics, ya consumido del NoiseProfile).
 ///   - Ramirez et al. 2004 (LTSD).
-///   - Tan, Sarkar, Dehak 2020 (rVAD-fast: a posteriori SNR weighted).
+///   - Tan, Sarkar, Dehak 2020 (rVAD-fast: a posteriori SNR weighted +
+///                                extended pitch segment density).
 ///   - WebRTC VAD (sub-band GMM, hangover).
 ///   - Springer 2019 (VAD-PITCH-2019, baseline original que mejoramos).
+///   - Tsinghua 2005 (entropy + BIC, motivó el flatness gate).
+///   - NAIST / arXiv 2402.00288 (Frame-Wise Breath Detection, ZCR + VMS).
+///   - Eng. Appl. AI 2024 (Detection of breath sounds in speech, ZCR +
+///                          spectral centroid).
 ///
 /// Validates: Requirements 2.1, 2.2, 2.3 (smart-scene-engine spec).
 
@@ -111,6 +128,54 @@ public:
     /// sin extender artificialmente las ráfagas de voz.
     static constexpr int kHangoverFrames = 12;
 
+    /// Cantidad de frames consecutivos con score > threshold high requeridos
+    /// para activar voice_active desde estado OFF. Mata transitorios cortos
+    /// (golpes al mic, palmas, click de tipeo) que cubren 1-2 frames.
+    static constexpr int kSustainFramesForOnset = 3;
+
+    /// Pitch mínimo que debe estar sostenido para considerar "voz".
+    /// Voces sostienen 0.4-0.8 fácil durante una vocal (≥ 25 ms).
+    /// Respiración, golpes, viento, tipeo dan pitch ≤ 0.30. Subimos a 0.40
+    /// (rVAD-fast usa ~0.40 sobre residual blanqueado) para dejar afuera
+    /// el pitch espúreo de respiración fuerte.
+    static constexpr float kVoicingMinPitch = 0.40f;
+
+    /// Frames consecutivos con pitch > kVoicingMinPitch necesarios.
+    /// 7 frames * ~5-10 ms ≈ 35-70 ms — duración mínima de una vocal corta.
+    static constexpr int kVoicingMinFrames = 7;
+
+    /// Densidad de pitch en ventana extendida (rVAD "extended pitch
+    /// segment"). Voz natural sostiene ≥ 30 % de frames con pitch fuerte
+    /// sobre una ventana de ~200 ms; respiración nunca llega.
+    static constexpr int   kPitchDensityWindow = 40;    ///< ~200 ms a 5 ms/frame.
+    static constexpr float kPitchDensityMin    = 0.30f;
+
+    /// Detección de impulso: si la energía sube más que kImpulseRiseDb
+    /// en un solo frame venido desde un nivel bajo, es un transitorio
+    /// (golpe, palmada, click). Se bloquea voice_active durante
+    /// kImpulseHoldoffFrames frames.
+    static constexpr float kImpulseRiseDb       = 12.0f;
+    static constexpr float kImpulsePrevQuietDb  = 35.0f;
+    static constexpr int   kImpulseHoldoffFrames = 8;
+
+    // ─── Gates anti respiración / roce / fricativa sostenida ────────────
+    /// Flatness gate (Tsinghua 2005, Springer 2019): voz vocal rara vez
+    /// sostiene flatness > 0.55 durante > 15-30 ms. Respiración, roce,
+    /// viento sí. Si el gate se activa y no hay pitch real, bloqueamos.
+    static constexpr float kFlatnessVoiceMax   = 0.55f;
+    static constexpr int   kFlatnessGateFrames = 3;
+
+    /// ZCR gate (NAIST breath detection, Aalto): respiración / fricativas
+    /// dan tasa de cruces por cero alta sobre el buffer pre-blanqueado.
+    /// 0.04 = ~ 6-7 cruces por bloque de 256 muestras post-HPF.
+    static constexpr float kZcrUnvoicedRatio   = 0.04f;
+
+    /// Tilt gate: voz tiene tilt fuertemente negativo (-6..-12 dB/oct).
+    /// Respiración, roce y viento tienen tilt cercano a 0 o positivo.
+    /// Combinado con flatness > 0.45 y sin pitch sostenido = ruido.
+    static constexpr float kTiltVoiceMaxDbOct  = -2.0f;
+    static constexpr float kTiltGateFlatnessMin = 0.45f;
+
     // ─── Pesos de la combinación ────────────────────────────────────────
     /// Suma debe ser 1.0. LRT pesa más por ser el feature más robusto
     /// teóricamente. Pitch baja del 0.5 anterior al 0.25 — el pre-blanqueo
@@ -141,14 +206,17 @@ public:
     /// @param numSamples    Cantidad de muestras.
     /// @param bandEnergyDb  Energía por banda (12 bandas EQ) en dB.
     /// @param noiseFloorDb  Piso de ruido por banda (del NoiseProfile).
-    /// @param flatness      Spectral flatness [0,1] (compatibilidad —
-    ///                      no se usa en la decisión, solo se ignora).
+    /// @param flatness      Spectral flatness [0,1]. Reactivada como gate
+    ///                      anti respiración / roce.
+    /// @param spectralTiltDb Tilt espectral en dB/octava. Voz tiene tilt
+    ///                      muy negativo; respiración / roce ≈ 0.
     /// @param energyDbSpl   Nivel RMS del bloque en dB SPL.
     void process(const float* samples,
                  int numSamples,
                  const float bandEnergyDb[kSceneNumBands],
                  const float noiseFloorDb[kSceneNumBands],
                  float flatness,
+                 float spectralTiltDb,
                  float energyDbSpl);
 
     /// True si el voice flag está activado tras suavizado, histéresis,
@@ -172,6 +240,8 @@ public:
     float getLrtScore()      const { return lrtScore_; }
     float getLtsdDb()        const { return ltsdDb_; }
     float getStationarity()  const { return stationarity_; }
+    float getZcrRatio()      const { return zcrRatio_; }
+    float getPitchDensity()  const { return pitchDensity_; }
 
     /// Reinicia el estado del detector.
     void reset();
@@ -218,6 +288,11 @@ private:
     /// Cerca de 0 → señal modulada (voz, música).
     float computeStationarity() const;
 
+    /// ZCR sobre el buffer pre-blanqueado del último frame.
+    /// Devuelve cruces / (numSamples - 1) ∈ [0, 1].
+    /// Voz vocal: ≈ 0.005-0.025. Respiración / fricativas: > 0.04.
+    float computeZcr(const float* samples, int numSamples) const;
+
     /// Sigmoid logística usada para mapear el LRT a [0,1].
     static float sigmoid(float x);
 
@@ -254,6 +329,20 @@ private:
     int   hangover_      = 0;
     bool  voiceActive_   = false;
     bool  hangoverActive_ = false;
+
+    // Anti-transitorios: detector de impulso + counter de sustain.
+    int   impulseHoldoff_ = 0;     ///< Frames restantes bloqueando voice_active.
+    int   onsetSustain_   = 0;     ///< Frames consecutivos con score alto.
+    int   voicingSustain_ = 0;     ///< Frames consecutivos con pitch sostenido.
+    float prevEnergyDb_   = -90.0f;
+
+    // Anti-respiración / roce / fricativa sostenida.
+    int   flatnessHighStreak_ = 0; ///< Frames consecutivos con flatness alta.
+    float zcrRatio_           = 0.0f; ///< ZCR del último bloque [0, 1].
+    uint8_t pitchHistory_[kPitchDensityWindow] = {0}; ///< 0/1 por frame.
+    int   pitchHistIdx_       = 0;
+    int   pitchHistFill_      = 0;
+    float pitchDensity_       = 0.0f; ///< Densidad de frames con pitch fuerte.
 };
 
 } // namespace smart_scene

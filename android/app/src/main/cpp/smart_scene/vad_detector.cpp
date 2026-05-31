@@ -58,6 +58,16 @@ void VadDetector::reset() {
     hangover_       = 0;
     voiceActive_    = false;
     hangoverActive_ = false;
+    impulseHoldoff_ = 0;
+    onsetSustain_   = 0;
+    voicingSustain_ = 0;
+    prevEnergyDb_   = -90.0f;
+    flatnessHighStreak_ = 0;
+    zcrRatio_           = 0.0f;
+    pitchDensity_       = 0.0f;
+    pitchHistIdx_       = 0;
+    pitchHistFill_      = 0;
+    std::memset(pitchHistory_, 0, sizeof(pitchHistory_));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,16 +79,28 @@ void VadDetector::process(const float* samples,
                           const float bandEnergyDb[kSceneNumBands],
                           const float noiseFloorDb[kSceneNumBands],
                           float flatness,
+                          float spectralTiltDb,
                           float energyDbSpl) {
-    (void)flatness; // mantenido en la firma por compatibilidad histórica.
     if (samples == nullptr || numSamples <= 0 ||
         bandEnergyDb == nullptr || noiseFloorDb == nullptr) {
         return;
     }
     if (!std::isfinite(energyDbSpl)) energyDbSpl = 0.0f;
+    if (!std::isfinite(flatness))    flatness    = 1.0f;
+    if (!std::isfinite(spectralTiltDb)) spectralTiltDb = 0.0f;
 
     // 1) Acumular muestras con HPF para matar DC + hum.
     pushSamplesWithHpf(samples, numSamples);
+
+    // 1b) ZCR sobre el bloque pre-blanqueado (NAIST breath detection).
+    //     Aprovechamos los últimos `numSamples` valores ya HPF-eados que
+    //     acabamos de empujar al ringbuffer. Los leemos de la cola del
+    //     pitchBuffer_ para no recomputar.
+    {
+        const int n = std::min(numSamples, kPitchBufferSize);
+        const int start = kPitchBufferSize - n;
+        zcrRatio_ = computeZcr(pitchBuffer_ + start, n);
+    }
 
     // 2) Pitch strength sobre el buffer ya pre-blanqueado.
     pitchStrength_ = (samplesAccumulated_ > maxLag_ + 1)
@@ -86,6 +108,20 @@ void VadDetector::process(const float* samples,
                          : 0.0f;
     if (!std::isfinite(pitchStrength_)) pitchStrength_ = 0.0f;
     pitchStrength_ = std::clamp(pitchStrength_, 0.0f, 1.0f);
+
+    // 2b) Densidad de pitch en ventana de ~200 ms (rVAD extended-pitch).
+    pitchHistory_[pitchHistIdx_] =
+        (pitchStrength_ > kVoicingMinPitch) ? 1u : 0u;
+    pitchHistIdx_ = (pitchHistIdx_ + 1) % kPitchDensityWindow;
+    if (pitchHistFill_ < kPitchDensityWindow) ++pitchHistFill_;
+    {
+        int hits = 0;
+        for (int i = 0; i < pitchHistFill_; ++i) hits += pitchHistory_[i];
+        pitchDensity_ = (pitchHistFill_ > 0)
+                            ? static_cast<float>(hits) /
+                                  static_cast<float>(pitchHistFill_)
+                            : 0.0f;
+    }
 
     // 3) Decision-directed a-priori SNR.
     updateAprioriSnr(bandEnergyDb, noiseFloorDb);
@@ -122,20 +158,88 @@ void VadDetector::process(const float* samples,
                      (1.0f - kEmaAlpha) * smoothedScore_;
 
     // 10) Decisión con gates + histéresis + hangover.
+    //
+    // Detección de transitorio (golpe, palmada, click): salto > 12 dB
+    // venido desde silencio. Bloquea voice_active durante 8 frames para
+    // que no lo confunda con voz un VAD "score-only".
+    const float energySafe = std::isfinite(energyDbSpl) ? energyDbSpl : -90.0f;
+    if (prevEnergyDb_ < kImpulsePrevQuietDb &&
+        (energySafe - prevEnergyDb_) > kImpulseRiseDb) {
+        impulseHoldoff_ = kImpulseHoldoffFrames;
+    }
+    if (impulseHoldoff_ > 0) {
+        --impulseHoldoff_;
+    }
+    prevEnergyDb_ = energySafe;
+
+    // Voicing sustain: contador de frames consecutivos con pitch fuerte.
+    // Sin pitch sostenido NO puede haber voz humana — bloquea respiración,
+    // golpes, tipeo, viento, agua corriendo, todos los transitorios sin
+    // estructura tonal estable.
+    if (pitchStrength_ > kVoicingMinPitch) {
+        if (voicingSustain_ < 1000) ++voicingSustain_;
+    } else {
+        voicingSustain_ = 0;
+    }
+    const bool voicingOk      = voicingSustain_ >= kVoicingMinFrames;
+    const bool pitchDensityOk = pitchDensity_   >= kPitchDensityMin;
+
+    // Flatness streak: respiración / roce / viento sostenidos dan flatness
+    // > 0.55 durante varios frames. Si no hay pitch real, bloqueamos.
+    if (flatness > kFlatnessVoiceMax) {
+        if (flatnessHighStreak_ < 1000) ++flatnessHighStreak_;
+    } else {
+        flatnessHighStreak_ = 0;
+    }
+    const bool flatnessGateBlock =
+        (flatnessHighStreak_ >= kFlatnessGateFrames) &&
+        (pitchStrength_      <  kVoicingMinPitch);
+
+    // ZCR gate: respiración / fricativas tienen ZCR alta. Sin pitch real
+    // y ZCR > 4 % → ruido turbulento, no voz.
+    const bool zcrBreathBlock =
+        (zcrRatio_      > kZcrUnvoicedRatio) &&
+        (pitchStrength_ < kVoicingMinPitch);
+
+    // Tilt gate: voz tiene tilt fuertemente negativo. Respiración / roce
+    // tienen tilt cercano a 0 o positivo. Combinado con flatness alta y
+    // sin pitch sostenido = ruido aerodinámico.
+    const bool tiltGateBlock =
+        (spectralTiltDb > kTiltVoiceMaxDbOct) &&
+        (flatness        > kTiltGateFlatnessMin) &&
+        (pitchStrength_  < kVoicingMinPitch);
+
+    const bool nonVocalGateBlock =
+        flatnessGateBlock || zcrBreathBlock || tiltGateBlock;
+
     if (energyDbSpl < kMinSpeechDbSpl) {
         // Gate 1: silencio absoluto.
         voiceActive_   = false;
         hangover_      = 0;
         hangoverActive_ = false;
-    } else if (stationarity_ > kStationarityGate &&
-               midSnrDb_ < kMidSnrGateDb) {
-        // Gate 2: ruido continuo dominante (ventilador, AC, motores).
-        // Aunque el LRT instantáneo sea alto por algún transitorio, si
-        // el espectro vocal lleva 32 frames sin moverse y el SNR mid
-        // está por debajo de 4 dB, no hay voz humana.
+        onsetSustain_  = 0;
+    } else if (impulseHoldoff_ > 0) {
+        // Gate 0: transitorio reciente (golpe / click / palmada).
+        // Bloqueamos voice_active hasta que pasen los frames de holdoff.
         voiceActive_   = false;
         hangover_      = 0;
         hangoverActive_ = false;
+        onsetSustain_  = 0;
+    } else if (stationarity_ > kStationarityGate &&
+               midSnrDb_ < kMidSnrGateDb) {
+        // Gate 2: ruido continuo dominante (ventilador, AC, motores).
+        voiceActive_   = false;
+        hangover_      = 0;
+        hangoverActive_ = false;
+        onsetSustain_  = 0;
+    } else if (nonVocalGateBlock) {
+        // Gate 3 (NUEVO): respiración / roce / viento / fricativa
+        // sostenida. Cualquiera de los tres sub-gates (flatness, ZCR,
+        // tilt) declara la señal "no vocal" en ausencia de pitch real.
+        voiceActive_   = false;
+        hangover_      = 0;
+        hangoverActive_ = false;
+        onsetSustain_  = 0;
     } else if (voiceActive_) {
         if (smoothedScore_ > kVoiceThresholdLow) {
             voiceActive_   = true;
@@ -149,11 +253,23 @@ void VadDetector::process(const float* samples,
             hangoverActive_ = false;
         }
     } else {
-        if (smoothedScore_ > kVoiceThresholdHigh) {
-            voiceActive_   = true;
-            hangover_      = kHangoverFrames;
-            hangoverActive_ = false;
+        // Onset: requiere sustain de N frames consecutivos arriba del
+        // threshold high Y voicing sostenido (pitch > 0.40 durante ≥ 7
+        // frames) Y densidad de pitch ≥ 30 % en ventana de 200 ms.
+        // Sin estos tres, ningún proxy de voz puede gatillar el VAD.
+        if (smoothedScore_ > kVoiceThresholdHigh &&
+            voicingOk && pitchDensityOk) {
+            ++onsetSustain_;
+            if (onsetSustain_ >= kSustainFramesForOnset) {
+                voiceActive_   = true;
+                hangover_      = kHangoverFrames;
+                hangoverActive_ = false;
+            } else {
+                voiceActive_   = false;
+                hangoverActive_ = false;
+            }
         } else {
+            onsetSustain_  = 0;
             voiceActive_   = false;
             hangoverActive_ = false;
         }
@@ -387,6 +503,23 @@ float VadDetector::computeStationarity() const {
     if (s < 0.0) s = 0.0;
     if (s > 1.0) s = 1.0;
     return static_cast<float>(s);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ZCR — cuenta cruces por cero sobre buffer pre-blanqueado
+// ─────────────────────────────────────────────────────────────────────────────
+
+float VadDetector::computeZcr(const float* samples, int numSamples) const {
+    if (samples == nullptr || numSamples < 2) return 0.0f;
+    int zc = 0;
+    for (int i = 1; i < numSamples; ++i) {
+        const bool prevPos = samples[i - 1] >= 0.0f;
+        const bool currPos = samples[i]     >= 0.0f;
+        if (prevPos != currPos) ++zc;
+    }
+    const float ratio =
+        static_cast<float>(zc) / static_cast<float>(numSamples - 1);
+    return std::clamp(ratio, 0.0f, 1.0f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
