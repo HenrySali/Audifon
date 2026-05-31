@@ -24,11 +24,18 @@ class MainActivity : FlutterActivity() {
     /** Puente de comunicación con Flutter vía platform channels. */
     private var audioMethodChannel: AudioMethodChannel? = null
 
+    /** Plugin nativo para volumen del sistema durante la calibración biológica. */
+    private var biologicalVolumePlugin: BiologicalCalibrationVolumePlugin? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         Log.i(TAG, "Configuring Flutter engine and platform channels")
 
         audioMethodChannel = AudioMethodChannel(flutterEngine, this).also {
+            it.register()
+        }
+
+        biologicalVolumePlugin = BiologicalCalibrationVolumePlugin(flutterEngine, this).also {
             it.register()
         }
     }
@@ -37,6 +44,8 @@ class MainActivity : FlutterActivity() {
         Log.i(TAG, "Cleaning up Flutter engine and platform channels")
         audioMethodChannel?.unregister()
         audioMethodChannel = null
+        biologicalVolumePlugin?.unregister()
+        biologicalVolumePlugin = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'diagnostic/calibration_step.dart';
 import 'calibration_spectrum_screen.dart';
+import '../../biological_calibration/screens/biological_calibration_screen.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -94,6 +95,24 @@ class TechnicalServiceScreen extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => const CalibrationSpectrumScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Calibración Biológica (Hughson-Westlake con normoyentes)
+          _ServiceCard(
+            icon: Icons.hearing,
+            iconColor: Colors.deepOrangeAccent,
+            title: 'Calibración Biológica',
+            description:
+                'Calibración con normoyentes (Hughson-Westlake). Determina '
+                'umbrales auditivos reales por frecuencia para validar la cadena '
+                'electroacústica completa.',
+            buttonText: 'Iniciar Calibración Biológica',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const BiologicalCalibrationScreen(),
               ),
             ),
           ),
