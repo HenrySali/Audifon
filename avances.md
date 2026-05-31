@@ -310,3 +310,84 @@ CR[f] = 30 / (30 + G80[f] - G50[f])  (compression ratio por banda)
 ---
 
 *Documento generado el 28 de mayo de 2026. Actualizar con cada sesión de desarrollo.*
+
+
+---
+
+## 2026-05-31 — Smart Scene VAD: anti respiración / golpes / roces + voz bajita
+
+**Contexto.** Smart Scene Engine Fase 1 (`vad_detector.{h,cpp}` +
+`scene_analyzer.cpp`). El VAD híbrido pasaba bien voz fuerte pero (a) gatillaba
+con respiración profunda cerca del micrófono y con roce contra tela, y
+(b) cuando el usuario hablaba bajito (~55 dB SPL) el flag `voice_active`
+permanecía en `NO` aunque la voz se escuchaba claramente.
+
+**Investigación.**
+- Cruzamos fuentes de Tsinghua (entropy + BIC, 2005), NPU-ASLP (rVAD-style),
+  NAIST (arXiv 2402.00288: ZCR + VMS para breath detection), Silero VAD
+  (issues conocidos de falsos positivos en respiración) y rVAD-fast
+  (Tan, Sarkar, Dehak 2020: extended pitch segment density).
+- Convergencia: para distinguir voz de breath/golpes/roces hacen falta
+  *pitch sostenido en ventana 200 ms* + *flatness baja* + *tilt negativo
+  fuerte*. ZCR alta + sin pitch = ruido aerodinámico.
+
+**Cambios técnicos.**
+1. **Gates anti respiración / roce.** Agregamos cuatro filtros nuevos:
+   `flatnessGateBlock`, `zcrBreathBlock`, `tiltGateBlock`, `pitchDensityOk`.
+2. **ZCR sample-by-sample** sobre el buffer pre-blanqueado (HPF 80 Hz),
+   contado por bloque post-HPF en `VadDetector::computeZcr()`.
+3. **Densidad de pitch en ringbuffer de 40 frames (~200 ms)** —
+   diagnóstico no bloqueante para no perder los primeros 200 ms de voz.
+4. **Tilt espectral** llega al VAD como nuevo parámetro de `process()`,
+   tomado de `SpectralFeatures::tilt_db_per_octave`.
+5. **Veto de voz.** Si `LRT > 1.0` o `mid_SNR > 6 dB` se ignoran los
+   gates de no-vocal — protege voz real cuando momentáneamente hay
+   flatness alta entre vocal y consonante.
+6. **Threshold de activación bajado.** `kVoiceThresholdHigh` de 0.65 a
+   **0.55** y `kVoiceThresholdLow` de 0.35 a **0.30**. Banda muerta de
+   0.25 mantiene la histéresis sin flicker.
+7. **Tests offline en C++ con MSVC 2019.**
+   `smart_scene/tests/test_vad.cpp` + `run_tests.bat` corren 12
+   escenarios sintéticos (silencio, tono, impulso, respiración 3 niveles,
+   voz 6 niveles desde 45 a 95 dB SPL). 12/12 PASS.
+
+**Archivos tocados.**
+- `android/app/src/main/cpp/smart_scene/vad_detector.h` (constantes).
+- `android/app/src/main/cpp/smart_scene/vad_detector.cpp` (lógica + ZCR).
+- `android/app/src/main/cpp/smart_scene/scene_analyzer.cpp` (pasa tilt al VAD).
+- `lib/presentation/screens/smart_scene_screen.dart` (UI: grabación CSV,
+  log de errores, copiar al portapapeles para diagnóstico futuro).
+- `android/app/src/main/cpp/smart_scene/tests/` nuevos:
+  - `test_vad.cpp` (driver de tests).
+  - `run_tests.bat` (wrapper MSVC).
+  - `.gitignore` (excluye obj, exe, pdb).
+
+**Commits relevantes.**
+- `971465a` — gates iniciales (flatness + ZCR + tilt + pitch density).
+- `4f4143c` — calibración: ablandar gates, agregar veto de voz.
+- `0bc3c41` — UI de grabación CSV + log de errores.
+- `8c417ce` — threshold 0.55 + tests offline MSVC.
+- `d9ee119` — gitignore de artefactos de build.
+
+**Resultado.**
+- Voz bajita (~55 dB SPL) confirmada como detectada por el usuario.
+- Tests offline cubren regresiones para silencio, tono puro, impulso,
+  respiración (50/65/70 dB SPL) y voz (45-95 dB SPL).
+- Latencia agregada al pipeline ≈ 0 (los gates nuevos son sumas y
+  comparaciones por frame; ZCR es O(N) sobre el bloque ya HPF-eado).
+
+**Pendiente.**
+- Posible mejora futura (no urgente): ajustar pesos de combinación
+  (`kWeightLrt`, `kWeightPitch`, `kWeightMidSnr`, `kWeightLtsd`) basados
+  en grabaciones reales con el usuario. Hoy quedan 0.35 / 0.25 / 0.25 /
+  0.15.
+- Reincorporar campos diagnósticos extra al `SceneSnapshot`
+  (`pitch_strength`, `lrt_score`, `ltsd_db`, `zcr_ratio`, `pitch_density`)
+  cuando se coordine con la sesión paralela que los revirtió.
+
+**Diagnóstico clave aprendido.**
+- Problema venía de la combinación umbral alto (0.65) + sustain de 3
+  frames seguidos. Voz bajita real apenas alcanzaba 0.55 y nunca acumulaba
+  los 3 frames. La sierra sintética del test sí (proxy demasiado limpio
+  comparado con voz real).
+
