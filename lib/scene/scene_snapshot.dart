@@ -20,7 +20,7 @@ const int kSceneNumBands = 12;
 /// 8  (timestamp_us)
 /// + 4*3  (input/noise/snr)
 /// + 4*2  (vad_score, vad_confidence)
-/// + 4    (voice_active + 3 bytes padding)
+/// + 4    (voice_active + hangover + stationarity_q8 + mid_snr_q8)
 /// + 4*7  (tilt/centroid/flatness/flux + low/mid/high)
 /// + 4*12 (noise_per_band_db)
 /// + 4    (impulse_count + 2 bytes padding)
@@ -80,6 +80,9 @@ class SceneSnapshot {
   final double vadScore;
   final double vadConfidence;
   final bool voiceActive;
+  final bool vadHangoverActive;
+  final double vadStationarity; // [0, 1]
+  final double vadMidSnrDb;      // [0, 30] dB
 
   // Espectral
   final double spectralTiltDb;
@@ -108,6 +111,9 @@ class SceneSnapshot {
     required this.vadScore,
     required this.vadConfidence,
     required this.voiceActive,
+    required this.vadHangoverActive,
+    required this.vadStationarity,
+    required this.vadMidSnrDb,
     required this.spectralTiltDb,
     required this.spectralCentroidHz,
     required this.spectralFlatness,
@@ -131,6 +137,9 @@ class SceneSnapshot {
       vadScore: 0.0,
       vadConfidence: 0.0,
       voiceActive: false,
+      vadHangoverActive: false,
+      vadStationarity: 0.0,
+      vadMidSnrDb: 0.0,
       spectralTiltDb: 0.0,
       spectralCentroidHz: 0.0,
       spectralFlatness: 1.0,
@@ -192,7 +201,9 @@ class SceneSnapshot {
     final vadScore = readF32();
     final vadConfidence = readF32();
     final voiceFlag = readU8();
-    skip(3); // padding _pad0
+    final hangoverFlag = readU8();
+    final stationarityQ8 = readU8();
+    final midSnrQ8 = readU8();
     final tilt = readF32();
     final centroid = readF32();
     final flatness = readF32();
@@ -218,6 +229,9 @@ class SceneSnapshot {
       vadScore: vadScore,
       vadConfidence: vadConfidence,
       voiceActive: voiceFlag != 0,
+      vadHangoverActive: hangoverFlag != 0,
+      vadStationarity: stationarityQ8 / 255.0,
+      vadMidSnrDb: (midSnrQ8 / 255.0) * 30.0,
       spectralTiltDb: tilt,
       spectralCentroidHz: centroid,
       spectralFlatness: flatness,

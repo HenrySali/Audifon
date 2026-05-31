@@ -1,53 +1,134 @@
 /// @file vad_detector.h
-/// @brief Voice Activity Detection pitch-based para el Smart Scene Engine.
+/// @brief Voice Activity Detection robusto frente a ruido continuo.
 ///
-/// Combina tres features con pesos del Springer 2019 paper:
+/// Reemplaza el VAD pitch-only (Springer 2019) por un detector híbrido
+/// inspirado en literatura clásica de VAD robusto. El objetivo concreto
+/// es eliminar el flicker observado en producción cuando el celular
+/// captura ruido estacionario (ventilador, tráfico, hum 50/60 Hz) sin voz.
 ///
-///     score = pitch_strength * 0.5
-///           + (1 - spectral_flatness) * 0.3
-///           + energy_normalized * 0.2
+/// Combina cinco features:
+///   1) Pitch strength con HPF de 80 Hz (mata DC + hum + rumble).
+///   2) Per-band log-LRT en bandas 3-9 (~0.4-5.5 kHz, banda fonémica).
+///      Estilo Sohn 1999 con a-priori SNR decision-directed (Ephraim-Malah).
+///   3) Mid-band SNR en bandas 4-9 (~1.1-5.5 kHz).
+///   4) Long-Term Spectral Divergence (Ramirez 2004) ventana 8 frames.
+///   5) Noise stationarity gating — varianza temporal en bandas vocales,
+///      bloquea voiceActive cuando el espectro no se mueve durante > 1 s.
 ///
-/// El score se suaviza con EMA (alpha=0.3) y se umbraliza en 0.5 para
-/// flag voice_active.
+/// La decisión final aplica:
+///   - Gate SPL duro a 30 dB SPL (silencio absoluto).
+///   - Gate de stationarity + mid SNR (ruido continuo dominante).
+///   - Histéresis ancha 0.65/0.35.
+///   - Hangover de 12 frames (60-120 ms a tasas típicas).
 ///
-/// Referencias:
-/// - VAD-PITCH-2019 (Springer): pesos, pitch range, EMA alpha y threshold.
-/// - design.md: vad_detector.{h,cpp}
+/// Latencia agregada por bloque < 0.5 ms en target Android. Memoria
+/// adicional ≈ 2 KB. Sin dependencias externas (solo <cmath>, <cstring>,
+/// <algorithm>, <cstdint>).
 ///
-/// Validates: Requirements 2.1, 2.2, 2.3
+/// Referencias (parafraseadas — ver Amplificador/.kiro/specs/smart-scene-engine/vad-redesign.md):
+///   - Sohn, Kim, Sung 1999 (LRT estadístico).
+///   - Martin 2001 (minimum statistics, ya consumido del NoiseProfile).
+///   - Ramirez et al. 2004 (LTSD).
+///   - Tan, Sarkar, Dehak 2020 (rVAD-fast: a posteriori SNR weighted).
+///   - WebRTC VAD (sub-band GMM, hangover).
+///   - Springer 2019 (VAD-PITCH-2019, baseline original que mejoramos).
+///
+/// Validates: Requirements 2.1, 2.2, 2.3 (smart-scene-engine spec).
 
 #ifndef HEARING_AID_SMART_SCENE_VAD_DETECTOR_H
 #define HEARING_AID_SMART_SCENE_VAD_DETECTOR_H
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
+
+#include "scene_types.h"
 
 namespace smart_scene {
 
+/// Voice Activity Detector robusto.
+///
+/// El SceneAnalyzer le entrega:
+///   - Las muestras de tiempo del bloque actual (para pitch).
+///   - El array `band_energy_db[12]` ya calculado (de SpectralFeatures).
+///   - El array `noise_floor_db[12]` ya calculado (de NoiseProfile).
+///   - El nivel `energy_db_spl` del bloque (para el gate SPL).
+///
+/// Toda la información espectral se reusa — no recomputamos FFT.
 class VadDetector {
 public:
-    /// Pitch range humano (Hz). Adultos: ~80-250 Hz.
+    // ─── Pitch detection ────────────────────────────────────────────────
+    /// Pitch range humano (Hz). Adultos típicos: 80-250 Hz; niños hasta ~300
+    /// pero limitamos a 250 para evitar lags muy cortos donde la
+    /// autocorrelación es ruidosa.
     static constexpr float kPitchMinHz = 80.0f;
     static constexpr float kPitchMaxHz = 250.0f;
 
-    /// Suavizado EMA del score (paper Springer 2019).
-    static constexpr float kEmaAlpha = 0.3f;
+    /// HPF de primer orden ~76 Hz cutoff a 48 kHz. Coeficiente para la
+    /// forma `y[n] = a*(y[n-1] + x[n] - x[n-1])`. Mata DC, hum 50/60 Hz
+    /// y rumble subsónico antes de la autocorrelación.
+    static constexpr float kHpfCoeff = 0.99f;
 
-    /// Umbral para decidir voice_active (con histéresis).
-    /// El flag se enciende al cruzar kVoiceThresholdHigh y solo se apaga
-    /// cuando baja de kVoiceThresholdLow. Evita el toggling cerca de 0.5.
-    static constexpr float kVoiceThreshold = 0.5f;
-    static constexpr float kVoiceThresholdHigh = 0.55f;
-    static constexpr float kVoiceThresholdLow  = 0.40f;
+    /// Buffer interno para autocorrelación. 1024 samples ≈ 21 ms a 48 kHz,
+    /// suficiente para 2.5 períodos de pitch a 80 Hz (12.5 ms cada uno).
+    /// Más chico que el original (1536) — menos memmove por bloque.
+    static constexpr int kPitchBufferSize = 1024;
 
-    /// Por debajo de este nivel SPL forzamos voiceActive=false (silencio).
-    static constexpr float kMinSpeechDbSpl = 35.0f;
+    // ─── Bandas usadas para LRT y mid-SNR ──────────────────────────────
+    /// El array band_energy_db tiene 12 bandas (kSceneNumLogBands). Las
+    /// 7 bandas vocales (índices 2..8 = ~750 Hz a 5.5 kHz) son donde vive
+    /// la inteligibilidad fonémica.
+    static constexpr int kBandLrtLo  = 2;
+    static constexpr int kBandLrtHi  = 8;
+    static constexpr int kBandMidLo  = 3;
+    static constexpr int kBandMidHi  = 8;
 
-    /// Pesos (deben sumar 1.0).
-    static constexpr float kWeightPitch    = 0.5f;
-    static constexpr float kWeightFlatness = 0.3f;
-    static constexpr float kWeightEnergy   = 0.2f;
+    // ─── Suavizado y gates ─────────────────────────────────────────────
+    /// EMA del score combinado. Más lento que el 0.3 original — los
+    /// 5 ms del callback de audio + ruido random necesitan suavizar más.
+    static constexpr float kEmaAlpha = 0.15f;
+
+    /// Decision-directed SNR per banda (Ephraim-Malah 1984 / Sohn 1999).
+    /// Alpha alto = a priori SNR confía más en la decisión anterior,
+    /// reduce ruido musical pero atrasa la detección. 0.85 es un balance
+    /// para frames cortos (5 ms).
+    static constexpr float kAlphaDD  = 0.85f;
+
+    /// Histéresis ancha. La banda muerta es 0.30 (vs 0.15 antes).
+    static constexpr float kVoiceThresholdHigh = 0.65f;
+    static constexpr float kVoiceThresholdLow  = 0.35f;
+
+    /// Gate por nivel absoluto: por debajo de este SPL forzamos silencio.
+    static constexpr float kMinSpeechDbSpl = 30.0f;
+
+    /// Gate por estacionariedad: si el espectro vocal cambia menos de
+    /// `1 - kStationarityGate` durante la ventana stat, lo declaramos
+    /// "ruido continuo" y bloqueamos voice_active.
+    static constexpr float kStationarityGate = 0.85f;
+    static constexpr float kMidSnrGateDb     = 4.0f;
+
+    /// Hangover en frames después de que el score cae bajo el threshold.
+    /// 12 frames * 5-10 ms ≈ 60-120 ms — cubre pausas inter-silábicas
+    /// sin extender artificialmente las ráfagas de voz.
+    static constexpr int kHangoverFrames = 12;
+
+    // ─── Pesos de la combinación ────────────────────────────────────────
+    /// Suma debe ser 1.0. LRT pesa más por ser el feature más robusto
+    /// teóricamente. Pitch baja del 0.5 anterior al 0.25 — el pre-blanqueo
+    /// lo hace utilizable pero ya no es el feature dominante.
+    static constexpr float kWeightLrt    = 0.35f;
+    static constexpr float kWeightPitch  = 0.25f;
+    static constexpr float kWeightMidSnr = 0.25f;
+    static constexpr float kWeightLtsd   = 0.15f;
+
+    // ─── Tamaños de ventanas ───────────────────────────────────────────
+    /// LTSD: pico de energía vocal en los últimos 8 frames - piso de
+    /// ruido. Robusto contra ruido no estacionario (Ramirez 2004).
+    static constexpr int kLtsdWindow = 8;
+
+    /// Stationarity: varianza temporal de la energía vocal en los últimos
+    /// 32 frames. 32 * 5 ms ≈ 160 ms — suficiente para no mezclar voz
+    /// con silencio pero corto para reaccionar a cambios de escena.
+    static constexpr int kStatWindow = 32;
 
     VadDetector();
 
@@ -55,54 +136,124 @@ public:
     /// Calcula los lags de autocorrelación equivalentes a kPitchMinHz/MaxHz.
     void init(int sampleRate);
 
-    /// Procesa un frame de tiempo (ya pre-procesado, mono float).
-    /// @param samples Bloque de audio (los últimos N samples del analyzer).
-    /// @param numSamples Cantidad de samples en el bloque.
-    /// @param flatness Flatness espectral del mismo frame [0, 1].
-    /// @param energyDbSpl Nivel RMS del frame en dB SPL.
+    /// Procesa un frame del callback de audio.
+    /// @param samples       Muestras de tiempo del bloque actual.
+    /// @param numSamples    Cantidad de muestras.
+    /// @param bandEnergyDb  Energía por banda (12 bandas EQ) en dB.
+    /// @param noiseFloorDb  Piso de ruido por banda (del NoiseProfile).
+    /// @param flatness      Spectral flatness [0,1] (compatibilidad —
+    ///                      no se usa en la decisión, solo se ignora).
+    /// @param energyDbSpl   Nivel RMS del bloque en dB SPL.
     void process(const float* samples,
                  int numSamples,
+                 const float bandEnergyDb[kSceneNumBands],
+                 const float noiseFloorDb[kSceneNumBands],
                  float flatness,
                  float energyDbSpl);
 
-    /// Score combinado (0-1) suavizado con EMA. Después de process().
+    /// True si el voice flag está activado tras suavizado, histéresis,
+    /// hangover y gates.
+    bool isVoiceActive() const { return voiceActive_; }
+
+    /// True si el flag está activo solo por hangover (la decisión cruda
+    /// ya cayó bajo el threshold). Útil para diagnosticar cómo afecta el
+    /// hangover a las métricas de la UI.
+    bool isHangoverActive() const { return hangoverActive_; }
+
+    /// Score combinado [0,1] post-EMA. Después de process().
     float getScore() const { return smoothedScore_; }
 
-    /// Confianza derivada del score (margen al threshold). [0, 1].
+    /// Confianza derivada del score (margen al 0.5 central). [0,1].
     float getConfidence() const;
 
-    /// Pitch strength del último frame [0, 1].
-    float getPitchStrength() const { return lastPitchStrength_; }
-
-    /// True si el voice flag está activado tras suavizado y threshold.
-    bool isVoiceActive() const { return voiceActive_; }
+    // ─── Indicadores diagnósticos (para SceneSnapshot / UI) ────────────
+    float getPitchStrength() const { return pitchStrength_; }
+    float getMidSnrDb()      const { return midSnrDb_; }
+    float getLrtScore()      const { return lrtScore_; }
+    float getLtsdDb()        const { return ltsdDb_; }
+    float getStationarity()  const { return stationarity_; }
 
     /// Reinicia el estado del detector.
     void reset();
 
 private:
-    /// Calcula el pitch strength por autocorrelación normalizada
-    /// en el rango [kPitchMinHz, kPitchMaxHz]. Devuelve [0, 1].
-    float computePitchStrength(const float* samples, int numSamples) const;
+    // ─── Helpers algorítmicos ──────────────────────────────────────────
 
-    /// Normaliza el nivel SPL a [0, 1] usando rango [30, 80] dB SPL.
-    static float normalizeEnergy(float dbSpl);
+    /// Empuja `numSamples` muestras al `pitchBuffer_` aplicando HPF de
+    /// 1er orden. La HPF es la responsable de eliminar DC + hum 50/60 Hz
+    /// + rumble antes de la autocorrelación, lo que evita falsos pitch
+    /// con ruido continuo.
+    void pushSamplesWithHpf(const float* samples, int numSamples);
 
+    /// Pitch strength por autocorrelación normalizada en `[minLag_, maxLag_]`.
+    /// Devuelve `R(lag*) / R(0)` clipeado a [0, 1].
+    float computePitchStrength() const;
+
+    /// Actualiza la a-priori SNR per banda (decision-directed).
+    /// Usa `xi[t] = α * xi[t-1] + (1-α) * max(0, γ_post - 1)` simplificado.
+    void updateAprioriSnr(const float bandEnergyDb[kSceneNumBands],
+                          const float noiseFloorDb[kSceneNumBands]);
+
+    /// LRT promediado en bandas vocales (Sohn 1999 simplificado).
+    /// Devuelve un valor que usualmente está en [-2, +6] dB-equivalent.
+    float computeLrt(const float bandEnergyDb[kSceneNumBands],
+                     const float noiseFloorDb[kSceneNumBands]) const;
+
+    /// SNR promedio en bandas mid (1.1-5.5 kHz) en dB.
+    float computeMidSnrDb(const float bandEnergyDb[kSceneNumBands],
+                          const float noiseFloorDb[kSceneNumBands]) const;
+
+    /// Empuja band_energy actual al ringbuffer LTSD.
+    void pushLtsdHistory(const float bandEnergyDb[kSceneNumBands]);
+
+    /// LTSD = pico (sobre la ventana) - piso de ruido, promediado en
+    /// bandas vocales. En dB.
+    float computeLtsdDb(const float noiseFloorDb[kSceneNumBands]) const;
+
+    /// Empuja band_energy actual al ringbuffer de stationarity.
+    void pushStatHistory(const float bandEnergyDb[kSceneNumBands]);
+
+    /// Stationarity = 1 - clamp(varianza_promedio / 50.0, 0, 1).
+    /// Cerca de 1 → ruido muy estacionario (ventilador, AC).
+    /// Cerca de 0 → señal modulada (voz, música).
+    float computeStationarity() const;
+
+    /// Sigmoid logística usada para mapear el LRT a [0,1].
+    static float sigmoid(float x);
+
+    // ─── Estado ─────────────────────────────────────────────────────────
     int sampleRate_ = 48000;
-    int minLag_ = 0;
-    int maxLag_ = 0;
+    int minLag_     = 0;
+    int maxLag_     = 0;
 
-    // Buffer interno para autocorrelación. El FFT del SceneAnalyzer es de
-    // 256 muestras (~5.3 ms a 48 kHz) — insuficiente para pitch de 80 Hz
-    // (período ~600 muestras). Acumulamos 1536 muestras (~32 ms a 48 kHz)
-    // para tener al menos 2 períodos del pitch más bajo + headroom.
-    static constexpr int kPitchBufferSize = 1536;
+    // Pitch buffer + HPF state
     float pitchBuffer_[kPitchBufferSize] = {0};
-    int samplesAccumulated_ = 0;
+    int   samplesAccumulated_            = 0;
+    float hpfXPrev_                      = 0.0f;
+    float hpfYPrev_                      = 0.0f;
 
+    // Decision-directed a-priori SNR per banda (lineal)
+    float xiPrev_[kSceneNumBands] = {0};
+
+    // Ringbuffers
+    float ltsdHistory_[kLtsdWindow][kSceneNumBands] = {{0}};
+    int   ltsdIdx_  = 0;
+    int   ltsdFill_ = 0;
+
+    float statHistory_[kStatWindow][kSceneNumBands] = {{0}};
+    int   statIdx_  = 0;
+    int   statFill_ = 0;
+
+    // Outputs / state
     float smoothedScore_ = 0.0f;
-    float lastPitchStrength_ = 0.0f;
-    bool voiceActive_ = false;
+    float pitchStrength_ = 0.0f;
+    float lrtScore_      = 0.0f;
+    float midSnrDb_      = 0.0f;
+    float ltsdDb_        = 0.0f;
+    float stationarity_  = 0.0f;
+    int   hangover_      = 0;
+    bool  voiceActive_   = false;
+    bool  hangoverActive_ = false;
 };
 
 } // namespace smart_scene

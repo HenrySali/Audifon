@@ -198,9 +198,15 @@ void SceneAnalyzer::computeFft() {
     if (snrDb < -20.0f) snrDb = -20.0f;
     if (snrDb >  40.0f) snrDb =  40.0f;
 
-    // 8) VAD pitch-based con la ventana de tiempo (sin Hann para preservar
-    //    la energía y la autocorrelación).
-    vad_.process(fftBuffer_, kFftSize, features.flatness, inputDbSpl);
+    // 8) VAD híbrido robusto: usa muestras de tiempo + bandas + piso de
+    //    ruido. El nuevo VAD ya no recibe `flatness` como feature crítica
+    //    (la decisión recae en LRT/SNR/LTSD/stationarity), pero la firma
+    //    sigue aceptándola para compatibilidad / diagnóstico.
+    vad_.process(fftBuffer_, kFftSize,
+                 bandsDb,
+                 noise_.getProfileDb(),
+                 features.flatness,
+                 inputDbSpl);
 
     // 9) Construir snapshot.
     SceneSnapshot snap{};
@@ -211,6 +217,21 @@ void SceneAnalyzer::computeFft() {
     snap.vad_score = vad_.getScore();
     snap.vad_confidence = vad_.getConfidence();
     snap.voice_active = vad_.isVoiceActive() ? 1 : 0;
+    snap.vad_hangover_active = vad_.isHangoverActive() ? 1 : 0;
+    {
+        // Stationarity ya está en [0,1] → mapear a Q8.
+        float st = vad_.getStationarity();
+        if (st < 0.0f) st = 0.0f;
+        if (st > 1.0f) st = 1.0f;
+        snap.vad_stationarity_q8 =
+            static_cast<uint8_t>(st * 255.0f + 0.5f);
+        // Mid-band SNR: clamp a [0, 30] dB y mapear a [0, 255].
+        float midSnr = vad_.getMidSnrDb();
+        if (midSnr < 0.0f) midSnr = 0.0f;
+        if (midSnr > 30.0f) midSnr = 30.0f;
+        snap.vad_mid_snr_q8 =
+            static_cast<uint8_t>((midSnr / 30.0f) * 255.0f + 0.5f);
+    }
     snap.spectral_tilt_db = features.tilt_db_per_octave;
     snap.spectral_centroid_hz = features.centroid_hz;
     snap.spectral_flatness = features.flatness;

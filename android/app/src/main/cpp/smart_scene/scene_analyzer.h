@@ -5,7 +5,7 @@
 /// - Acumulador de muestras hacia un buffer FFT.
 /// - FFT radix-2 in-place y ventana Hann.
 /// - SpectralFeatures sobre la magnitud lineal.
-/// - VadDetector pitch-based (paper Springer 2019).
+/// - VadDetector híbrido (LRT + pitch+HPF + SNR + LTSD + estacionariedad).
 /// - NoiseProfile (minimum statistics simplificado).
 /// - SceneSnapshot atómico para lectura desde Dart.
 ///

@@ -71,8 +71,10 @@ struct SceneSnapshot {
     // ─── Voice Activity Detection ───────────────────────────────────────
     float vad_score;                ///< Score combinado [0, 1] suavizado con EMA.
     float vad_confidence;           ///< Confianza derivada del score [0, 1].
-    uint8_t voice_active;           ///< 0/1 — true cuando vad_score > 0.5.
-    uint8_t _pad0[3];               ///< Padding para mantener alineación 32-bit.
+    uint8_t voice_active;           ///< 0/1 — true cuando el VAD decide voz.
+    uint8_t vad_hangover_active;    ///< 0/1 — voice_active activo solo por hangover.
+    uint8_t vad_stationarity_q8;    ///< Estacionariedad del ruido [0..255] (Q8).
+    uint8_t vad_mid_snr_q8;         ///< Mid-band SNR clamp [0..30 dB] mapeado a [0..255].
 
     // ─── Features espectrales ───────────────────────────────────────────
     float spectral_tilt_db;         ///< Pendiente espectral (dB/octava).
@@ -106,7 +108,7 @@ static_assert(sizeof(SceneSnapshot) ==
                   /* timestamp     */ 8 +
                   /* 3 floats      */ 3 * 4 +
                   /* 2 floats VAD  */ 2 * 4 +
-                  /* voice + pad   */ 1 + 3 +
+                  /* voice + 3*u8  */ 1 + 3 +
                   /* 7 floats spec */ 7 * 4 +
                   /* 12 floats     */ 12 * 4 +
                   /* impulse + pad */ 2 + 2 +

@@ -205,9 +205,11 @@ class _VadCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final voiceColor =
         snapshot.voiceActive ? Colors.greenAccent : Colors.white60;
+    final hangoverColor =
+        snapshot.vadHangoverActive ? Colors.amberAccent : Colors.white38;
     return _SceneCard(
       icon: Icons.record_voice_over,
-      title: 'VAD (pitch + flatness + energía)',
+      title: 'VAD híbrido (LRT + pitch + SNR + LTSD + estacionariedad)',
       child: Column(
         children: [
           _MetricRow(
@@ -222,6 +224,19 @@ class _VadCard extends StatelessWidget {
             label: 'Voz activa',
             value: snapshot.voiceActive ? 'SÍ' : 'NO',
             valueColor: voiceColor,
+          ),
+          _MetricRow(
+            label: 'Hangover activo',
+            value: snapshot.vadHangoverActive ? 'SÍ' : 'NO',
+            valueColor: hangoverColor,
+          ),
+          _MetricRow(
+            label: 'Mid-SNR (1-5 kHz)',
+            value: '${snapshot.vadMidSnrDb.toStringAsFixed(1)} dB',
+          ),
+          _MetricRow(
+            label: 'Estacionariedad ruido',
+            value: snapshot.vadStationarity.toStringAsFixed(2),
           ),
         ],
       ),
