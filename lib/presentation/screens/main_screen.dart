@@ -18,6 +18,7 @@ import 'diagnostic/diagnostic_flow_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
+import 'smart_scene_screen.dart';
 import 'spectrum_analyzer_screen.dart';
 import 'preset_learning_screen.dart';
 import 'technical_service_screen.dart';
@@ -1117,6 +1118,9 @@ class _ProcessingReport extends StatelessWidget {
               // Botón Auto Suggest — sugiere preset según ambiente
               _AutoSuggestButton(),
               const SizedBox(width: 6),
+              // Botón Smart Scene (Fase 1) — pantalla de diagnóstico del analyzer
+              _SmartSceneButton(),
+              const SizedBox(width: 6),
               GestureDetector(
                 onTap: () => _copyReport(context, inputSpl, outputSpl,
                     estimatedGain, volumeDb, wdrcState, mpoActive, nrLevel, nrLabels),
@@ -1975,6 +1979,51 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
             Text(
               _busy ? 'Midiendo…' : 'Auto',
               style: TextStyle(color: color, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// SMART SCENE BUTTON — Smart Scene Engine (Fase 1)
+// =============================================================================
+
+/// Botón compacto que abre la pantalla de diagnóstico del Smart Scene Engine.
+///
+/// Fase 1 muestra los números crudos del clasificador C++ a 10 Hz.
+/// Las decisiones automáticas y el preset adaptativo llegan en fases siguientes.
+class _SmartSceneButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const SmartSceneScreen(),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF8E24AA).withOpacity(0.18),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: const Color(0xFF00E5FF).withOpacity(0.5),
+            width: 0.5,
+          ),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.insights, color: Color(0xFF00E5FF), size: 14),
+            SizedBox(width: 4),
+            Text(
+              'Smart',
+              style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11),
             ),
           ],
         ),

@@ -209,6 +209,9 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     dspConfig.splOffset = config_.splOffset;
     pipeline_.init(dspConfig);
 
+    // ─── Step 5b: Initialize Smart Scene Engine analyzer (Fase 1) ────────
+    sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);
+
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
     setInputStream(inputStream_.get());
     setOutputStream(outputStream_.get());
@@ -380,6 +383,9 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
 
     // ─── DSP processing in-place on output buffer ────────────────────────
     pipeline_.processBlock(outPtr, numFrames);
+
+    // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
+    sceneAnalyzer_.process(inPtr, numFrames);
 
     // ─── Zero any remaining output frames beyond what we processed ───────
     if (numOutputFrames > numFrames) {
