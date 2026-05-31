@@ -86,7 +86,14 @@ void VadDetector::process(const float* samples,
     smoothedScore_ =
         kEmaAlpha * instantaneous + (1.0f - kEmaAlpha) * smoothedScore_;
 
-    voiceActive_ = smoothedScore_ > kVoiceThreshold;
+    // Histéresis + gate por nivel mínimo: silencio fuerza voiceActive=false.
+    if (energyDbSpl < kMinSpeechDbSpl) {
+        voiceActive_ = false;
+    } else if (voiceActive_) {
+        voiceActive_ = smoothedScore_ > kVoiceThresholdLow;
+    } else {
+        voiceActive_ = smoothedScore_ > kVoiceThresholdHigh;
+    }
 }
 
 float VadDetector::getConfidence() const {

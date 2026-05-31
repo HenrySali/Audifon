@@ -34,8 +34,15 @@ public:
     /// Suavizado EMA del score (paper Springer 2019).
     static constexpr float kEmaAlpha = 0.3f;
 
-    /// Umbral para decidir voice_active.
+    /// Umbral para decidir voice_active (con histéresis).
+    /// El flag se enciende al cruzar kVoiceThresholdHigh y solo se apaga
+    /// cuando baja de kVoiceThresholdLow. Evita el toggling cerca de 0.5.
     static constexpr float kVoiceThreshold = 0.5f;
+    static constexpr float kVoiceThresholdHigh = 0.55f;
+    static constexpr float kVoiceThresholdLow  = 0.40f;
+
+    /// Por debajo de este nivel SPL forzamos voiceActive=false (silencio).
+    static constexpr float kMinSpeechDbSpl = 35.0f;
 
     /// Pesos (deben sumar 1.0).
     static constexpr float kWeightPitch    = 0.5f;
