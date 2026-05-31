@@ -134,21 +134,21 @@ public:
     static constexpr int kSustainFramesForOnset = 3;
 
     /// Pitch mínimo que debe estar sostenido para considerar "voz".
-    /// Voces sostienen 0.4-0.8 fácil durante una vocal (≥ 25 ms).
-    /// Respiración, golpes, viento, tipeo dan pitch ≤ 0.30. Subimos a 0.40
-    /// (rVAD-fast usa ~0.40 sobre residual blanqueado) para dejar afuera
-    /// el pitch espúreo de respiración fuerte.
-    static constexpr float kVoicingMinPitch = 0.40f;
+    /// Voces sostienen 0.35-0.8 durante una vocal. Respiración, golpes,
+    /// viento, tipeo dan pitch ≤ 0.25. 0.35 es el punto de quiebre clásico
+    /// del autocorrelograma post-HPF para distinguir vocal vs ruido.
+    static constexpr float kVoicingMinPitch = 0.35f;
 
     /// Frames consecutivos con pitch > kVoicingMinPitch necesarios.
-    /// 7 frames * ~5-10 ms ≈ 35-70 ms — duración mínima de una vocal corta.
-    static constexpr int kVoicingMinFrames = 7;
+    /// 5 frames * ~5-10 ms ≈ 25-50 ms — duración mínima de una vocal corta.
+    static constexpr int kVoicingMinFrames = 5;
 
     /// Densidad de pitch en ventana extendida (rVAD "extended pitch
-    /// segment"). Voz natural sostiene ≥ 30 % de frames con pitch fuerte
-    /// sobre una ventana de ~200 ms; respiración nunca llega.
+    /// segment"). Solo se usa como diagnóstico — el onset NO la requiere
+    /// para no perder los primeros 200 ms del primer enunciado tras
+    /// silencio (cuando el ringbuffer está vacío de historial).
     static constexpr int   kPitchDensityWindow = 40;    ///< ~200 ms a 5 ms/frame.
-    static constexpr float kPitchDensityMin    = 0.30f;
+    static constexpr float kPitchDensityMin    = 0.20f;
 
     /// Detección de impulso: si la energía sube más que kImpulseRiseDb
     /// en un solo frame venido desde un nivel bajo, es un transitorio
@@ -160,21 +160,30 @@ public:
 
     // ─── Gates anti respiración / roce / fricativa sostenida ────────────
     /// Flatness gate (Tsinghua 2005, Springer 2019): voz vocal rara vez
-    /// sostiene flatness > 0.55 durante > 15-30 ms. Respiración, roce,
-    /// viento sí. Si el gate se activa y no hay pitch real, bloqueamos.
-    static constexpr float kFlatnessVoiceMax   = 0.55f;
-    static constexpr int   kFlatnessGateFrames = 3;
+    /// sostiene flatness > 0.65 durante > 50-80 ms. Respiración, roce,
+    /// viento sí. Si el gate se activa Y el LRT espectral está bajo,
+    /// bloqueamos. El umbral se relaja respecto del 0.55 inicial para no
+    /// matar las consonantes /s/ /f/ /sh/ que son legítimas en habla.
+    static constexpr float kFlatnessVoiceMax   = 0.65f;
+    static constexpr int   kFlatnessGateFrames = 8;
 
     /// ZCR gate (NAIST breath detection, Aalto): respiración / fricativas
     /// dan tasa de cruces por cero alta sobre el buffer pre-blanqueado.
-    /// 0.04 = ~ 6-7 cruces por bloque de 256 muestras post-HPF.
-    static constexpr float kZcrUnvoicedRatio   = 0.04f;
+    /// 0.06 = ~ 9 cruces por bloque post-HPF. Voz vocal: 0.005-0.025;
+    /// fricativa de habla legítima: 0.025-0.05; breath / viento: > 0.06.
+    static constexpr float kZcrUnvoicedRatio   = 0.06f;
 
     /// Tilt gate: voz tiene tilt fuertemente negativo (-6..-12 dB/oct).
-    /// Respiración, roce y viento tienen tilt cercano a 0 o positivo.
-    /// Combinado con flatness > 0.45 y sin pitch sostenido = ruido.
-    static constexpr float kTiltVoiceMaxDbOct  = -2.0f;
-    static constexpr float kTiltGateFlatnessMin = 0.45f;
+    /// Respiración / roce / viento tienen tilt cercano a 0 o positivo.
+    /// Usamos +1 dB/oct como umbral (más permisivo que el -2 anterior)
+    /// porque el tilt ya sirve combinado con flatness alta y mid-SNR bajo.
+    static constexpr float kTiltVoiceMaxDbOct  = 1.0f;
+    static constexpr float kTiltGateFlatnessMin = 0.55f;
+
+    /// Mínimo SNR mid-band para considerar legítima la actividad. Si
+    /// estamos arriba de este umbral hay energía vocal real, no breath:
+    /// ningún gate de no-vocal puede dispararse para bloquear voz.
+    static constexpr float kNonVocalGateMidSnrDb = 6.0f;
 
     // ─── Pesos de la combinación ────────────────────────────────────────
     /// Suma debe ser 1.0. LRT pesa más por ser el feature más robusto

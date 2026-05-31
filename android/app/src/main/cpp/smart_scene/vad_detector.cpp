@@ -181,11 +181,11 @@ void VadDetector::process(const float* samples,
     } else {
         voicingSustain_ = 0;
     }
-    const bool voicingOk      = voicingSustain_ >= kVoicingMinFrames;
-    const bool pitchDensityOk = pitchDensity_   >= kPitchDensityMin;
+    const bool voicingOk = voicingSustain_ >= kVoicingMinFrames;
+    (void)pitchDensity_; // disponible vía getPitchDensity() para diagnóstico.
 
     // Flatness streak: respiración / roce / viento sostenidos dan flatness
-    // > 0.55 durante varios frames. Si no hay pitch real, bloqueamos.
+    // > 0.65 durante varios frames. Si no hay pitch real, bloqueamos.
     if (flatness > kFlatnessVoiceMax) {
         if (flatnessHighStreak_ < 1000) ++flatnessHighStreak_;
     } else {
@@ -196,7 +196,7 @@ void VadDetector::process(const float* samples,
         (pitchStrength_      <  kVoicingMinPitch);
 
     // ZCR gate: respiración / fricativas tienen ZCR alta. Sin pitch real
-    // y ZCR > 4 % → ruido turbulento, no voz.
+    // y ZCR alta → ruido turbulento, no voz.
     const bool zcrBreathBlock =
         (zcrRatio_      > kZcrUnvoicedRatio) &&
         (pitchStrength_ < kVoicingMinPitch);
@@ -209,8 +209,15 @@ void VadDetector::process(const float* samples,
         (flatness        > kTiltGateFlatnessMin) &&
         (pitchStrength_  < kVoicingMinPitch);
 
+    // Veto: si hay evidencia clara de voz (LRT alto Y mid-SNR alto) los
+    // gates de no-vocal no pueden bloquear. Esto protege la voz natural
+    // que momentáneamente arroja flatness alta entre vocal y consonante.
+    const bool voiceEvidenceStrong =
+        (lrtScore_ > 1.0f) ||
+        (midSnrDb_ > kNonVocalGateMidSnrDb);
     const bool nonVocalGateBlock =
-        flatnessGateBlock || zcrBreathBlock || tiltGateBlock;
+        !voiceEvidenceStrong &&
+        (flatnessGateBlock || zcrBreathBlock || tiltGateBlock);
 
     if (energyDbSpl < kMinSpeechDbSpl) {
         // Gate 1: silencio absoluto.
@@ -254,11 +261,12 @@ void VadDetector::process(const float* samples,
         }
     } else {
         // Onset: requiere sustain de N frames consecutivos arriba del
-        // threshold high Y voicing sostenido (pitch > 0.40 durante ≥ 7
-        // frames) Y densidad de pitch ≥ 30 % en ventana de 200 ms.
-        // Sin estos tres, ningún proxy de voz puede gatillar el VAD.
-        if (smoothedScore_ > kVoiceThresholdHigh &&
-            voicingOk && pitchDensityOk) {
+        // threshold high Y voicing sostenido (pitch > 0.35 durante ≥ 5
+        // frames). Sin pitch sostenido no puede ser voz humana.
+        // pitchDensity_ NO se exige aquí — sirve solo como diagnóstico,
+        // porque al inicio del primer enunciado el ringbuffer está vacío
+        // y bloquearíamos los primeros 200 ms de voz tras el silencio.
+        if (smoothedScore_ > kVoiceThresholdHigh && voicingOk) {
             ++onsetSustain_;
             if (onsetSustain_ >= kSustainFramesForOnset) {
                 voiceActive_   = true;
