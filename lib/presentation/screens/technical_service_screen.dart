@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'diagnostic/calibration_step.dart';
+import 'calibration_spectrum_screen.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -77,6 +78,24 @@ class TechnicalServiceScreen extends StatelessWidget {
                 'Usar en cada nuevo dispositivo o cambio de auriculares.',
             buttonText: 'Iniciar Calibración',
             onTap: () => _openCalibration(context),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Validación Espectral (ANSI S3.22 / IEC 60118-7)
+          _ServiceCard(
+            icon: Icons.graphic_eq,
+            iconColor: Colors.amberAccent,
+            title: 'Validación Espectral de Calibración',
+            description:
+                'Daily check según ANSI S3.22 / IEC 60118-7. Emite tonos puros, '
+                'mide pico, THD y SNR contra criterios clínicos. NO reemplaza la '
+                'calibración exhaustiva anual.',
+            buttonText: 'Iniciar Validación',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const CalibrationSpectrumScreen(),
+              ),
+            ),
           ),
           const SizedBox(height: 12),
 
