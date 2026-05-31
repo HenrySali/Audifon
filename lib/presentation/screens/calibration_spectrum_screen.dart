@@ -16,6 +16,8 @@ import 'package:flutter/services.dart';
 
 import '../../calibration_spectrum/acceptance_criteria.dart';
 import '../../calibration_spectrum/calibration_report_json.dart';
+import '../../calibration_spectrum/calibration_verdict_reapply.dart';
+import '../../calibration_spectrum/device_calibration.dart';
 import '../../calibration_spectrum/tone_method_channel.dart';
 import '../../calibration_spectrum/tone_snapshot.dart';
 import '../../calibration_spectrum/tone_test_result.dart';
@@ -24,6 +26,7 @@ import '../../calibration_spectrum/widgets/metrics_panel.dart';
 import '../../calibration_spectrum/widgets/results_table.dart';
 import '../../calibration_spectrum/widgets/spectrum_view.dart';
 import '../../calibration_spectrum/widgets/waterfall_view.dart';
+import 'calibration_setup_screen.dart';
 
 const _kDisclaimerText =
     'Esta herramienta es un daily / biological calibration check. '
@@ -70,13 +73,30 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
 
   Timer? _pollTimer;
 
+  // Calibración del dispositivo (offsets dBFS↔dB SPL por frecuencia).
+  DeviceCalibration? _calibration;
+
   @override
   void initState() {
     super.initState();
+    _loadCalibration();
     // Mostrar disclaimer en el primer frame del primer abrimiento de la pantalla.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_disclaimerAcked) _showDisclaimer(blocking: true);
     });
+  }
+
+  Future<void> _loadCalibration() async {
+    final cal = await DeviceCalibrationStore.load();
+    if (!mounted) return;
+    setState(() => _calibration = cal);
+  }
+
+  Future<void> _openSetup() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CalibrationSetupScreen()),
+    );
+    await _loadCalibration();
   }
 
   Future<void> _showDisclaimer({bool blocking = false}) async {
@@ -149,7 +169,9 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _report = report;
+        // Si hay calibración, re-evaluar el verdict por drift dBFS.
+        final cal = _calibration;
+        _report = cal != null ? applyDeviceCalibration(report, cal) : report;
         if (report.tones.isEmpty &&
             report.noiseFloor.rejectionReason != null) {
           _errorMessage = report.noiseFloor.rejectionReason;
@@ -310,6 +332,8 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
               fontWeight: FontWeight.w600,
             ),
           ),
+          const SizedBox(height: 8),
+          _buildCalibrationBanner(),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -430,6 +454,70 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
       if (ok != true) return;
     }
     setState(() => _colormap = c);
+  }
+
+  Widget _buildCalibrationBanner() {
+    final cal = _calibration;
+    if (cal == null) {
+      return Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.amberAccent.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(6),
+          border: Border(left: BorderSide(color: Colors.amberAccent, width: 3)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded,
+                color: Colors.amberAccent, size: 18),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Sin calibrar. Para obtener veredictos válidos, calibrá primero el dispositivo con un sonómetro externo.',
+                style: TextStyle(color: Colors.white70, fontSize: 11, height: 1.3),
+              ),
+            ),
+            TextButton(
+              onPressed: _running ? null : _openSetup,
+              style: TextButton.styleFrom(foregroundColor: Colors.amberAccent),
+              child: const Text('Calibrar'),
+            ),
+          ],
+        ),
+      );
+    }
+    final ts = cal.timestamp;
+    final ageDays = DateTime.now().difference(ts).inDays;
+    final stale = ageDays > 30;
+    final color = stale ? Colors.orangeAccent : Colors.greenAccent;
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(6),
+        border: Border(left: BorderSide(color: color, width: 3)),
+      ),
+      child: Row(
+        children: [
+          Icon(stale ? Icons.update : Icons.verified_outlined,
+              color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Calibrado: ${cal.entries.length} freqs · '
+              '${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')}'
+              '${stale ? " (recalibrar — $ageDays días)" : ""}',
+              style: const TextStyle(color: Colors.white70, fontSize: 11),
+            ),
+          ),
+          TextButton(
+            onPressed: _running ? null : _openSetup,
+            style: TextButton.styleFrom(foregroundColor: color),
+            child: const Text('Recalibrar'),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildOptionalToggle({
