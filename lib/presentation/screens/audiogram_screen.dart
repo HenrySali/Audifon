@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive/hive.dart';
 
+import '../../audiometry/screens/audiometry_screen.dart';
 import '../../domain/entities/audiogram.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
@@ -70,6 +71,19 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
       }
       if (mounted) setState(() {});
     } catch (_) {}
+  }
+
+  /// Lanza la pantalla de audiometría del paciente. Al volver, refresca el
+  /// banner de prescripción desde Hive (puede haberse actualizado si el
+  /// operador aplicó el audiograma resultante al perfil).
+  Future<void> _runAudiometry() async {
+    await Navigator.of(context).push<dynamic>(
+      MaterialPageRoute<dynamic>(
+        builder: (_) => const AudiometryScreen(),
+      ),
+    );
+    if (!mounted) return;
+    await _loadPrescription();
   }
 
   /// Inicializa los umbrales desde el audiograma actual o los valores por defecto.
@@ -184,6 +198,11 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
       appBar: AppBar(
         title: const Text('Configurar Audiograma'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.medical_services),
+            tooltip: 'Hacer audiometría',
+            onPressed: _runAudiometry,
+          ),
           IconButton(
             icon: const Icon(Icons.bookmark_add),
             tooltip: 'Guardar como Preset',

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'diagnostic/calibration_step.dart';
 import 'calibration_spectrum_screen.dart';
 import '../../biological_calibration/screens/biological_calibration_screen.dart';
+import '../../audiometry/screens/audiometry_screen.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -113,6 +114,25 @@ class TechnicalServiceScreen extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => const BiologicalCalibrationScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Audiometría del Paciente (Hughson-Westlake automática)
+          _ServiceCard(
+            icon: Icons.record_voice_over,
+            iconColor: Colors.purpleAccent,
+            title: 'Audiometría del Paciente',
+            description:
+                'Audiometría tonal automática usando Hughson-Westlake (5/10 dB, '
+                'criterio 2/3). Requiere calibración biológica vigente. Genera el '
+                'audiograma del paciente y lo aplica al perfil para recalcular '
+                'NAL-NL2.',
+            buttonText: 'Iniciar Audiometría',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const AudiometryScreen(),
               ),
             ),
           ),
