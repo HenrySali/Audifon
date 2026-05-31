@@ -1,4 +1,4 @@
-/// @file calibration_spectrum_screen.dart
+﻿/// @file calibration_spectrum_screen.dart
 /// @brief Pantalla del Calibration Spectrum Validator (Servicio Técnico).
 ///
 /// Cubre REQ-1 a REQ-13:
@@ -445,7 +445,7 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.redAccent.withValues(alpha: 0.15),
+        color: Colors.redAccent.withOpacity(0.15),
         borderRadius: BorderRadius.circular(6),
         border: Border(left: BorderSide(color: Colors.redAccent, width: 4)),
       ),

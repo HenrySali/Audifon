@@ -1,4 +1,4 @@
-/// @file results_table.dart
+﻿/// @file results_table.dart
 /// @brief Tabla resumen de los tonos de la secuencia (REQ-11).
 
 import 'package:flutter/material.dart';
@@ -35,7 +35,7 @@ class ResultsTable extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: bannerColor.withValues(alpha: 0.15),
+              color: bannerColor.withOpacity(0.15),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
               border: Border(
                 left: BorderSide(color: bannerColor, width: 4),
@@ -149,7 +149,7 @@ class ResultsTable extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
-                        color: Colors.redAccent.withValues(alpha: 0.15),
+                        color: Colors.redAccent.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(

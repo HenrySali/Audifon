@@ -1,4 +1,4 @@
-/// @file spectrum_view.dart
+﻿/// @file spectrum_view.dart
 /// @brief Visualización del espectro instantáneo con marcadores (REQ-7, REQ-9).
 ///
 /// CustomPainter con eje X logarítmico (octavas equiespaciadas) y eje Y dB FS.
@@ -144,7 +144,7 @@ class _SpectrumPainter extends CustomPainter {
               freqTolerancePercent;
       final color = outOfTolerance ? Colors.redAccent : Colors.cyan.shade300;
       final paint = Paint()
-        ..color = color.withValues(alpha: 0.6)
+        ..color = color.withOpacity(0.6)
         ..strokeWidth = 1.2;
       final x = xForFreq(snapshot.expectedFreqHz);
       canvas.drawLine(Offset(x, plotT), Offset(x, plotB), paint);

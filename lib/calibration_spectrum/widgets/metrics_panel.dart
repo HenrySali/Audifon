@@ -1,4 +1,4 @@
-/// @file metrics_panel.dart
+﻿/// @file metrics_panel.dart
 /// @brief Panel de métricas en vivo del tono actual (REQ-7.1).
 
 import 'package:flutter/material.dart';
@@ -56,9 +56,9 @@ class MetricsPanel extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: verdictColor.withValues(alpha: 0.2),
+                  color: verdictColor.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: verdictColor.withValues(alpha: 0.6)),
+                  border: Border.all(color: verdictColor.withOpacity(0.6)),
                 ),
                 child: Text(
                   verdictLabel,
