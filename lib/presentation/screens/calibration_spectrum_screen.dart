@@ -44,8 +44,20 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
   // Configuración de la sesión.
   AcceptancePreset _preset = AcceptancePreset.clinical;
   double _targetLevelDbSpl = 50.0;
-  bool _include125 = false;
-  bool _include6k = false;
+
+  // Selección individual de cada frecuencia.
+  // Defaults: las "fijas" del perfil clínico (250..4k + 8k) van marcadas.
+  final Map<double, bool> _freqEnabled = {
+    125: false,
+    250: true,
+    500: true,
+    1000: true,
+    2000: true,
+    4000: true,
+    6000: false,
+    8000: true,
+  };
+
   WaterfallColormap _colormap = WaterfallColormap.viridis;
 
   // Estado.
@@ -100,11 +112,11 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
   }
 
   List<double> _buildFrequencyList() {
-    final list = <double>[];
-    if (_include125) list.add(125);
-    list.addAll([250, 500, 1000, 2000, 4000]);
-    if (_include6k) list.add(6000);
-    list.add(8000);
+    final list = _freqEnabled.entries
+        .where((e) => e.value)
+        .map((e) => e.key)
+        .toList();
+    list.sort();
     return list;
   }
 
@@ -343,18 +355,19 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
             ],
           ),
           const SizedBox(height: 4),
+          const Text('Frecuencias a probar:',
+              style: TextStyle(color: Colors.white70, fontSize: 12)),
+          const SizedBox(height: 4),
           Wrap(
+            spacing: 4,
+            runSpacing: 4,
             children: [
-              _buildOptionalToggle(
-                label: '125 Hz',
-                value: _include125,
-                onChanged: (v) => setState(() => _include125 = v),
-              ),
-              _buildOptionalToggle(
-                label: '6 kHz',
-                value: _include6k,
-                onChanged: (v) => setState(() => _include6k = v),
-              ),
+              for (final freq in [125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0])
+                _buildOptionalToggle(
+                  label: freq >= 1000 ? '${(freq / 1000).toStringAsFixed(freq % 1000 == 0 ? 0 : 1)} kHz' : '${freq.toInt()} Hz',
+                  value: _freqEnabled[freq] ?? false,
+                  onChanged: (v) => setState(() => _freqEnabled[freq] = v),
+                ),
             ],
           ),
           const SizedBox(height: 6),
