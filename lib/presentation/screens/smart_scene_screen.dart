@@ -4,9 +4,16 @@
 /// dB SPL, SNR, VAD score, tilt espectral, centroide, energía por banda.
 /// No toma decisiones — la lógica de clasificación llega en Fase 2.
 ///
+/// Incluye herramientas de diagnóstico para reportar bugs:
+///   - Buffer rolling de los últimos 30 s de snapshots (siempre activo).
+///   - Botón "Grabar" para capturar una sesión más larga (hasta 5 min).
+///   - "Copiar CSV" copia los datos al portapapeles para pegar en chat.
+///   - "Copiar log de errores" copia los errores acumulados.
+///
 /// Validates: Requirements 1.1, 6.2
 
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,10 +31,29 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
   static const Duration _pollInterval = Duration(milliseconds: 100);
 
+  /// Capacidad del buffer rolling (siempre activo).
+  /// 30 s a 10 Hz = 300 muestras. Costo en memoria ≈ 300 * 200 B ≈ 60 KB.
+  static const int _rollingCapacity = 300;
+
+  /// Capacidad máxima de una grabación manual (5 min a 10 Hz).
+  static const int _recordingCapacity = 3000;
+
+  /// Máximo de errores recordados.
+  static const int _errorLogCapacity = 50;
+
   Timer? _pollTimer;
   SceneSnapshot _snapshot = SceneSnapshot.empty();
   bool _enginePresent = true;
   String? _errorMessage;
+
+  // ─── Diagnóstico ────────────────────────────────────────────────────
+  final ListQueue<SceneSnapshot> _rollingBuffer =
+      ListQueue<SceneSnapshot>(_rollingCapacity + 1);
+  final List<SceneSnapshot> _recordingBuffer = <SceneSnapshot>[];
+  final ListQueue<_ErrorEntry> _errorLog =
+      ListQueue<_ErrorEntry>(_errorLogCapacity + 1);
+  bool _isRecording = false;
+  DateTime? _recordingStartedAt;
 
   @override
   void initState() {
@@ -67,19 +93,177 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
         _enginePresent = true;
         _errorMessage = null;
       });
+      _appendToBuffers(snap);
     } on PlatformException catch (e) {
       if (!mounted) return;
+      final msg = e.message ?? e.code;
       setState(() {
         _enginePresent = false;
-        _errorMessage = e.message ?? e.code;
+        _errorMessage = msg;
       });
+      _logError('PlatformException: $msg');
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _errorMessage = e.toString();
       });
+      _logError(e.toString());
     }
   }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Buffers de diagnóstico
+  // ────────────────────────────────────────────────────────────────────
+
+  void _appendToBuffers(SceneSnapshot snap) {
+    _rollingBuffer.addLast(snap);
+    while (_rollingBuffer.length > _rollingCapacity) {
+      _rollingBuffer.removeFirst();
+    }
+    if (_isRecording && _recordingBuffer.length < _recordingCapacity) {
+      _recordingBuffer.add(snap);
+      if (_recordingBuffer.length >= _recordingCapacity) {
+        _isRecording = false;
+        _logError(
+            'Grabación: tope de $_recordingCapacity muestras alcanzado, detenida.');
+      }
+    }
+  }
+
+  void _logError(String message) {
+    _errorLog.addLast(_ErrorEntry(DateTime.now(), message));
+    while (_errorLog.length > _errorLogCapacity) {
+      _errorLog.removeFirst();
+    }
+  }
+
+  void _toggleRecording() {
+    setState(() {
+      if (_isRecording) {
+        _isRecording = false;
+      } else {
+        _recordingBuffer.clear();
+        _recordingStartedAt = DateTime.now();
+        _isRecording = true;
+      }
+    });
+  }
+
+  void _clearRecording() {
+    setState(() {
+      _recordingBuffer.clear();
+      _recordingStartedAt = null;
+    });
+  }
+
+  Future<void> _copyRecording() async {
+    if (_recordingBuffer.isEmpty) {
+      _showSnack('No hay muestras grabadas todavía.');
+      return;
+    }
+    final csv = _buildCsv(_recordingBuffer,
+        header: 'Recording start: ${_recordingStartedAt?.toIso8601String()}');
+    await Clipboard.setData(ClipboardData(text: csv));
+    _showSnack(
+        'CSV de grabación copiado (${_recordingBuffer.length} muestras).');
+  }
+
+  Future<void> _copyRolling() async {
+    if (_rollingBuffer.isEmpty) {
+      _showSnack('Buffer rolling vacío.');
+      return;
+    }
+    final samples = _rollingBuffer.toList();
+    final csv =
+        _buildCsv(samples, header: 'Rolling buffer (últimos ${samples.length} samples)');
+    await Clipboard.setData(ClipboardData(text: csv));
+    _showSnack(
+        'CSV últimos ${(samples.length * 100 / 1000).toStringAsFixed(1)} s copiado.');
+  }
+
+  Future<void> _copyErrorLog() async {
+    if (_errorLog.isEmpty) {
+      _showSnack('No hay errores registrados.');
+      return;
+    }
+    final lines = <String>[
+      'Error log — ${_errorLog.length} entradas',
+      'timestamp;message',
+      ..._errorLog.map((e) =>
+          '${e.timestamp.toIso8601String()};${e.message.replaceAll(';', ',')}'),
+    ];
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    _showSnack('Log de errores copiado (${_errorLog.length} entradas).');
+  }
+
+  String _buildCsv(List<SceneSnapshot> data, {String? header}) {
+    final buffer = StringBuffer();
+    if (header != null) {
+      buffer.writeln('# $header');
+    }
+    buffer.writeln('# samples=${data.length}, period=${_pollInterval.inMilliseconds}ms');
+    buffer.writeln([
+      'idx',
+      'time_us',
+      'input_db_spl',
+      'noise_db_spl',
+      'snr_db',
+      'vad_score',
+      'vad_conf',
+      'voice_active',
+      'hangover',
+      'mid_snr_db',
+      'stationarity',
+      'tilt_db_oct',
+      'centroid_hz',
+      'flatness',
+      'flux',
+      'low_db',
+      'mid_db',
+      'high_db',
+      'scene_class',
+    ].join(';'));
+    for (var i = 0; i < data.length; ++i) {
+      final s = data[i];
+      buffer.writeln([
+        i,
+        s.timestampUs,
+        s.inputDbSpl.toStringAsFixed(2),
+        s.noiseFloorDbSpl.toStringAsFixed(2),
+        s.snrDb.toStringAsFixed(2),
+        s.vadScore.toStringAsFixed(3),
+        s.vadConfidence.toStringAsFixed(3),
+        s.voiceActive ? 1 : 0,
+        s.vadHangoverActive ? 1 : 0,
+        s.vadMidSnrDb.toStringAsFixed(2),
+        s.vadStationarity.toStringAsFixed(3),
+        s.spectralTiltDb.toStringAsFixed(3),
+        s.spectralCentroidHz.toStringAsFixed(0),
+        s.spectralFlatness.toStringAsFixed(4),
+        s.spectralFlux.toStringAsFixed(4),
+        s.lowBandEnergyDb.toStringAsFixed(2),
+        s.midBandEnergyDb.toStringAsFixed(2),
+        s.highBandEnergyDb.toStringAsFixed(2),
+        s.sceneClass.name,
+      ].join(';'));
+    }
+    return buffer.toString();
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Build
+  // ────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -106,6 +290,18 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
               _SpectralCard(snapshot: _snapshot),
               const SizedBox(height: 12),
               _BandsCard(snapshot: _snapshot),
+              const SizedBox(height: 12),
+              _DiagnosticsCard(
+                isRecording: _isRecording,
+                recordingCount: _recordingBuffer.length,
+                rollingCount: _rollingBuffer.length,
+                errorCount: _errorLog.length,
+                onToggleRecording: _toggleRecording,
+                onCopyRecording: _copyRecording,
+                onCopyRolling: _copyRolling,
+                onCopyErrors: _copyErrorLog,
+                onClearRecording: _clearRecording,
+              ),
               const SizedBox(height: 12),
               _MetaCard(snapshot: _snapshot),
             ],
@@ -354,6 +550,105 @@ class _BandsCard extends StatelessWidget {
   }
 }
 
+class _DiagnosticsCard extends StatelessWidget {
+  final bool isRecording;
+  final int recordingCount;
+  final int rollingCount;
+  final int errorCount;
+  final VoidCallback onToggleRecording;
+  final VoidCallback onCopyRecording;
+  final VoidCallback onCopyRolling;
+  final VoidCallback onCopyErrors;
+  final VoidCallback onClearRecording;
+
+  const _DiagnosticsCard({
+    required this.isRecording,
+    required this.recordingCount,
+    required this.rollingCount,
+    required this.errorCount,
+    required this.onToggleRecording,
+    required this.onCopyRecording,
+    required this.onCopyRolling,
+    required this.onCopyErrors,
+    required this.onClearRecording,
+  });
+
+  String _formatSeconds(int samples) =>
+      '${(samples * 100 / 1000).toStringAsFixed(1)} s';
+
+  @override
+  Widget build(BuildContext context) {
+    return _SceneCard(
+      icon: Icons.fiber_manual_record,
+      title: 'Diagnóstico — grabar y copiar datos',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: onToggleRecording,
+                  icon: Icon(isRecording
+                      ? Icons.stop_circle
+                      : Icons.fiber_manual_record),
+                  label: Text(isRecording ? 'Detener grabación' : 'Grabar'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        isRecording ? Colors.redAccent : Colors.cyan.shade700,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isRecording
+                ? 'Grabando · $recordingCount muestras (${_formatSeconds(recordingCount)})'
+                : recordingCount > 0
+                    ? 'Grabación detenida · $recordingCount muestras (${_formatSeconds(recordingCount)})'
+                    : 'Sin grabación activa.',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Buffer rolling automático: $rollingCount muestras (${_formatSeconds(rollingCount)})',
+            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: recordingCount > 0 ? onCopyRecording : null,
+                icon: const Icon(Icons.copy_all, size: 16),
+                label: const Text('Copiar grabación (CSV)'),
+              ),
+              OutlinedButton.icon(
+                onPressed: rollingCount > 0 ? onCopyRolling : null,
+                icon: const Icon(Icons.history, size: 16),
+                label: const Text('Copiar últimos 30 s'),
+              ),
+              OutlinedButton.icon(
+                onPressed: errorCount > 0 ? onCopyErrors : null,
+                icon: const Icon(Icons.bug_report, size: 16),
+                label: Text('Copiar errores ($errorCount)'),
+              ),
+              OutlinedButton.icon(
+                onPressed: recordingCount > 0 ? onClearRecording : null,
+                icon: const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Limpiar grabación'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MetaCard extends StatelessWidget {
   final SceneSnapshot snapshot;
   const _MetaCard({required this.snapshot});
@@ -468,4 +763,10 @@ class _MetricRow extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ErrorEntry {
+  final DateTime timestamp;
+  final String message;
+  const _ErrorEntry(this.timestamp, this.message);
 }
