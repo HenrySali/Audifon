@@ -36,7 +36,7 @@ class IsoTargets {
   }
 
   /// Frecuencias estándar para test biológico de calibración.
-  static const List<int> standardFreqs = [
+  static const List<double> standardFreqs = [
     125,
     250,
     500,
