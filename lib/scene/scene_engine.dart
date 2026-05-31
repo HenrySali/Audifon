@@ -1,16 +1,16 @@
-/// Smart Scene Engine — Fase 2.
+/// Smart Scene Engine — Fase 3.
 ///
 /// Fachada para la UI:
 ///   - Carga / guarda el toggle "personalizar con audiograma" en Hive.
 ///   - Lanza una sesión de análisis (`analyze`) que polea el `SceneAnalyzer`
 ///     nativo durante ~2.5 s y resuelve la clase dominante.
-///   - `apply()` queda vacío en Fase 2 — la generación + aplicación de
-///     preset llega en Fase 3.
+///   - `apply()` arma el `SmartPreset` (genérico o personalizado según
+///     toggle + audiograma) y lo despacha al `AmplificationBloc`.
 ///
 /// Para no romper la app si Hive no está abierto (entornos de test) las
 /// operaciones de persistencia son tolerantes a fallos.
 ///
-/// Validates: Requirements 1.6, 5.1, 5.2
+/// Validates: Requirements 1.6, 4.1, 4.2, 4.3, 4.5, 5.1, 5.2
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -18,9 +18,16 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 
+import '../domain/entities/audiogram.dart';
+import '../presentation/bloc/amplification_bloc.dart';
+import '../presentation/bloc/amplification_event.dart';
+import '../presentation/bloc/amplification_state.dart';
 import 'scene_decision_maker.dart';
+import 'scene_personalized_generator.dart';
+import 'scene_preset_generator.dart';
 import 'scene_session.dart';
 import 'scene_snapshot.dart';
+import 'smart_preset.dart';
 
 /// Resultado completo de un análisis: clase + confianza + último snapshot
 /// + flags para que la UI sepa qué mostrar.
@@ -31,6 +38,7 @@ class SceneAnalysisResult {
   final bool wasPersonalized;
   final int sampleCount;
   final Map<SceneClass, int> distribution;
+  final SmartPreset preset;
 
   const SceneAnalysisResult({
     required this.sceneClass,
@@ -39,6 +47,7 @@ class SceneAnalysisResult {
     required this.wasPersonalized,
     required this.sampleCount,
     required this.distribution,
+    required this.preset,
   });
 }
 
@@ -61,16 +70,25 @@ class SceneEngine {
   final int minSamples;
   final int maxSamples;
 
+  final SceneGenericPresetGenerator _genericGenerator;
+  final ScenePersonalizedPresetGenerator _personalizedGenerator;
+
   bool _personalize = false;
   bool _settingsLoaded = false;
 
   SceneEngine({
     MethodChannel? channel,
+    SceneGenericPresetGenerator? genericGenerator,
+    ScenePersonalizedPresetGenerator? personalizedGenerator,
     this.pollInterval = const Duration(milliseconds: 100),
     this.sessionTimeout = const Duration(seconds: 5),
     this.minSamples = 10,
     this.maxSamples = 25,
-  }) : _channel = channel ?? const MethodChannel(_channelName);
+  })  : _channel = channel ?? const MethodChannel(_channelName),
+        _genericGenerator =
+            genericGenerator ?? SceneGenericPresetGenerator(),
+        _personalizedGenerator = personalizedGenerator ??
+            ScenePersonalizedPresetGenerator();
 
   /// Lee el toggle persistido. Idempotente y silencioso en errores.
   Future<void> loadSettings() async {
@@ -104,9 +122,15 @@ class SceneEngine {
   /// `sessionTimeout`, requiere mínimo `minSamples` válidos, y resuelve la
   /// clase dominante.
   ///
-  /// Lanza `SceneEngineException` si no logra acumular suficientes muestras
-  /// (por ejemplo, si el motor de audio no está activo).
+  /// Genera el `SmartPreset` apropiado:
+  ///   - Si el toggle está ON y se pasa `audiogram`, usa el generador
+  ///     personalizado (NAL-NL2 + deltas).
+  ///   - Si el toggle está OFF o no hay audiograma, usa el generador
+  ///     genérico (preset clínico predefinido + tabla de tuning).
+  ///
+  /// Lanza `SceneEngineException` si no logra acumular suficientes muestras.
   Future<SceneAnalysisResult> analyze({
+    Audiogram? audiogram,
     DateTime Function()? clock,
   }) async {
     final session = SceneSession(
@@ -133,22 +157,55 @@ class SceneEngine {
     }
 
     final result = session.resolve();
+    final usePersonalized = _personalize && audiogram != null;
+    final preset = usePersonalized
+        ? _personalizedGenerator.generate(
+            audiogram: audiogram,
+            sceneClass: result.dominantClass,
+            snapshot: result.lastSnapshot,
+            confidence: result.averageConfidence,
+          )
+        : _genericGenerator.generate(
+            result.dominantClass,
+            confidence: result.averageConfidence,
+          );
+
     return SceneAnalysisResult(
       sceneClass: result.dominantClass,
       confidence: result.averageConfidence,
       lastSnapshot: result.lastSnapshot,
-      wasPersonalized: _personalize,
+      wasPersonalized: usePersonalized,
       sampleCount: result.sampleCount,
       distribution: result.distribution,
+      preset: preset,
     );
   }
 
-  /// Aplica el preset derivado del análisis al pipeline DSP.
+  /// Aplica el preset al pipeline DSP a través del `AmplificationBloc`.
   ///
-  /// **Fase 2:** stub no-op. La generación + dispatch al `AmplificationBloc`
-  /// llega en Fase 3.
-  Future<void> apply(SceneAnalysisResult result, {Object? bloc}) async {
-    // No-op en Fase 2.
+  /// - Despacha `UpdateEqGains` con las 12 ganancias y el nombre del preset.
+  /// - Si `volumeDeltaDb != 0` y el bloc está activo, despacha `ChangeVolume`
+  ///   sumando el delta al volumen actual (clamp [-20, +10] dB).
+  ///
+  /// El TNR (Transient Noise Reduction) y el cambio de NR level no se
+  /// despachan por ahora — el `AmplificationBloc` no tiene eventos
+  /// directos para eso desde un módulo externo. Dejamos esos campos en el
+  /// `SmartPreset` para que un consumidor futuro los aplique.
+  Future<void> apply(
+    SceneAnalysisResult result, {
+    required AmplificationBloc bloc,
+  }) async {
+    final preset = result.preset;
+    bloc.add(UpdateEqGains(gains: preset.gains, presetName: preset.name));
+
+    if (preset.volumeDeltaDb.abs() > 1e-3) {
+      final state = bloc.state;
+      if (state is AmplificationActive) {
+        final newVol = (state.volumeDb + preset.volumeDeltaDb)
+            .clamp(-20.0, 10.0);
+        bloc.add(ChangeVolume(volumeDb: newVol));
+      }
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────

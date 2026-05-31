@@ -21,10 +21,14 @@ import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../domain/entities/audiogram.dart';
 import '../../scene/scene_class.dart';
 import '../../scene/scene_engine.dart';
 import '../../scene/scene_snapshot.dart';
+import '../../scene/smart_preset.dart';
+import '../bloc/amplification_bloc.dart';
 
 class SmartSceneScreen extends StatefulWidget {
   const SmartSceneScreen({super.key});
@@ -61,18 +65,22 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   bool _isRecording = false;
   DateTime? _recordingStartedAt;
 
-  // ─── Smart Scene Engine (Fase 2) ────────────────────────────────────
+  // ─── Smart Scene Engine (Fase 2/3) ──────────────────────────────────
   final SceneEngine _engine = SceneEngine();
   bool _engineLoaded = false;
   bool _isAnalyzing = false;
+  bool _isApplying = false;
   SceneAnalysisResult? _lastResult;
   String? _analysisError;
+  Audiogram? _audiogram;
+  bool _audiogramLoaded = false;
 
   @override
   void initState() {
     super.initState();
     _startPolling();
     _loadEngineSettings();
+    _loadAudiogram();
   }
 
   @override
@@ -163,6 +171,24 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     });
   }
 
+  Future<void> _loadAudiogram() async {
+    try {
+      final bloc = context.read<AmplificationBloc>();
+      final a = await bloc.audiogramRepository.getAudiogram();
+      if (!mounted) return;
+      setState(() {
+        _audiogram = a;
+        _audiogramLoaded = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _audiogram = null;
+        _audiogramLoaded = true;
+      });
+    }
+  }
+
   Future<void> _togglePersonalize(bool value) async {
     await _engine.setPersonalize(value);
     if (!mounted) return;
@@ -176,7 +202,7 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
       _analysisError = null;
     });
     try {
-      final result = await _engine.analyze();
+      final result = await _engine.analyze(audiogram: _audiogram);
       if (!mounted) return;
       setState(() {
         _lastResult = result;
@@ -200,6 +226,24 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
         _isAnalyzing = false;
       });
       _logError(e.toString());
+    }
+  }
+
+  Future<void> _applyPreset() async {
+    final result = _lastResult;
+    if (result == null || _isApplying) return;
+    setState(() => _isApplying = true);
+    try {
+      final bloc = context.read<AmplificationBloc>();
+      await _engine.apply(result, bloc: bloc);
+      if (!mounted) return;
+      _showSnack('Preset "${result.preset.name}" aplicado.');
+    } catch (e) {
+      if (!mounted) return;
+      _logError('apply: $e');
+      _showSnack('No se pudo aplicar: $e');
+    } finally {
+      if (mounted) setState(() => _isApplying = false);
     }
   }
 
@@ -351,10 +395,14 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
               const SizedBox(height: 8),
               _DetectCard(
                 isAnalyzing: _isAnalyzing,
+                isApplying: _isApplying,
                 personalize: _engine.personalizeWithAudiogram,
                 personalizeReady: _engineLoaded,
+                audiogramAvailable: _audiogram != null,
+                audiogramLoaded: _audiogramLoaded,
                 onPersonalizeChanged: _togglePersonalize,
                 onDetect: _runAnalysis,
+                onApply: _applyPreset,
                 analysisError: _analysisError,
                 lastResult: _lastResult,
               ),
@@ -853,25 +901,36 @@ class _ErrorEntry {
 
 class _DetectCard extends StatelessWidget {
   final bool isAnalyzing;
+  final bool isApplying;
   final bool personalize;
   final bool personalizeReady;
+  final bool audiogramAvailable;
+  final bool audiogramLoaded;
   final ValueChanged<bool> onPersonalizeChanged;
   final VoidCallback onDetect;
+  final VoidCallback onApply;
   final String? analysisError;
   final SceneAnalysisResult? lastResult;
 
   const _DetectCard({
     required this.isAnalyzing,
+    required this.isApplying,
     required this.personalize,
     required this.personalizeReady,
+    required this.audiogramAvailable,
+    required this.audiogramLoaded,
     required this.onPersonalizeChanged,
     required this.onDetect,
+    required this.onApply,
     required this.analysisError,
     required this.lastResult,
   });
 
   @override
   Widget build(BuildContext context) {
+    final personalizeWanted = personalize;
+    final audiogramMissing =
+        personalizeWanted && audiogramLoaded && !audiogramAvailable;
     return _SceneCard(
       icon: Icons.psychology_alt,
       title: 'Detectar escena y preparar preset',
@@ -892,7 +951,17 @@ class _DetectCard extends StatelessWidget {
               style: TextStyle(color: Colors.white60, fontSize: 11),
             ),
           ),
-          const SizedBox(height: 4),
+          if (audiogramMissing) ...[
+            const SizedBox(height: 4),
+            Text(
+              'No hay audiograma cargado. Hacé el diagnóstico audiométrico para usar la personalización.',
+              style: TextStyle(
+                color: Colors.amberAccent.shade200,
+                fontSize: 11,
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
           ElevatedButton.icon(
             onPressed: isAnalyzing ? null : onDetect,
             icon: isAnalyzing
@@ -924,6 +993,26 @@ class _DetectCard extends StatelessWidget {
           if (lastResult != null) ...[
             const Divider(color: Colors.white12, height: 24),
             _ResultBlock(result: lastResult!, personalize: personalize),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: isApplying ? null : onApply,
+              icon: isApplying
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black,
+                      ),
+                    )
+                  : const Icon(Icons.bolt),
+              label: Text(isApplying ? 'Aplicando…' : 'Aplicar al audífono'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.greenAccent.shade400,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
           ],
         ],
       ),
@@ -992,13 +1081,62 @@ class _ResultBlock extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           'Muestras: ${result.sampleCount} · '
-          '${personalize ? "Personalización ON" : "Genérico"}',
+          '${result.wasPersonalized ? "Personalizado (NAL-NL2 + deltas)" : "Genérico"}',
           style: const TextStyle(color: Colors.white60, fontSize: 11),
         ),
+        const SizedBox(height: 6),
+        _PresetSummary(preset: result.preset),
+      ],
+    );
+  }
+}
+
+class _PresetSummary extends StatelessWidget {
+  final SmartPreset preset;
+
+  const _PresetSummary({required this.preset});
+
+  @override
+  Widget build(BuildContext context) {
+    final maxGain = preset.gains.fold<double>(0, (m, g) => g > m ? g : m);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Preset: ${preset.name}',
+          style: const TextStyle(color: Colors.cyanAccent, fontSize: 11),
+        ),
         const SizedBox(height: 4),
-        const Text(
-          'La aplicación del preset al audífono llega en Fase 3.',
-          style: TextStyle(color: Colors.white38, fontSize: 11),
+        SizedBox(
+          height: 36,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: List.generate(preset.gains.length, (i) {
+              final norm =
+                  maxGain > 0 ? (preset.gains[i] / maxGain).clamp(0.0, 1.0) : 0.0;
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                  child: Container(
+                    height: 32 * norm,
+                    decoration: BoxDecoration(
+                      color: Colors.cyan.withOpacity(0.7),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(2)),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'CR ${preset.compressionRatio.toStringAsFixed(1)}:1 · '
+          'Knee ${preset.compressionKnee.toStringAsFixed(0)} dB SPL · '
+          'NR ${preset.nrLevel} · TNR ${preset.tnrEnabled ? "ON" : "OFF"} · '
+          'Vol ${preset.volumeDeltaDb >= 0 ? "+" : ""}${preset.volumeDeltaDb.toStringAsFixed(1)} dB',
+          style: const TextStyle(color: Colors.white60, fontSize: 11),
         ),
       ],
     );
