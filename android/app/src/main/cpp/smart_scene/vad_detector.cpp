@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace smart_scene {
 
@@ -25,6 +26,8 @@ void VadDetector::reset() {
     smoothedScore_ = 0.0f;
     lastPitchStrength_ = 0.0f;
     voiceActive_ = false;
+    samplesAccumulated_ = 0;
+    std::fill(pitchBuffer_, pitchBuffer_ + kPitchBufferSize, 0.0f);
 }
 
 void VadDetector::process(const float* samples,
@@ -40,7 +43,31 @@ void VadDetector::process(const float* samples,
     if (flatness > 1.0f) flatness = 1.0f;
     if (!std::isfinite(energyDbSpl)) energyDbSpl = 0.0f;
 
-    float pitchStrength = computePitchStrength(samples, numSamples);
+    // Acumular en ring buffer para que la autocorrelación tenga
+    // suficiente longitud (≥ 2 períodos del pitch más bajo, ~600 samples
+    // a 48 kHz para 80 Hz). El analyzer entrega bloques de 256 muestras.
+    if (numSamples >= kPitchBufferSize) {
+        // Bloque más grande que el buffer: copiamos solo los últimos N.
+        std::memcpy(pitchBuffer_,
+                    samples + (numSamples - kPitchBufferSize),
+                    kPitchBufferSize * sizeof(float));
+        samplesAccumulated_ = kPitchBufferSize;
+    } else {
+        // Shift left para hacer espacio.
+        int keep = kPitchBufferSize - numSamples;
+        std::memmove(pitchBuffer_, pitchBuffer_ + numSamples,
+                     keep * sizeof(float));
+        std::memcpy(pitchBuffer_ + keep, samples,
+                    numSamples * sizeof(float));
+        samplesAccumulated_ =
+            std::min(samplesAccumulated_ + numSamples, kPitchBufferSize);
+    }
+
+    float pitchStrength = 0.0f;
+    if (samplesAccumulated_ > maxLag_ + 1) {
+        pitchStrength =
+            computePitchStrength(pitchBuffer_, samplesAccumulated_);
+    }
     if (!std::isfinite(pitchStrength)) pitchStrength = 0.0f;
     pitchStrength = std::clamp(pitchStrength, 0.0f, 1.0f);
     lastPitchStrength_ = pitchStrength;

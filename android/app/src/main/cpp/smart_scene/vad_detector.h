@@ -85,6 +85,14 @@ private:
     int minLag_ = 0;
     int maxLag_ = 0;
 
+    // Buffer interno para autocorrelación. El FFT del SceneAnalyzer es de
+    // 256 muestras (~5.3 ms a 48 kHz) — insuficiente para pitch de 80 Hz
+    // (período ~600 muestras). Acumulamos 1536 muestras (~32 ms a 48 kHz)
+    // para tener al menos 2 períodos del pitch más bajo + headroom.
+    static constexpr int kPitchBufferSize = 1536;
+    float pitchBuffer_[kPitchBufferSize] = {0};
+    int samplesAccumulated_ = 0;
+
     float smoothedScore_ = 0.0f;
     float lastPitchStrength_ = 0.0f;
     bool voiceActive_ = false;
