@@ -155,6 +155,7 @@ class BiologicalCalibrationController extends ChangeNotifier {
   final SystemVolumeController _volumeController;
   final math.Random _random;
   final int? _schedulerSeed;
+  final bool _enableCatchTrials;
 
   // ─── Configuración pública ─────────────────────────────────────────────
 
@@ -215,18 +216,24 @@ class BiologicalCalibrationController extends ChangeNotifier {
   /// - [volumeController]   — controla volumen del sistema.
   /// - [totalSubjectsTarget] — sujetos exigidos. Se eleva a [_minSubjects]
   ///                          si es menor.
+  /// - [enableCatchTrials]  — activa las presentaciones silenciosas de
+  ///                          control. Por defecto `false`: en uso típico
+  ///                          (3 normoyentes conocidos) no aportan valor y
+  ///                          sólo generan invalidaciones por error humano.
   /// - [seed]               — semilla opcional para reproducibilidad de tests
   ///                          (afecta ITI y CatchTrialScheduler).
   BiologicalCalibrationController({
     required ToneEmitterDbfs emitter,
     required SystemVolumeController volumeController,
     int totalSubjectsTarget = _minSubjects,
+    bool enableCatchTrials = false,
     int? seed,
     this.deviceInfo,
     this.protocolInfo,
   })  : _emitter = emitter,
         _volumeController = volumeController,
         totalSubjectsTarget = math.max(_minSubjects, totalSubjectsTarget),
+        _enableCatchTrials = enableCatchTrials,
         _schedulerSeed = seed,
         _random = seed != null ? math.Random(seed) : math.Random();
 
@@ -352,7 +359,8 @@ class BiologicalCalibrationController extends ChangeNotifier {
     _currentLevelDbFS = step.levelDbFS;
     _hwState = step.state;
 
-    final bool isCatchTrial = scheduler.shouldBeCatchTrial(_presentationIndex);
+    final bool isCatchTrial = _enableCatchTrials &&
+        scheduler.shouldBeCatchTrial(_presentationIndex);
     _isCatchTrialPending = isCatchTrial;
     _presentationStage = PresentationStage.playing;
     _presentationsCount++;
