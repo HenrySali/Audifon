@@ -9,10 +9,13 @@
 ///  - Botón "Aplicar" deshabilitado si globalVerdict = fail.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../calibration_spectrum/acceptance_criteria.dart';
+import '../../calibration_spectrum/calibration_report_json.dart';
 import '../../calibration_spectrum/tone_method_channel.dart';
 import '../../calibration_spectrum/tone_snapshot.dart';
 import '../../calibration_spectrum/tone_test_result.dart';
@@ -496,6 +499,78 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
     );
   }
 
+  Future<void> _showExportDialog() async {
+    if (_report == null) return;
+    final json = calibrationReportToJson(_report!);
+    final encoder = const JsonEncoder.withIndent('  ');
+    final text = encoder.convert(json);
+    final filename = suggestedReportFilename();
+
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16213e),
+        title: Row(
+          children: [
+            const Icon(Icons.description_outlined, color: Color(0xFF00e5ff)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                filename,
+                style: const TextStyle(color: Color(0xFF00e5ff), fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 480,
+          height: 360,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1a1a2e),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                text,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cerrar'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: text));
+              if (!ctx.mounted) return;
+              ScaffoldMessenger.of(ctx).showSnackBar(
+                const SnackBar(content: Text('Reporte copiado al portapapeles')),
+              );
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text('Copiar JSON'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00e5ff),
+              foregroundColor: Colors.black,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildActions() {
     final hasReport = _report != null && _report!.tones.isNotEmpty;
     final isPass = hasReport && _report!.globalVerdict == ToneVerdict.pass;
@@ -526,11 +601,7 @@ class _CalibrationSpectrumScreenState extends State<CalibrationSpectrumScreen> {
           ),
         if (hasReport)
           OutlinedButton.icon(
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Export JSON disponible en la próxima fase'),
-              ),
-            ),
+            onPressed: () => _showExportDialog(),
             icon: const Icon(Icons.file_download_outlined),
             label: const Text('Exportar reporte'),
             style: OutlinedButton.styleFrom(foregroundColor: Colors.white70),
