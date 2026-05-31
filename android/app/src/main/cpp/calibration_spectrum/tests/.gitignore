@@ -6,3 +6,5 @@
 *.ilk
 *.exp
 *.lib
+# WAVs generados por test_wav_validation
+out_wavs/
