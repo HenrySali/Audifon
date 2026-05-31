@@ -79,8 +79,13 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   void initState() {
     super.initState();
     _startPolling();
-    _loadEngineSettings();
-    _loadAudiogram();
+    _initEngineAndAudiogram();
+  }
+
+  Future<void> _initEngineAndAudiogram() async {
+    await _loadEngineSettings();
+    if (!mounted) return;
+    await _loadAudiogram();
   }
 
   @override
@@ -180,6 +185,14 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
         _audiogram = a;
         _audiogramLoaded = true;
       });
+
+      // Default del toggle: ON si hay audiograma y el usuario nunca tocó
+      // el switch. Si lo tocó alguna vez, respetamos su elección.
+      if (a != null && _engineLoaded && !_engine.wasPersonalizeUserSet) {
+        await _engine.setPersonalize(true);
+        if (!mounted) return;
+        setState(() {});
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {

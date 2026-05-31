@@ -75,6 +75,7 @@ class SceneEngine {
 
   bool _personalize = false;
   bool _settingsLoaded = false;
+  bool _personalizeFromUser = false;
 
   SceneEngine({
     MethodChannel? channel,
@@ -91,13 +92,23 @@ class SceneEngine {
             ScenePersonalizedPresetGenerator();
 
   /// Lee el toggle persistido. Idempotente y silencioso en errores.
+  /// Tras el primer `loadSettings`, `wasPersonalizeUserSet` indica si hay
+  /// un valor persistido por el usuario o se está usando el default `false`.
   Future<void> loadSettings() async {
     if (_settingsLoaded) return;
     try {
       final box = await _openBox();
-      _personalize = (box.get(_personalizeKey) as bool?) ?? false;
+      final stored = box.get(_personalizeKey);
+      if (stored is bool) {
+        _personalize = stored;
+        _personalizeFromUser = true;
+      } else {
+        _personalize = false;
+        _personalizeFromUser = false;
+      }
     } catch (_) {
       _personalize = false;
+      _personalizeFromUser = false;
     } finally {
       _settingsLoaded = true;
     }
@@ -106,6 +117,7 @@ class SceneEngine {
   /// Cambia el toggle y lo persiste.
   Future<void> setPersonalize(bool value) async {
     _personalize = value;
+    _personalizeFromUser = true;
     _settingsLoaded = true;
     try {
       final box = await _openBox();
@@ -117,6 +129,11 @@ class SceneEngine {
 
   /// Estado actual del toggle. Si nunca se cargó devuelve `false`.
   bool get personalizeWithAudiogram => _personalize;
+
+  /// True cuando el toggle viene de una elección persistida del usuario.
+  /// Si es false, la UI puede aplicar un default contextual (por ej. ON
+  /// si hay audiograma cargado).
+  bool get wasPersonalizeUserSet => _personalizeFromUser;
 
   /// Hace una sesión de análisis: polea snapshots durante hasta
   /// `sessionTimeout`, requiere mínimo `minSamples` válidos, y resuelve la
@@ -181,16 +198,19 @@ class SceneEngine {
     );
   }
 
-  /// Aplica el preset al pipeline DSP a través del `AmplificationBloc`.
+  /// Aplica el preset al pipeline DSP a través del `AmplificationBloc` y
+  /// persiste el "último preset" + "último NR level" vía `SettingsRepository`
+  /// para que sobreviva a reinicios de la app.
   ///
   /// - Despacha `UpdateEqGains` con las 12 ganancias y el nombre del preset.
   /// - Si `volumeDeltaDb != 0` y el bloc está activo, despacha `ChangeVolume`
   ///   sumando el delta al volumen actual (clamp [-20, +10] dB).
+  /// - Persiste el preset y el NR level en settings (silencioso a fallos).
   ///
-  /// El TNR (Transient Noise Reduction) y el cambio de NR level no se
-  /// despachan por ahora — el `AmplificationBloc` no tiene eventos
-  /// directos para eso desde un módulo externo. Dejamos esos campos en el
-  /// `SmartPreset` para que un consumidor futuro los aplique.
+  /// El TNR (Transient Noise Reduction) y el cambio activo de NR level no
+  /// se despachan al engine en esta fase: el `AmplificationBloc` aplica NR
+  /// vía clasificación automática y el TNR no tiene un canal nativo
+  /// dedicado (queda diferido a Fase 5+ del spec).
   Future<void> apply(
     SceneAnalysisResult result, {
     required AmplificationBloc bloc,
@@ -205,6 +225,27 @@ class SceneEngine {
             .clamp(-20.0, 10.0);
         bloc.add(ChangeVolume(volumeDb: newVol));
       }
+    }
+
+    // Persistencia tolerante: si Hive no está abierto o la escritura falla,
+    // el preset queda aplicado en memoria y la UI lo refleja igual.
+    try {
+      await bloc.settingsRepository.setLastEqPreset(<String, dynamic>{
+        'name': preset.name,
+        'gains': preset.gains,
+        'sceneClass': preset.sceneClass.index,
+        'isPersonalized': preset.isPersonalized,
+        'compressionRatio': preset.compressionRatio,
+        'compressionKnee': preset.compressionKnee,
+        'expansionKnee': preset.expansionKnee,
+        'tnrEnabled': preset.tnrEnabled,
+        'volumeDeltaDb': preset.volumeDeltaDb,
+        'confidence': preset.confidence,
+        'savedAt': DateTime.now().toIso8601String(),
+      });
+      await bloc.settingsRepository.setLastNrLevel(preset.nrLevel);
+    } catch (_) {
+      // Persistencia no bloquea el apply.
     }
   }
 
