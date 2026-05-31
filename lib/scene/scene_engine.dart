@@ -13,7 +13,6 @@
 /// Validates: Requirements 1.6, 4.1, 4.2, 4.3, 4.5, 5.1, 5.2
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';

@@ -4,6 +4,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'dart:async';
+
 import 'package:hearing_aid_app/presentation/bloc/amplification_bloc.dart';
 import 'package:hearing_aid_app/presentation/bloc/amplification_event.dart';
 import 'package:hearing_aid_app/presentation/bloc/amplification_state.dart';

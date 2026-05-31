@@ -16,9 +16,7 @@
 /// Validates: Requirements 3.2, 3.3, 3.5, 3.6, 3.7
 
 import '../domain/entities/audiogram.dart';
-import '../domain/entities/eq_preset.dart';
 import '../domain/gain_prescriber.dart';
-import 'scene_class.dart';
 import 'scene_snapshot.dart' show SceneClass, SceneSnapshot;
 import 'smart_preset.dart';
 
