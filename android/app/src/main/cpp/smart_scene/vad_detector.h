@@ -110,9 +110,12 @@ public:
     /// para frames cortos (5 ms).
     static constexpr float kAlphaDD  = 0.85f;
 
-    /// Histéresis ancha. La banda muerta es 0.30 (vs 0.15 antes).
-    static constexpr float kVoiceThresholdHigh = 0.65f;
-    static constexpr float kVoiceThresholdLow  = 0.35f;
+    /// Histéresis ancha. La banda muerta es 0.25.
+    /// Bajado de 0.65 → 0.55 porque voz bajita real (~55 dB SPL) llega al
+    /// score ~0.50-0.55 y no estaba activando voz. La diferencia con el
+    /// threshold low (0.30) sigue siendo suficiente para evitar flicker.
+    static constexpr float kVoiceThresholdHigh = 0.55f;
+    static constexpr float kVoiceThresholdLow  = 0.30f;
 
     /// Gate por nivel absoluto: por debajo de este SPL forzamos silencio.
     static constexpr float kMinSpeechDbSpl = 30.0f;
