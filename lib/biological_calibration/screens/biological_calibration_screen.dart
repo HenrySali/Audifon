@@ -306,6 +306,9 @@ class _BiologicalCalibrationScreenState
             ? '${(freq / 1000).toStringAsFixed(freq % 1000 == 0 ? 0 : 1)} kHz'
             : '${freq.round()} Hz');
 
+    final ToneResponseButtonStage btnStage =
+        _mapPresentationStage(_controller.presentationStage);
+
     return Column(
       children: <Widget>[
         CalibrationProgressIndicatorWidget(
@@ -323,6 +326,8 @@ class _BiologicalCalibrationScreenState
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
+                  _buildStageBanner(context, btnStage),
+                  const SizedBox(height: 16),
                   Text(
                     'Frecuencia $freqLabel',
                     textAlign: TextAlign.center,
@@ -338,14 +343,19 @@ class _BiologicalCalibrationScreenState
                           color: colors.onSurface.withOpacity(0.75),
                         ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
                   ToneResponseButton(
+                    stage: btnStage,
+                    lastResponseHeard:
+                        btnStage == ToneResponseButtonStage.recorded
+                            ? _controller.lastResponseHeard
+                            : null,
                     onPressed: () => _controller.onUserResponse(true),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 18),
                   Text(
-                    'Nivel actual: '
-                    '${_controller.currentLevelDbFS.toStringAsFixed(0)} dBFS',
+                    'Presentación N° ${_controller.presentationsCount}'
+                    ' · Nivel ${_controller.currentLevelDbFS.toStringAsFixed(0)} dBFS',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colors.onSurface.withOpacity(0.6),
@@ -357,6 +367,72 @@ class _BiologicalCalibrationScreenState
           ),
         ),
       ],
+    );
+  }
+
+  ToneResponseButtonStage _mapPresentationStage(PresentationStage s) {
+    switch (s) {
+      case PresentationStage.idle:
+        return ToneResponseButtonStage.waiting;
+      case PresentationStage.playing:
+        return ToneResponseButtonStage.playing;
+      case PresentationStage.listening:
+        return ToneResponseButtonStage.listening;
+      case PresentationStage.recorded:
+        return ToneResponseButtonStage.recorded;
+    }
+  }
+
+  Widget _buildStageBanner(
+    BuildContext context,
+    ToneResponseButtonStage stage,
+  ) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final IconData icon;
+    final Color bg;
+    final String text;
+    switch (stage) {
+      case ToneResponseButtonStage.waiting:
+        icon = Icons.more_horiz;
+        bg = colors.surfaceVariant;
+        text = 'Esperando próximo tono';
+        break;
+      case ToneResponseButtonStage.playing:
+        icon = Icons.graphic_eq;
+        bg = colors.primary.withOpacity(0.18);
+        text = 'Reproduciendo tono';
+        break;
+      case ToneResponseButtonStage.listening:
+        icon = Icons.hearing;
+        bg = colors.primary.withOpacity(0.28);
+        text = 'Escuchando respuesta';
+        break;
+      case ToneResponseButtonStage.recorded:
+        final bool heard = _controller.lastResponseHeard;
+        icon = heard ? Icons.check_circle : Icons.timer_off;
+        bg = heard
+            ? Colors.green.withOpacity(0.22)
+            : Colors.orange.withOpacity(0.22);
+        text = heard ? 'Respuesta registrada' : 'Sin respuesta';
+        break;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Icon(icon, size: 22),
+          const SizedBox(width: 10),
+          Text(
+            text,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ],
+      ),
     );
   }
 

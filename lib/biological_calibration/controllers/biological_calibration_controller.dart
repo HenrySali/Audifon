@@ -87,6 +87,27 @@ enum CalibrationPhase {
   error,
 }
 
+/// Etapa actual de una presentación dentro de la fase `testing`.
+///
+/// Se usa para que la UI pueda reflejar visualmente el estado interno del
+/// loop de presentaciones (esperando ITI, reproduciendo tono, escuchando
+/// respuesta, respuesta registrada).
+enum PresentationStage {
+  /// Sin presentación activa (entre presentaciones, durante el ITI).
+  idle,
+
+  /// El emisor está reproduciendo el tono.
+  playing,
+
+  /// El tono terminó (o es catch trial); la app está esperando la respuesta
+  /// del sujeto. La UI debe mostrar el botón "LO ESCUCHO" como activo.
+  listening,
+
+  /// El sujeto presionó "LO ESCUCHO" o el timer venció. Estado breve, se usa
+  /// para dar feedback visual ("✓ Registrado") antes de pasar al ITI.
+  recorded,
+}
+
 /// Controlador principal de la calibración biológica.
 class BiologicalCalibrationController extends ChangeNotifier {
   // ─── Constantes del protocolo ──────────────────────────────────────────
@@ -157,6 +178,9 @@ class BiologicalCalibrationController extends ChangeNotifier {
   double _currentLevelDbFS = -30.0;
   HwState _hwState = HwState.familiarization;
   bool _isCatchTrialPending = false;
+  PresentationStage _presentationStage = PresentationStage.idle;
+  int _presentationsCount = 0; // total presentaciones del sujeto actual
+  bool _lastResponseHeard = false; // resultado de la última respuesta
   final List<SubjectSession> _completedSessions = <SubjectSession>[];
   BiologicalCalibrationResult? _finalResult;
   String? _statusText;
@@ -214,6 +238,9 @@ class BiologicalCalibrationController extends ChangeNotifier {
   double get currentLevelDbFS => _currentLevelDbFS;
   HwState get hwState => _hwState;
   bool get isCatchTrialPending => _isCatchTrialPending;
+  PresentationStage get presentationStage => _presentationStage;
+  int get presentationsCount => _presentationsCount;
+  bool get lastResponseHeard => _lastResponseHeard;
   List<SubjectSession> get completedSessions =>
       List<SubjectSession>.unmodifiable(_completedSessions);
   BiologicalCalibrationResult? get finalResult => _finalResult;
@@ -302,6 +329,11 @@ class BiologicalCalibrationController extends ChangeNotifier {
     if (_disposed) return;
     final Completer<bool>? c = _responseCompleter;
     if (c == null || c.isCompleted) return;
+    // Feedback inmediato a la UI: marcamos "recorded" antes de completar el
+    // future para que la pantalla pueda mostrar el cambio de estado al instante.
+    _lastResponseHeard = heard;
+    _presentationStage = PresentationStage.recorded;
+    notifyListeners();
     c.complete(heard);
   }
 
@@ -322,6 +354,8 @@ class BiologicalCalibrationController extends ChangeNotifier {
 
     final bool isCatchTrial = scheduler.shouldBeCatchTrial(_presentationIndex);
     _isCatchTrialPending = isCatchTrial;
+    _presentationStage = PresentationStage.playing;
+    _presentationsCount++;
     _statusText = isCatchTrial
         ? 'Atención (presentación silenciosa)…'
         : '${freqHz.round()} Hz a ${_currentLevelDbFS.toStringAsFixed(0)} dBFS';
@@ -347,10 +381,22 @@ class BiologicalCalibrationController extends ChangeNotifier {
 
     if (_disposed || _phase != CalibrationPhase.testing) return;
 
+    // Entramos en fase de escucha: el botón "LO ESCUCHO" se habilita en la UI.
+    _presentationStage = PresentationStage.listening;
+    notifyListeners();
+
     // Abrir ventana de respuesta. El timer cierra la ventana con heard=false
     // si la UI no llama onUserResponse antes.
     final bool heard = await _waitForResponse();
     if (_disposed || _phase != CalibrationPhase.testing) return;
+
+    // Si fue timeout (la UI no llamó onUserResponse), garantizar feedback
+    // visual de "registrado" igualmente, antes del ITI.
+    if (_presentationStage != PresentationStage.recorded) {
+      _lastResponseHeard = heard;
+      _presentationStage = PresentationStage.recorded;
+      notifyListeners();
+    }
 
     _processResponse(heard: heard, wasCatchTrial: isCatchTrial);
     _presentationIndex++;
@@ -359,6 +405,11 @@ class BiologicalCalibrationController extends ChangeNotifier {
     // tras un ITI aleatorio.
     if (!_disposed && _phase == CalibrationPhase.testing) {
       final int iti = itiMinMs + _random.nextInt(itiMaxMs - itiMinMs + 1);
+      // Esperar un poco para que el "✓ Registrado" sea visible antes del ITI.
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (_disposed || _phase != CalibrationPhase.testing) return;
+      _presentationStage = PresentationStage.idle;
+      notifyListeners();
       await Future<void>.delayed(Duration(milliseconds: iti));
       if (_disposed || _phase != CalibrationPhase.testing) return;
       // Microtask para evitar crecer la pila si la sesión es muy larga.
@@ -515,6 +566,9 @@ class BiologicalCalibrationController extends ChangeNotifier {
     _hwState = HwState.familiarization;
     _currentLevelDbFS = -30.0;
     _currentFreqHz = null;
+    _presentationStage = PresentationStage.idle;
+    _presentationsCount = 0;
+    _lastResponseHeard = false;
     _cancelResponseWindow();
   }
 
