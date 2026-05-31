@@ -25,6 +25,7 @@ import '../presentation/bloc/amplification_state.dart';
 import 'scene_decision_maker.dart';
 import 'scene_personalized_generator.dart';
 import 'scene_preset_generator.dart';
+import 'scene_recorder.dart' show SceneRecord, SceneRecorder;
 import 'scene_session.dart';
 import 'scene_snapshot.dart';
 import 'smart_preset.dart';
@@ -72,6 +73,7 @@ class SceneEngine {
 
   final SceneGenericPresetGenerator _genericGenerator;
   final ScenePersonalizedPresetGenerator _personalizedGenerator;
+  final SceneRecorder _recorder;
 
   bool _personalize = false;
   bool _settingsLoaded = false;
@@ -81,6 +83,7 @@ class SceneEngine {
     MethodChannel? channel,
     SceneGenericPresetGenerator? genericGenerator,
     ScenePersonalizedPresetGenerator? personalizedGenerator,
+    SceneRecorder? recorder,
     this.pollInterval = const Duration(milliseconds: 100),
     this.sessionTimeout = const Duration(seconds: 5),
     this.minSamples = 10,
@@ -89,7 +92,12 @@ class SceneEngine {
         _genericGenerator =
             genericGenerator ?? SceneGenericPresetGenerator(),
         _personalizedGenerator = personalizedGenerator ??
-            ScenePersonalizedPresetGenerator();
+            ScenePersonalizedPresetGenerator(),
+        _recorder = recorder ?? SceneRecorder();
+
+  /// Acceso al recorder para que la UI pueda leer historial / actualizar
+  /// feedback.
+  SceneRecorder get recorder => _recorder;
 
   /// Lee el toggle persistido. Idempotente y silencioso en errores.
   /// Tras el primer `loadSettings`, `wasPersonalizeUserSet` indica si hay
@@ -247,7 +255,21 @@ class SceneEngine {
     } catch (_) {
       // Persistencia no bloquea el apply.
     }
+
+    // Registrar la aplicación en el log de Smart Scene para histórico +
+    // feedback. Devuelve el SceneRecord guardado por si el caller quiere
+    // su `id` (p. ej. para asociar el botón 👍/👎).
+    try {
+      _lastRecord = await _recorder.record(result, preset: preset);
+    } catch (_) {
+      _lastRecord = null;
+    }
   }
+
+  /// Último `SceneRecord` registrado (para feedback). null si todavía no
+  /// se aplicó nada en esta sesión.
+  SceneRecord? get lastRecord => _lastRecord;
+  SceneRecord? _lastRecord;
 
   // ────────────────────────────────────────────────────────────────────
   // Internos

@@ -26,6 +26,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../scene/scene_class.dart';
 import '../../scene/scene_engine.dart';
+import '../../scene/scene_recorder.dart';
 import '../../scene/scene_snapshot.dart';
 import '../../scene/smart_preset.dart';
 import '../bloc/amplification_bloc.dart';
@@ -65,15 +66,17 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   bool _isRecording = false;
   DateTime? _recordingStartedAt;
 
-  // ─── Smart Scene Engine (Fase 2/3) ──────────────────────────────────
+  // ─── Smart Scene Engine (Fase 2/3/4) ────────────────────────────────
   final SceneEngine _engine = SceneEngine();
   bool _engineLoaded = false;
   bool _isAnalyzing = false;
   bool _isApplying = false;
   SceneAnalysisResult? _lastResult;
+  SceneRecord? _lastRecord;
   String? _analysisError;
   Audiogram? _audiogram;
   bool _audiogramLoaded = false;
+  List<SceneRecord> _history = const <SceneRecord>[];
 
   @override
   void initState() {
@@ -86,6 +89,16 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     await _loadEngineSettings();
     if (!mounted) return;
     await _loadAudiogram();
+    if (!mounted) return;
+    await _refreshHistory();
+  }
+
+  Future<void> _refreshHistory() async {
+    final list = await _engine.recorder.getHistory(limit: 10);
+    if (!mounted) return;
+    setState(() {
+      _history = list;
+    });
   }
 
   @override
@@ -213,6 +226,7 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     setState(() {
       _isAnalyzing = true;
       _analysisError = null;
+      _lastRecord = null; // limpiar feedback del análisis anterior
     });
     try {
       final result = await _engine.analyze(audiogram: _audiogram);
@@ -250,13 +264,60 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
       final bloc = context.read<AmplificationBloc>();
       await _engine.apply(result, bloc: bloc);
       if (!mounted) return;
+      _lastRecord = _engine.lastRecord;
       _showSnack('Preset "${result.preset.name}" aplicado.');
+      await _refreshHistory();
     } catch (e) {
       if (!mounted) return;
       _logError('apply: $e');
       _showSnack('No se pudo aplicar: $e');
     } finally {
       if (mounted) setState(() => _isApplying = false);
+    }
+  }
+
+  Future<void> _sendFeedback(bool positive) async {
+    final rec = _lastRecord;
+    if (rec == null) return;
+    await _engine.recorder.updateFeedback(rec.id, positive);
+    if (!mounted) return;
+    setState(() {
+      _lastRecord = rec.copyWith(feedback: positive);
+    });
+    _showSnack(positive ? 'Gracias por el 👍' : 'Anotado, lo mejoramos.');
+    await _refreshHistory();
+  }
+
+  Future<void> _clearHistory() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16213e),
+        title: const Text(
+          'Borrar histórico',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          '¿Querés borrar todas las entradas del histórico de Smart Scene?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Borrar', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _engine.recorder.clearAll();
+      if (!mounted) return;
+      _showSnack('Histórico borrado.');
+      await _refreshHistory();
     }
   }
 
@@ -418,6 +479,8 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
                 onApply: _applyPreset,
                 analysisError: _analysisError,
                 lastResult: _lastResult,
+                lastRecord: _lastRecord,
+                onFeedback: _sendFeedback,
               ),
               const SizedBox(height: 12),
               _LevelsCard(snapshot: _snapshot),
@@ -438,6 +501,11 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
                 onCopyRolling: _copyRolling,
                 onCopyErrors: _copyErrorLog,
                 onClearRecording: _clearRecording,
+              ),
+              const SizedBox(height: 12),
+              _HistoryCard(
+                history: _history,
+                onClear: _clearHistory,
               ),
               const SizedBox(height: 12),
               _MetaCard(snapshot: _snapshot),
@@ -902,6 +970,137 @@ class _MetricRow extends StatelessWidget {
   }
 }
 
+class _FeedbackBar extends StatelessWidget {
+  final bool? feedback;
+  final ValueChanged<bool> onFeedback;
+
+  const _FeedbackBar({required this.feedback, required this.onFeedback});
+
+  @override
+  Widget build(BuildContext context) {
+    final answered = feedback != null;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              '¿Funcionó bien este preset?',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Sí',
+            icon: Icon(
+              Icons.thumb_up_alt_rounded,
+              color: feedback == true
+                  ? Colors.greenAccent
+                  : Colors.white60,
+            ),
+            onPressed: answered ? null : () => onFeedback(true),
+          ),
+          IconButton(
+            tooltip: 'No',
+            icon: Icon(
+              Icons.thumb_down_alt_rounded,
+              color: feedback == false
+                  ? Colors.redAccent
+                  : Colors.white60,
+            ),
+            onPressed: answered ? null : () => onFeedback(false),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryCard extends StatelessWidget {
+  final List<SceneRecord> history;
+  final VoidCallback onClear;
+
+  const _HistoryCard({required this.history, required this.onClear});
+
+  String _formatTime(DateTime t) {
+    final hh = t.hour.toString().padLeft(2, '0');
+    final mm = t.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SceneCard(
+      icon: Icons.history,
+      title: 'Histórico (últimas ${history.length})',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (history.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Todavía no aplicaste ningún preset.',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            )
+          else
+            ...history.map((rec) {
+              final cls = rec.sceneClass;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(cls.icon, color: cls.color, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${cls.label}  ·  ${_formatTime(rec.timestamp)}'
+                        '${rec.wasPersonalized ? "  ·  perso" : ""}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    if (rec.feedback != null)
+                      Icon(
+                        rec.feedback!
+                            ? Icons.thumb_up_alt_rounded
+                            : Icons.thumb_down_alt_rounded,
+                        size: 14,
+                        color: rec.feedback!
+                            ? Colors.greenAccent
+                            : Colors.redAccent,
+                      ),
+                  ],
+                ),
+              );
+            }),
+          if (history.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: onClear,
+                icon: const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Borrar histórico'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _ErrorEntry {
   final DateTime timestamp;
   final String message;
@@ -924,6 +1123,8 @@ class _DetectCard extends StatelessWidget {
   final VoidCallback onApply;
   final String? analysisError;
   final SceneAnalysisResult? lastResult;
+  final SceneRecord? lastRecord;
+  final ValueChanged<bool> onFeedback;
 
   const _DetectCard({
     required this.isAnalyzing,
@@ -937,6 +1138,8 @@ class _DetectCard extends StatelessWidget {
     required this.onApply,
     required this.analysisError,
     required this.lastResult,
+    required this.lastRecord,
+    required this.onFeedback,
   });
 
   @override
@@ -1026,6 +1229,13 @@ class _DetectCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
             ),
+            if (lastRecord != null) ...[
+              const SizedBox(height: 12),
+              _FeedbackBar(
+                feedback: lastRecord!.feedback,
+                onFeedback: onFeedback,
+              ),
+            ],
           ],
         ],
       ),
