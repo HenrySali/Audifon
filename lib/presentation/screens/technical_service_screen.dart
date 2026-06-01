@@ -3,6 +3,7 @@ import 'diagnostic/calibration_step.dart';
 import 'calibration_spectrum_screen.dart';
 import '../../biological_calibration/screens/biological_calibration_screen.dart';
 import '../../audiometry/screens/audiometry_screen.dart';
+import '../../feedback_checklist/screens/feedback_export_screen.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -133,6 +134,24 @@ class TechnicalServiceScreen extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => const AudiometryScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Feedback Acumulado del usuario (checklist + export)
+          _ServiceCard(
+            icon: Icons.feedback,
+            iconColor: Colors.tealAccent,
+            title: 'Feedback Acumulado',
+            description:
+                'Ver y exportar el feedback que el usuario dejó sobre cada '
+                'configuración aplicada (👍/👎 + checklist). Genera un archivo '
+                'JSON y borra los registros de la app tras la exportación.',
+            buttonText: 'Ver / Exportar',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const FeedbackExportScreen(),
               ),
             ),
           ),

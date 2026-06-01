@@ -22,6 +22,7 @@ import 'smart_scene_screen.dart';
 import 'spectrum_analyzer_screen.dart';
 import 'preset_learning_screen.dart';
 import 'technical_service_screen.dart';
+import '../../feedback_checklist/screens/feedback_checklist_dialog.dart';
 
 /// Pantalla principal de amplificación del PSK Mobile Hearing Aid.
 ///
@@ -1863,6 +1864,9 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
           '${volDelta != 0 ? '   ·   Vol ${volDelta.toStringAsFixed(0)} dB' : ''}'
           '${fromLearning ? '   ·   📚 Aprendido' : ''}',
       entryId: entryId,
+      presetName: preset.name,
+      gains: preset.gains,
+      sceneClass: PresetAdvisor.labelFor(dominant),
     );
 
     setState(() => _busy = false);
@@ -1874,6 +1878,9 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
     required BuildContext context,
     required String message,
     required int entryId,
+    required String presetName,
+    required List<double> gains,
+    required String sceneClass,
   }) {
     final messenger = ScaffoldMessenger.of(context);
     messenger.clearMaterialBanners();
@@ -1899,6 +1906,15 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
                   duration: Duration(seconds: 2),
                 ),
               );
+              if (mounted) {
+                await showFeedbackChecklistDialog(
+                  context,
+                  sceneClass: sceneClass,
+                  presetName: presetName,
+                  gains: gains,
+                  thumbsUp: false,
+                );
+              }
             },
             icon: const Icon(Icons.thumb_down, color: Colors.redAccent, size: 18),
             label: const Text(
@@ -1919,6 +1935,15 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
                   duration: Duration(seconds: 2),
                 ),
               );
+              if (mounted) {
+                await showFeedbackChecklistDialog(
+                  context,
+                  sceneClass: sceneClass,
+                  presetName: presetName,
+                  gains: gains,
+                  thumbsUp: true,
+                );
+              }
             },
             icon: const Icon(Icons.thumb_up, color: Colors.greenAccent, size: 18),
             label: const Text(
