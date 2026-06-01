@@ -30,8 +30,12 @@ android {
         versionName = "1.0.0"
 
         // Configuración NDK para compilación C++ del DSP pipeline
+        // Solo arm64-v8a porque las librerias prebuilt de OnnxRuntime
+        // (jniLibs/arm64-v8a/libonnxruntime.so + libsherpa-onnx-jni.so)
+        // están solo para 64-bit. Cualquier dispositivo Android 8+
+        // (API 26+, ~98% del parque actual) es arm64-v8a.
         ndk {
-            abiFilters "armeabi-v7a", "arm64-v8a", "x86_64"
+            abiFilters "arm64-v8a"
         }
 
         // CMake para compilar código C++ nativo (DSP pipeline)
