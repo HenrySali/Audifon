@@ -210,6 +210,32 @@ class AudioMethodChannel(
                     val data = nativeBridge.nativeGetToneSnapshot()
                     result.success(data)
                 }
+                // DNN Denoiser (GTCRN vía OnnxRuntime) — Fase 3
+                "initDnnDenoiser" -> {
+                    // Inicialización lazy: pasamos AAssetManager al nativo
+                    // para que cargue gtcrn.onnx desde assets/.
+                    val ok = try {
+                        nativeBridge.nativeInitDnnDenoiser(context.assets)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "initDnnDenoiser failed", t)
+                        false
+                    }
+                    result.success(ok)
+                }
+                "setDnnEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    nativeBridge.nativeSetDnnEnabled(enabled)
+                    result.success(null)
+                }
+                "setDnnIntensity" -> {
+                    val intensity = (call.argument<Double>("intensity") ?: 1.0).toFloat()
+                    nativeBridge.nativeSetDnnIntensity(intensity)
+                    result.success(null)
+                }
+                "getDnnIsActive" -> {
+                    val active = nativeBridge.nativeGetDnnIsActive()
+                    result.success(active)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

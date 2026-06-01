@@ -13,6 +13,10 @@
 #include "dsp_pipeline.h"
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
+#include "dnn_denoiser/dnn_denoiser.h"
+
+// Forward decl from <android/asset_manager.h>
+struct AAssetManager;
 
 /// Configuración del motor de audio (updated for Oboe).
 struct AudioEngineConfig {
@@ -83,6 +87,24 @@ public:
         return toneAnalyzer_.configure(cfg);
     }
 
+    // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
+    /// Inicializa el DNN denoiser desde assets.
+    /// Llamar UNA VEZ al startup (idempotente). Si falla, queda en bypass
+    /// permanente y el resto del pipeline funciona sin DNN.
+    /// Default: disabled (la app arranca igual que hoy).
+    /// @param mgr AAssetManager pasado desde Kotlin
+    /// @return true si el modelo cargó correctamente.
+    bool initDnnDenoiser(AAssetManager* mgr);
+    /// Habilita/deshabilita el DNN denoiser (con crossfade anti-clic).
+    /// Cuando está habilitado, REEMPLAZA al NR Wiener clásico.
+    void setDnnEnabled(bool enabled);
+    /// Mezcla dry/wet del DNN denoiser (0..1).
+    void setDnnIntensity(float intensity);
+    /// @return true si el DNN denoiser está procesando audio (no en bypass por error).
+    bool getDnnIsActive() const { return dnnDenoiser_.isActive(); }
+    /// @return true si el flag de configuración enabled está en true.
+    bool getDnnIsEnabled() const { return dnnDenoiser_.isEnabled(); }
+
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
     void stopSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(false); }
@@ -132,6 +154,12 @@ private:
     /// ToneAnalyzer integrado al callback de audio. Siempre presente,
     /// sólo activo cuando el técnico inicia una secuencia de validación.
     cal_spectrum::ToneAnalyzer toneAnalyzer_;
+
+    // ─── DNN Denoiser (GTCRN) ────────────────────────────────────────────
+    /// SubVI estilo LabVIEW: cuando enabled=true REEMPLAZA al NR Wiener
+    /// del DspPipeline. Por default desactivado para arrancar igual que hoy.
+    /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
+    dnn_denoiser::DnnDenoiser dnnDenoiser_;
 
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;

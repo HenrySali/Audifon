@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../dnn_denoiser/dnn_denoiser_controller.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../scene/scene_class.dart';
 import '../../scene/scene_engine.dart';
@@ -78,11 +79,21 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   bool _audiogramLoaded = false;
   List<SceneRecord> _history = const <SceneRecord>[];
 
+  // ─── DNN Denoiser (GTCRN) ────────────────────────────────────────────
+  /// Controller del denoiser DNN. Se inicializa en initState.
+  /// La UI muestra un toggle ON/OFF + slider de intensidad.
+  /// El estado "está procesando audio" se polea cada 500 ms.
+  final DnnDenoiserController _dnnController = DnnDenoiserController();
+  bool _dnnSettingsLoaded = false;
+  Timer? _dnnIsActivePollTimer;
+  static const Duration _dnnIsActivePollInterval = Duration(milliseconds: 500);
+
   @override
   void initState() {
     super.initState();
     _startPolling();
     _initEngineAndAudiogram();
+    _initDnnDenoiser();
   }
 
   Future<void> _initEngineAndAudiogram() async {
@@ -91,6 +102,42 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     await _loadAudiogram();
     if (!mounted) return;
     await _refreshHistory();
+  }
+
+  /// Carga settings persistidos del DNN denoiser y arranca el polling de
+  /// `isActive` (que el wrapper nativo expone como flag operacional).
+  ///
+  /// El init del modelo nativo (carga de `gtcrn.onnx`) ya se llamó desde
+  /// la pantalla principal o el método channel handler; acá sólo cargamos
+  /// el último estado (enabled/intensity) para que la UI lo refleje.
+  Future<void> _initDnnDenoiser() async {
+    await _dnnController.loadSettings();
+    if (!mounted) return;
+    setState(() {
+      _dnnSettingsLoaded = true;
+    });
+    await _dnnController.refreshIsActive();
+    if (!mounted) return;
+    setState(() {});
+    _dnnIsActivePollTimer?.cancel();
+    _dnnIsActivePollTimer = Timer.periodic(_dnnIsActivePollInterval, (_) async {
+      if (!mounted) return;
+      await _dnnController.refreshIsActive();
+      if (!mounted) return;
+      setState(() {});
+    });
+  }
+
+  Future<void> _onDnnEnabledChanged(bool enabled) async {
+    await _dnnController.setEnabled(enabled);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _onDnnIntensityChanged(double intensity) async {
+    await _dnnController.setIntensity(intensity);
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _refreshHistory() async {
@@ -104,6 +151,7 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _dnnIsActivePollTimer?.cancel();
     super.dispose();
   }
 
@@ -481,6 +529,15 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
                 lastResult: _lastResult,
                 lastRecord: _lastRecord,
                 onFeedback: _sendFeedback,
+              ),
+              const SizedBox(height: 12),
+              _DnnDenoiserCard(
+                settingsLoaded: _dnnSettingsLoaded,
+                enabled: _dnnController.isEnabled,
+                intensity: _dnnController.intensity,
+                isActive: _dnnController.isActive,
+                onEnabledChanged: _onDnnEnabledChanged,
+                onIntensityChanged: _onDnnIntensityChanged,
               ),
               const SizedBox(height: 12),
               _LevelsCard(snapshot: _snapshot),
@@ -1362,6 +1419,195 @@ class _PresetSummary extends StatelessWidget {
           style: const TextStyle(color: Colors.white60, fontSize: 11),
         ),
       ],
+    );
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DNN Denoiser Card
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Card de control del DNN denoiser (GTCRN).
+///
+/// Muestra:
+///   - Toggle ON/OFF (controla [DnnDenoiserController.setEnabled]).
+///   - Slider de intensidad 0–100 % (controla [DnnDenoiserController.setIntensity]).
+///   - Badge de estado:
+///       gris  = OFF (bypass por configuración)
+///       cyan  = ON + isActive=true (procesando audio)
+///       rojo  = ON pero isActive=false (modelo no cargó)
+///   - Aviso de que activar el DNN agrega ~16–25 ms de latencia.
+///
+/// Política UX:
+///   - El toggle siempre es manipulable, incluso si el modelo no cargó.
+///     En ese caso el flag se persiste en Hive pero el wrapper nativo
+///     queda en bypass. Cuando el usuario active el modo "tono fuerte"
+///     o reinicie con el modelo OK, el flag ya estará prendido.
+///   - El slider sólo es interactivo cuando [enabled] es true (visualmente
+///     deshabilitado en OFF para evitar confusión).
+class _DnnDenoiserCard extends StatelessWidget {
+  /// true cuando ya se hizo `loadSettings()`. Antes de eso mostramos el
+  /// toggle deshabilitado para evitar pisar el último valor persistido.
+  final bool settingsLoaded;
+
+  /// Último valor de enabled (in-memory snapshot del controller).
+  final bool enabled;
+
+  /// Intensidad de mezcla dry/wet en [0, 1].
+  final double intensity;
+
+  /// true si el wrapper nativo está realmente procesando audio (modelo
+  /// cargado, sesión OK, sin errores). Distinto de [enabled].
+  final bool isActive;
+
+  final ValueChanged<bool> onEnabledChanged;
+  final ValueChanged<double> onIntensityChanged;
+
+  const _DnnDenoiserCard({
+    required this.settingsLoaded,
+    required this.enabled,
+    required this.intensity,
+    required this.isActive,
+    required this.onEnabledChanged,
+    required this.onIntensityChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final intensityPct = (intensity * 100).round();
+    return _SceneCard(
+      icon: Icons.psychology,
+      title: 'Limpiador de ruido (IA)',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ─── Fila superior: badge de estado + switch ───────────────
+          Row(
+            children: [
+              _buildStatusBadge(),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  enabled
+                      ? (isActive
+                          ? 'Activo: limpiando ruido en tiempo real'
+                          : 'Encendido pero el modelo aún no cargó')
+                      : 'Apagado: usando reducción clásica de ruido',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.85),
+                    fontSize: 12.5,
+                  ),
+                ),
+              ),
+              Switch(
+                value: enabled,
+                onChanged: settingsLoaded ? onEnabledChanged : null,
+                activeColor: Colors.cyanAccent,
+                inactiveThumbColor: Colors.white60,
+                inactiveTrackColor: Colors.white12,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // ─── Slider de intensidad ───────────────────────────────────
+          Opacity(
+            opacity: enabled ? 1.0 : 0.5,
+            child: Row(
+              children: [
+                const Icon(Icons.tune, color: Colors.white60, size: 16),
+                const SizedBox(width: 4),
+                const Text(
+                  'Fuerza',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: intensity,
+                    min: 0.0,
+                    max: 1.0,
+                    divisions: 20,
+                    label: '$intensityPct %',
+                    activeColor: Colors.cyanAccent,
+                    inactiveColor: Colors.white24,
+                    onChanged: enabled ? onIntensityChanged : null,
+                  ),
+                ),
+                SizedBox(
+                  width: 38,
+                  child: Text(
+                    '$intensityPct%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12.5,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          // ─── Aviso de latencia ──────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.amber.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.amber.withOpacity(0.3)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.access_time, color: Colors.amber, size: 14),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Cuando está activo, el sonido llega ~20 ms más tarde. '
+                    'Apagalo para llamadas o música si te molesta.',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusBadge() {
+    final Color color;
+    final String label;
+    if (!enabled) {
+      color = Colors.white38;
+      label = 'OFF';
+    } else if (isActive) {
+      color = Colors.cyanAccent;
+      label = 'ON';
+    } else {
+      color = Colors.redAccent;
+      label = 'ERR';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(0.6)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
+        ),
+      ),
     );
   }
 }

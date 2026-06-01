@@ -17,6 +17,8 @@
 
 #include <jni.h>
 #include <android/log.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
 #include <atomic>
 #include <memory>
 
@@ -730,6 +732,73 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetToneSnapshot(
                                 reinterpret_cast<const jbyte*>(buffer));
     }
     return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DNN Denoiser (GTCRN vía OnnxRuntime) — Fase 3 del plan DNN
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Inicializa el modelo DNN desde assets. Llamar UNA VEZ al startup.
+/// Idempotente: si ya está inicializado, retorna true.
+/// @param assetMgr AssetManager Java (java.lang.Object → AAssetManager)
+/// @return true si el modelo se cargó correctamente.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeInitDnnDenoiser(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jobject assetMgrJava) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        LOGW("nativeInitDnnDenoiser: engine not running, ignoring");
+        return JNI_FALSE;
+    }
+
+    AAssetManager* mgr = (assetMgrJava != nullptr)
+                         ? AAssetManager_fromJava(env, assetMgrJava)
+                         : nullptr;
+
+    const bool ok = g_engine->initDnnDenoiser(mgr);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Habilita/deshabilita el DNN denoiser. Cuando ON reemplaza al NR Wiener.
+/// Por defecto: OFF (la app arranca sin DNN).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetDnnEnabled(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setDnnEnabled(enabled == JNI_TRUE);
+}
+
+/// Mezcla dry/wet del DNN denoiser (0..1).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetDnnIntensity(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jfloat intensity) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setDnnIntensity(intensity);
+}
+
+/// @return true si el DNN está actualmente procesando audio (modelo cargado,
+///         worker corriendo, sin errores). false en bypass por config o error.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDnnIsActive(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return g_engine->getDnnIsActive() ? JNI_TRUE : JNI_FALSE;
 }
 
 } // extern "C"

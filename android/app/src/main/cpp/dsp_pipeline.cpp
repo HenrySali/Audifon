@@ -128,7 +128,11 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     tnr_.process(buffer, blockSize);
 
     // ─── 1. Noise Reduction (solo atenúa) ───────────────────────────────
-    nr_.process(buffer, blockSize);
+    // Si nrBypassed_=true, otro denoiser externo (DNN) procesó el buffer
+    // antes (en el AudioEngine), así que evitamos doble NR.
+    if (!nrBypassed_.load(std::memory_order_acquire)) {
+        nr_.process(buffer, blockSize);
+    }
 
     // Métrica: nivel post-NR
     lastPostNrLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);

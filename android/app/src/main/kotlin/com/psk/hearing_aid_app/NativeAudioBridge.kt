@@ -346,6 +346,41 @@ class NativeAudioBridge {
      */
     external fun nativeGetToneSnapshot(): ByteArray
 
+    // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
+
+    /**
+     * Inicializa el modelo DNN GTCRN desde assets. Llamar UNA VEZ al startup,
+     * después de `nativeStart()`. Idempotente.
+     *
+     * @param assetMgr AssetManager Java obtenido vía `context.assets`
+     * @return true si el modelo cargó correctamente. false → DNN queda en
+     *         bypass permanente (la app sigue funcionando sin DNN).
+     */
+    external fun nativeInitDnnDenoiser(assetMgr: android.content.res.AssetManager?): Boolean
+
+    /**
+     * Habilita/deshabilita el DNN denoiser.
+     * Cuando ON reemplaza al NR Wiener clásico (no se ejecutan ambos).
+     * Por defecto: OFF — la app arranca igual que antes del DNN.
+     *
+     * @param enabled true para activar, false para volver al NR Wiener
+     */
+    external fun nativeSetDnnEnabled(enabled: Boolean)
+
+    /**
+     * Mezcla dry/wet del DNN denoiser. 0.0 = sólo señal original,
+     * 1.0 = sólo denoised. Valores intermedios = mezcla lineal.
+     * Valores fuera de [0,1] se clampean en el lado nativo.
+     */
+    external fun nativeSetDnnIntensity(intensity: Float)
+
+    /**
+     * @return true si el DNN denoiser está procesando audio en este momento
+     *         (modelo cargado, worker corriendo, sin errores).
+     *         false si está en bypass (por config o por error de inicialización).
+     */
+    external fun nativeGetDnnIsActive(): Boolean
+
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.

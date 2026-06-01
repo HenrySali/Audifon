@@ -33,6 +33,13 @@ dev_dependencies:
 dependency_overrides:
   analyzer: ">=6.0.0 <14.0.0"
   objective_c: 4.0.0
+  # path_provider_foundation 2.5.x requires objective_c >=8.0,
+  # but our project pins objective_c to 4.0.0 for compatibility with
+  # other plugins. 2.4.x is the last release compatible with objective_c 4.x.
+  # Note: path_provider_foundation is iOS/macOS-only; this version pin
+  # does NOT affect Android behavior, only ensures the kernel snapshot
+  # compiles when the foundation plugin is present in the deps tree.
+  path_provider_foundation: 2.4.1
 
 flutter:
   uses-material-design: true

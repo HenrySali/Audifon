@@ -15,6 +15,7 @@
 
 #include <android/log.h>
 #include <android/api-level.h>
+#include <android/asset_manager.h>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -334,6 +335,36 @@ int32_t AudioEngine::getOutputDeviceId() const {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DNN Denoiser (GTCRN) — wrappers thin sobre dnnDenoiser_
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
+    LOGI("initDnnDenoiser: assetMgr=%p", mgr);
+    const bool ok = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
+    if (!ok) {
+        LOGW("initDnnDenoiser: model not loaded — DNN will be permanently bypassed");
+    } else {
+        LOGI("initDnnDenoiser: model ready");
+    }
+    return ok;
+}
+
+void AudioEngine::setDnnEnabled(bool enabled) {
+    dnnDenoiser_.setEnabled(enabled);
+    // Si activamos el DNN, deshabilitamos el NR Wiener clásico para
+    // evitar doble denoising. Si desactivamos, restauramos el NR clásico.
+    pipeline_.setNrBypassed(enabled);
+    LOGI("setDnnEnabled: %d (active=%d) — NR Wiener bypassed: %d",
+         enabled ? 1 : 0,
+         dnnDenoiser_.isActive() ? 1 : 0,
+         enabled ? 1 : 0);
+}
+
+void AudioEngine::setDnnIntensity(float intensity) {
+    dnnDenoiser_.setIntensity(intensity);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Oboe FullDuplexStream Callback
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -380,6 +411,15 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         LOGI("Input diag: numFrames=%d, maxSample=%.6f, inputPtr=%p",
              numFrames, maxSample, inputData);
     }
+
+    // ─── DNN Denoiser (GTCRN) — REEMPLAZA al NR Wiener cuando enabled ────
+    // Por contrato del wrapper:
+    //   - Si dnnDenoiser_.isEnabled() == false y crossfadeGain == 0 →
+    //     bypass bit-exact (sin tocar el buffer).
+    //   - Si está enabled o haciendo crossfade out → procesa.
+    // El DspPipeline ya está configurado (vía setNrBypassed) para no
+    // ejecutar el NR Wiener cuando el DNN está activo.
+    dnnDenoiser_.process(outPtr, numFrames);
 
     // ─── DSP processing in-place on output buffer ────────────────────────
     pipeline_.processBlock(outPtr, numFrames);

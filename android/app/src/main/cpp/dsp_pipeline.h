@@ -93,6 +93,16 @@ public:
     /// @param level 0=off, 1=bajo, 2=medio, 3=alto
     void setNrLevel(int level);
 
+    /// Habilita el bypass del NR Wiener interno. Usado cuando un denoiser
+    /// externo (DNN) procesó el buffer antes y queremos evitar doble NR.
+    /// Thread-safe (atómico).
+    void setNrBypassed(bool bypassed) {
+        nrBypassed_.store(bypassed, std::memory_order_release);
+    }
+    bool isNrBypassed() const {
+        return nrBypassed_.load(std::memory_order_acquire);
+    }
+
     /// Habilita/deshabilita el Transient Noise Reducer (TNR).
     /// El TNR atenúa impulsos abruptos como timbres del subte, puertas, bocinas.
     void setTnrEnabled(bool enabled) { tnr_.setEnabled(enabled); }
@@ -177,6 +187,7 @@ private:
     std::atomic<float> volumeLinear_{1.0f};   ///< Factor lineal pre-calculado
     std::atomic<float> splOffset_{93.0f};     ///< Offset dBFS → dB SPL (93 para mic celular)
     std::atomic<bool> autoClassifyEnabled_{true}; ///< Clasificación automática habilitada
+    std::atomic<bool> nrBypassed_{false};     ///< true: saltear NR Wiener (un denoiser externo lo reemplaza)
 
     // --- Estado de salida (legible desde cualquier hilo) ---
     std::atomic<float> lastInputLevelDb_{0.0f}; ///< Último nivel PRE-EQ medido

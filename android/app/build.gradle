@@ -69,7 +69,26 @@ flutter {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
     implementation "androidx.core:core-ktx:1.12.0"
     implementation 'com.google.oboe:oboe:1.9.0'
+}
+
+// Force androidx.core and androidx.core-ktx to a version compatible with
+// the current Android Gradle Plugin (8.3.2) and compileSdk 34.
+//
+// Reason: some transitive dependency (likely from a Flutter plugin) pulls in
+// androidx.core:1.17.0, which requires AGP 8.9.1+ and compileSdk 36. Until
+// the project upgrades AGP and compileSdk, we pin the versions explicitly
+// so Gradle resolves to a compatible release.
+//
+// 1.13.1 is the highest 1.13.x release compatible with compileSdk 34.
+// androidx.browser:1.8.0 is the last release compatible with compileSdk 34
+// (newer versions pull androidx.browser 1.9.0 which requires AGP 8.9.1+).
+configurations.all {
+    resolutionStrategy {
+        force 'androidx.core:core:1.13.1'
+        force 'androidx.core:core-ktx:1.13.1'
+        force 'androidx.browser:browser:1.8.0'
+    }
 }
