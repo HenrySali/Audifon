@@ -642,11 +642,14 @@ struct DnnDenoiser::Impl {
                   olaBuf.end(), 0.0f);
 
         // ── 12. Push outputFrame al outputRing ───────────────────────────
-        // Si no hay espacio, descartamos el frame (drop counter).
-        const int pushed = outputRing.push(outputFrame.data(), kDnnHopSize);
-        if (pushed < kDnnHopSize) {
+        // Si no hay espacio TOTAL, descartamos el frame y contamos drop.
+        // Esto evita meter solo "media porción" que después rompa la
+        // alineación 1:1 con el dryDelayRing (causa de clicks periódicos).
+        if (outputRing.freeSpace() < kDnnHopSize) {
             droppedFramesLocal.fetch_add(1, std::memory_order_relaxed);
+            return true;
         }
+        outputRing.push(outputFrame.data(), kDnnHopSize);
 
         return true;
     }
@@ -800,27 +803,22 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
     }
 
     // Tirar wet samples del outputRing.
-    // Si no hay suficientes (worker no alcanzó la tasa), usar dry como fallback
-    // y NO consumir del dryDelayRing (eso ya lo hicimos como push, lo dejamos
-    // ahí para el siguiente intento de mezcla). En ese caso simplemente dejamos
-    // el buffer como está (passthrough) y la mezcla queda en dry.
+    // Si no hay suficientes (worker no alcanzó la tasa), usar dry como fallback.
+    // CRÍTICO: en underrun TAMBIÉN hay que consumir del dryDelayRing para
+    // mantener el alineamiento 1:1 push/pop. Si no, el dry se acumula
+    // indefinidamente y cuando el worker se recupera mezclamos dry de hace
+    // varios bloques con wet actual → click periódico audible.
     std::vector<float> wet(blockSize, 0.0f);
     std::vector<float> dry(blockSize, 0.0f);
     const int gotWet = impl_->outputRing.pop(wet.data(), blockSize);
     const int gotDry = impl_->dryDelayRing.pop(dry.data(), blockSize);
 
     if (gotWet < blockSize) {
-        // Underrun: no hay suficiente wet → pasar dry, que ya tiene el delay
-        // correcto. Las muestras dry leídas se descartan (los samples wet
-        // futuros que las correspondan ya van a estar adelantadas).
-        // Sync simple: consumir el resto del dry para mantener el alineamiento
-        // 1:1, y emitir dry directamente.
-        // (En este caso el dryDelayRing puede descalibrarse temporalmente,
-        // pero converge en cuanto el worker se recupera porque ambos consumen
-        // a la misma tasa cuando todo está estable.)
+        // Underrun: el worker no alcanzó. Reproducir dry (input original).
+        // Ya consumimos del dryDelayRing arriba para mantener 1:1.
+        // El buffer ya tiene el dry original, no hay que tocarlo.
+        // Solo avanzar el crossfade en cada sample.
         for (int i = 0; i < blockSize; ++i) {
-            // buffer[i] ya es dry (input original); mantener.
-            // Avanzar el crossfade hacia el target.
             if (crossfadeGain_ < crossfadeTarget_) {
                 crossfadeGain_ = std::min(crossfadeTarget_,
                                           crossfadeGain_ + kCrossfadeStep);
@@ -828,6 +826,12 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
                 crossfadeGain_ = std::max(crossfadeTarget_,
                                           crossfadeGain_ - kCrossfadeStep);
             }
+        }
+        // Si el outputRing tiene wet "viejos" parciales, los descartamos
+        // para que el próximo bloque arranque sincronizado.
+        if (gotWet > 0) {
+            // Drop el wet parcial: ya no nos sirve (sale tarde).
+            droppedFrames_.fetch_add(1, std::memory_order_relaxed);
         }
         return;
     }
