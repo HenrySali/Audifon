@@ -210,6 +210,13 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     dspConfig.splOffset = config_.splOffset;
     pipeline_.init(dspConfig);
 
+    // ─── Step 5a: Inform DNN denoiser of the native sample rate ──────────
+    // El wrapper inserta un resampler interno (polyphase 3:1 si sr=48000,
+    // bypass si sr=16000, lineal en otros casos) para que el modelo GTCRN
+    // siga viendo audio a 16 kHz independientemente de lo que negocie Oboe.
+    // Idempotente: si el sr no cambió respecto a la última llamada, es no-op.
+    dnnDenoiser_.setInputSampleRate(effectiveSampleRate);
+
     // ─── Step 5b: Initialize Smart Scene Engine analyzer (Fase 1) ────────
     sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);
 

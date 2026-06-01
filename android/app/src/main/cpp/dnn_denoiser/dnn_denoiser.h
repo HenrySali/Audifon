@@ -8,22 +8,30 @@
 ///         Reemplaza al NR Wiener clásico cuando enabled=true
 ///
 /// CONTROLES (inputs configurables vía API):
-///   ├─ enabled (bool)           — true: procesa con DNN, false: bypass bit-exact
-///   ├─ intensity (float 0..1)   — mezcla dry/wet (0.0=dry, 1.0=wet)
-///   └─ initialize(AAssetManager) — carga modelo desde assets (lazy)
+///   ├─ enabled (bool)               — true: procesa con DNN, false: bypass bit-exact
+///   ├─ intensity (float 0..1)       — mezcla dry/wet (0.0=dry, 1.0=wet)
+///   ├─ inputSampleRate (int Hz)     — rate nativa de Oboe (default 16000):
+///   │                                  • 16000 → bypass del resampler interno
+///   │                                  • 48000 → polyphase 3:1 (down/up)
+///   │                                  • otros → resampling lineal genérico
+///   └─ initialize(AAssetManager)    — carga modelo desde assets (lazy)
 ///
 /// ENTRADAS (signal wires):
-///   └─ Audio In (float* buffer, int blockSize) — float [-1,+1] @ 16 kHz
+///   └─ Audio In (float* buffer, int blockSize) — float [-1,+1] @ inputSampleRate
 ///
 /// PROCESAMIENTO (algoritmo interno):
 ///   1. Si !enabled → bypass bit-exact (return inmediato, sin copia).
 ///   2. Si enabled y modelo no listo → bypass + isActive_=false.
-///   3. Audio thread: empuja samples al input ring buffer (lock-free SPSC).
-///   4. Worker thread: drena 256 samples → STFT(512, hop 256, Hann) →
-///                     OnnxRuntime.run(mix, conv_cache, tra_cache, inter_cache)
-///                     → enhanced spectrum → iSTFT/OLA → output ring buffer.
-///   5. Audio thread: tira samples del output ring buffer (con fallback a
-///                     dry si el worker se atrasa, cuenta como underrun).
+///   3. Audio thread: si inputSr != 16000 → DOWNSAMPLE a 16 kHz (polyphase
+///                     o lineal según rate). Empuja samples al input ring
+///                     buffer (lock-free SPSC) en samples a 16 kHz.
+///   4. Worker thread: drena 256 samples → STFT(512, hop 256, Hann periódica) →
+///                     OnnxRuntime.run(mix, cache0, cache1, cache2)
+///                     → enhanced spectrum → iSTFT/OLA → output ring buffer
+///                     (también en samples a 16 kHz).
+///   5. Audio thread: tira samples del output ring buffer (16 kHz),
+///                     UPSAMPLE a inputSampleRate. dryDelayRing va en
+///                     samples a la rate nativa (alineamiento 1:1).
 ///   6. Crossfade lineal de 30 ms al activar/desactivar (anti-clic).
 ///   7. Clamp final a ±1.0 por seguridad.
 ///
@@ -44,8 +52,10 @@
 ///
 /// LATENCIA:
 ///   - GTCRN frame = 256 samples (16 ms) a 16 kHz.
-///   - Latencia algorítmica = hop_size = 256 samples = 16 ms.
-///   - Latencia total esperada (con buffering + worker handoff) ≈ 20–25 ms.
+///   - Latencia algorítmica STFT = hop_size = 256 samples = 16 ms.
+///   - Resampler polyphase 48↔16 (96 taps, ratio 3): group delay ≈
+///     (96-1)/2 / 48000 ≈ 0.99 ms en cada sentido → ~2 ms ida+vuelta.
+///   - Latencia total esperada (con buffering + worker handoff) ≈ 22–27 ms.
 ///
 /// FAIL-SAFE:
 ///   Si el modelo no carga, la API de input shape no coincide, o cualquier
@@ -112,6 +122,25 @@ public:
     ///         false → la clase queda en modo bypass permanente.
     /// NOTE: Llamar UNA SOLA VEZ. Idempotente: llamadas siguientes no-op.
     bool initialize(AAssetManager* assetMgr, const char* assetPath);
+
+    /// Configura el sample rate nativo del audio que va a entrar a process().
+    /// El modelo GTCRN trabaja siempre a 16 kHz; este wrapper inserta un
+    /// resampler interno (downsample antes del worker, upsample después)
+    /// cuando inputSr != 16000.
+    ///
+    /// Casos soportados:
+    ///   - 16000      → bypass del resampler (rate nativa del modelo).
+    ///   - 48000      → polyphase FIR 3:1 (96 taps prototipo, fc=7 kHz,
+    ///                   transición ~1 kHz, ventana Kaiser β≈8).
+    ///   - 22050/44100/otros → resampling lineal genérico (suficiente para
+    ///                   denoising, no para audio crítico de calidad).
+    ///
+    /// Llamar en startup desde AudioEngine::start() cuando ya se conoce
+    /// `effectiveSampleRate` reportado por Oboe. Idempotente: si el sr no
+    /// cambió respecto a la última llamada, no reinicializa los filtros.
+    /// Thread-safe (sólo se llama desde el hilo de control, no desde el
+    /// audio callback).
+    void setInputSampleRate(int sampleRateHz);
 
     /// Procesa un bloque de audio in-place. Llamar SOLO desde audio thread.
     /// Cuando enabled=false: bypass bit-exact (retorna sin tocar buffer).

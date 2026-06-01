@@ -201,6 +201,327 @@ int64_t shapeNumel(const std::vector<int64_t>& shape) {
     return n;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SubVI LabVIEW — Resampler 48↔16 (polyphase / lineal)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// CONTROLES (configuración):
+//   ├─ inputRate (int Hz)         — sample rate de la señal de entrada
+//   ├─ outputRate (int Hz)        — sample rate deseado a la salida
+//   └─ mode (auto-detect)         — Identity | Poly48to16 | Poly16to48 | Linear
+//
+// ENTRADAS (signal wires):
+//   └─ in[]  (float, n samples a inputRate)
+//
+// PROCESAMIENTO:
+//   - Identity (in==out): memcpy passthrough.
+//   - Poly48to16 (M=3, 96 taps): downsample con FIR Kaiser β=8, fc=7.5 kHz.
+//   - Poly16to48 (L=3, 96 taps prototipo, 32 por fase): upsample.
+//   - Linear (cualquier otro ratio): interpolación lineal stateful con
+//     fracción acumulada (suficiente para denoising, no para audio crítico).
+//
+// SALIDAS:
+//   ├─ out[] (float, k samples a outputRate)
+//   └─ k     (cantidad real escrita; varía por sample para conservar estado)
+//
+// INDICADORES (debug):
+//   ├─ groupDelaySamples (float)  — latencia introducida en samples a outputRate
+//   └─ groupDelayMs (float)       — latencia en ms
+//
+// ESTADO:
+//   - delay line interna (96 floats para polyphase / 1 float para lineal)
+//   - phase counter para polyphase
+//   - fracción acumulada para lineal
+//
+// THREAD-SAFETY: sólo se accede desde el audio thread. setInputSampleRate
+// (que llama a init/reset) se invoca desde el hilo de control ANTES de que
+// arranque el audio callback. No hay locking interno.
+//
+// LATENCIA:
+//   - Polyphase 96 taps: group delay = (96-1)/2 = 47.5 samples.
+//     A 48 kHz → ~0.99 ms. Round-trip (down + up) ≈ 2 ms.
+//   - Lineal: ~0 muestras (fase acumulada).
+class Resampler {
+public:
+    enum class Mode {
+        kIdentity,        // ratio 1:1, memcpy puro
+        kPolyDown48to16,  // FIR polyphase con M=3
+        kPolyUp16to48,    // FIR polyphase con L=3
+        kLinearGeneric    // lineal stateful (otras rates)
+    };
+
+    /// Configura el resampler. Idempotente: si la configuración no cambió
+    /// respecto al último init, no resetea el estado.
+    void configure(Mode mode, const float* proto, int protoN, float linearRatio) {
+        const bool same = (mode == mode_) &&
+                          (mode != Mode::kLinearGeneric || linearRatio == linearRatio_);
+        if (same && initialized_) return;
+
+        mode_ = mode;
+
+        switch (mode) {
+            case Mode::kIdentity:
+                delay_.clear();
+                phase_ = 0;
+                writeIdx_ = 0;
+                groupDelaySamples_ = 0.0f;
+                break;
+
+            case Mode::kPolyDown48to16:
+                proto_.assign(proto, proto + protoN);
+                protoN_ = protoN;
+                delay_.assign(protoN, 0.0f);
+                phase_ = 0;
+                writeIdx_ = 0;
+                // Group delay del prototipo simétrico: (N-1)/2 samples a 48 kHz.
+                // Salida a 16 kHz: equivalente a (N-1)/2 / 3 samples a 16 kHz,
+                // pero medido en tiempo es (N-1)/2 / 48000 segundos.
+                groupDelaySamples_ = static_cast<float>(protoN - 1) / 2.0f;
+                break;
+
+            case Mode::kPolyUp16to48: {
+                // Splittear el prototipo en L=3 polyphase components,
+                // cada una de N/L = 32 taps. Multiplicar por L para
+                // compensar la inserción de ceros.
+                constexpr int kL = 3;
+                phaseTaps_ = protoN / kL;  // 32
+                phases_.assign(kL, std::vector<float>(phaseTaps_, 0.0f));
+                for (int n = 0; n < phaseTaps_; ++n) {
+                    for (int k = 0; k < kL; ++k) {
+                        const int idx = n * kL + k;
+                        if (idx < protoN) {
+                            phases_[k][n] = proto[idx] * static_cast<float>(kL);
+                        }
+                    }
+                }
+                delay_.assign(phaseTaps_, 0.0f);
+                writeIdx_ = 0;
+                groupDelaySamples_ = static_cast<float>(protoN - 1) / 2.0f;
+                break;
+            }
+
+            case Mode::kLinearGeneric:
+                linearRatio_ = linearRatio;
+                linearAccum_ = 0.0f;
+                linearLast_  = 0.0f;
+                groupDelaySamples_ = 0.0f;
+                break;
+        }
+        initialized_ = true;
+    }
+
+    /// Limpia el estado interno (delay-lines, fase, fracción) sin reconfigurar.
+    void reset() {
+        std::fill(delay_.begin(), delay_.end(), 0.0f);
+        phase_ = 0;
+        writeIdx_ = 0;
+        linearAccum_ = 0.0f;
+        linearLast_  = 0.0f;
+    }
+
+    /// Procesa `n` samples de entrada. Escribe hasta `outMax` samples de
+    /// salida. Devuelve cuántos samples efectivamente escribió.
+    int process(const float* in, int n, float* out, int outMax) {
+        if (n <= 0 || outMax <= 0) return 0;
+        switch (mode_) {
+            case Mode::kIdentity:        return processIdentity(in, n, out, outMax);
+            case Mode::kPolyDown48to16:  return processPolyDown(in, n, out, outMax);
+            case Mode::kPolyUp16to48:    return processPolyUp(in, n, out, outMax);
+            case Mode::kLinearGeneric:   return processLinear(in, n, out, outMax);
+        }
+        return 0;
+    }
+
+    /// Latencia introducida (group delay) en samples a la rate de salida.
+    float groupDelaySamples() const { return groupDelaySamples_; }
+
+    /// Latencia introducida en milisegundos, dado el output rate.
+    float groupDelayMs(int outputRateHz) const {
+        if (outputRateHz <= 0) return 0.0f;
+        return groupDelaySamples_ * 1000.0f / static_cast<float>(outputRateHz);
+    }
+
+private:
+    int processIdentity(const float* in, int n, float* out, int outMax) {
+        const int k = std::min(n, outMax);
+        std::memcpy(out, in, k * sizeof(float));
+        return k;
+    }
+
+    int processPolyDown(const float* in, int n, float* out, int outMax) {
+        // M=3 decimación. Para cada input: escribe en delay line; cada M-ésimo
+        // input genera un output como producto interno de proto * delay.
+        constexpr int kM = 3;
+        const int N = protoN_;
+        int written = 0;
+        for (int i = 0; i < n; ++i) {
+            delay_[writeIdx_] = in[i];
+            writeIdx_ = (writeIdx_ + 1) % N;
+            ++phase_;
+            if (phase_ == kM) {
+                phase_ = 0;
+                if (written < outMax) {
+                    // y = sum_{k=0..N-1} proto[k] * delay[ writeIdx_ - 1 - k ]
+                    float acc = 0.0f;
+                    int idx = writeIdx_ - 1;
+                    if (idx < 0) idx += N;
+                    for (int k = 0; k < N; ++k) {
+                        acc += proto_[k] * delay_[idx];
+                        idx = (idx == 0) ? (N - 1) : (idx - 1);
+                    }
+                    out[written++] = acc;
+                }
+            }
+        }
+        return written;
+    }
+
+    int processPolyUp(const float* in, int n, float* out, int outMax) {
+        // L=3 interpolación. Cada input genera L outputs vía polyphase.
+        // El phase counter (phase_) se preserva entre llamadas para que un
+        // outMax pequeño no descarte fases pendientes.
+        constexpr int kL = 3;
+        int written = 0;
+        int consumed = 0;
+
+        // Si quedan fases pendientes del input anterior, drenarlas primero.
+        while (phase_ > 0 && phase_ < kL && written < outMax) {
+            float acc = 0.0f;
+            int idx = writeIdx_ - 1;
+            if (idx < 0) idx += phaseTaps_;
+            const auto& ph = phases_[phase_];
+            for (int t = 0; t < phaseTaps_; ++t) {
+                acc += ph[t] * delay_[idx];
+                idx = (idx == 0) ? (phaseTaps_ - 1) : (idx - 1);
+            }
+            out[written++] = acc;
+            ++phase_;
+        }
+        if (phase_ >= kL) phase_ = 0;
+
+        while (consumed < n && written < outMax) {
+            delay_[writeIdx_] = in[consumed++];
+            writeIdx_ = (writeIdx_ + 1) % phaseTaps_;
+            phase_ = 0;
+            while (phase_ < kL && written < outMax) {
+                float acc = 0.0f;
+                int idx = writeIdx_ - 1;
+                if (idx < 0) idx += phaseTaps_;
+                const auto& ph = phases_[phase_];
+                for (int t = 0; t < phaseTaps_; ++t) {
+                    acc += ph[t] * delay_[idx];
+                    idx = (idx == 0) ? (phaseTaps_ - 1) : (idx - 1);
+                }
+                out[written++] = acc;
+                ++phase_;
+            }
+            if (phase_ >= kL) phase_ = 0;
+        }
+        return written;
+    }
+
+    int processLinear(const float* in, int n, float* out, int outMax) {
+        // Interpolación lineal con fracción acumulada.
+        // ratio = inputRate / outputRate (ej. 44100/16000 = 2.756).
+        // Para cada output, posición de input = outIdx * ratio.
+        // Mantenemos linearAccum_ como índice fraccional (en samples de input)
+        // relativo al sample de input "next" que aún no consumimos.
+        int written = 0;
+        int consumed = 0;  // samples del input ya pasados.
+        // linearAccum_ ∈ [0, 1) — fracción dentro del intervalo [last, in[0]].
+        while (written < outMax) {
+            // Necesitamos avanzar input mientras linearAccum_ >= 1.0
+            while (linearAccum_ >= 1.0f) {
+                if (consumed >= n) {
+                    // Sin más entrada: terminamos este batch.
+                    return written;
+                }
+                linearLast_ = in[consumed++];
+                linearAccum_ -= 1.0f;
+            }
+            // Output: linealmente entre linearLast_ y in[consumed] (next).
+            const float next = (consumed < n) ? in[consumed]
+                                              : linearLast_;  // hold tail
+            const float frac = linearAccum_;
+            out[written++] = linearLast_ * (1.0f - frac) + next * frac;
+            linearAccum_ += linearRatio_;
+        }
+        return written;
+    }
+
+    Mode mode_ = Mode::kIdentity;
+    bool initialized_ = false;
+
+    // Polyphase state.
+    std::vector<float>              proto_;       // prototipo (down)
+    int                             protoN_ = 0;
+    std::vector<std::vector<float>> phases_;      // L sub-filtros (up)
+    int                             phaseTaps_ = 0;
+    std::vector<float>              delay_;
+    int                             writeIdx_ = 0;
+    int                             phase_    = 0;
+
+    // Linear state.
+    float linearRatio_ = 1.0f;   // inputRate / outputRate
+    float linearAccum_ = 0.0f;
+    float linearLast_  = 0.0f;
+
+    // Indicators.
+    float groupDelaySamples_ = 0.0f;
+};
+
+/// Diseño del prototipo LPF para resampler polyphase 48↔16.
+///   - 96 taps (32 por fase para L/M=3)
+///   - Cutoff fc = 7.5 kHz (midpoint del transition band 7-8 kHz)
+///   - Ventana Kaiser β=8 → ~80 dB stopband attenuation
+///   - Normalizado para DC gain = 1.0 (downsample). El interpolador
+///     compensa la inserción de ceros multiplicando los polyphase por L.
+inline float besselI0Approx(float x) {
+    // Abramowitz & Stegun 9.8.1 / 9.8.2 polynomial approximation.
+    const float ax = std::fabs(x);
+    if (ax < 3.75f) {
+        const float y = (x / 3.75f) * (x / 3.75f);
+        return 1.0f + y * (3.5156229f + y * (3.0899424f + y * (1.2067492f
+            + y * (0.2659732f + y * (0.0360768f + y * 0.0045813f)))));
+    }
+    const float y = 3.75f / ax;
+    return (std::exp(ax) / std::sqrt(ax)) *
+        (0.39894228f + y * (0.01328592f + y * (0.00225319f
+        + y * (-0.00157565f + y * (0.00916281f + y * (-0.02057706f
+        + y * (0.02635537f + y * (-0.01647633f + y * 0.00392377f))))))));
+}
+
+inline void designResamplerProtoLpf(float* h, int N) {
+    // fc normalizado respecto a 48 kHz: 7500/48000 = 0.15625
+    // (cutoff en el midpoint de la banda de transición 7-8 kHz).
+    const float fc = 7500.0f / 48000.0f;
+    const float beta = 8.0f;
+    const float center = (N - 1) / 2.0f;
+    const float i0Beta = besselI0Approx(beta);
+    float sum = 0.0f;
+    for (int n = 0; n < N; ++n) {
+        // Ideal LPF (sinc):  h_ideal[n] = 2*fc * sinc(2*fc*(n - center))
+        const float arg = 2.0f * fc * (static_cast<float>(n) - center);
+        float ideal;
+        if (std::fabs(arg) < 1e-9f) {
+            ideal = 2.0f * fc;
+        } else {
+            const float px = kPi * arg;
+            ideal = 2.0f * fc * std::sin(px) / px;
+        }
+        // Kaiser window.
+        const float ratio = (2.0f * static_cast<float>(n) / (N - 1)) - 1.0f;
+        const float winArg = beta * std::sqrt(std::max(0.0f, 1.0f - ratio * ratio));
+        const float win = besselI0Approx(winArg) / i0Beta;
+        h[n] = ideal * win;
+        sum += h[n];
+    }
+    // Normalizar a unity DC gain.
+    if (sum > 1e-12f) {
+        for (int n = 0; n < N; ++n) h[n] /= sum;
+    }
+}
+
 }  // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,9 +577,27 @@ struct DnnDenoiser::Impl {
     std::vector<int>                  cacheOutputIdx;  // posiciones en outputNames
 
     // ─── Ring buffers (audio ↔ worker) ─────────────────────────────────
-    SpscRing inputRing;     ///< audio_thread → worker
-    SpscRing outputRing;    ///< worker → audio_thread (samples enhanced)
-    SpscRing dryDelayRing;  ///< audio_thread → audio_thread (dry alineada en tiempo)
+    SpscRing inputRing;     ///< audio_thread → worker     (samples @ 16 kHz)
+    SpscRing outputRing;    ///< worker → audio_thread     (samples @ 16 kHz, enhanced)
+    SpscRing dryDelayRing;  ///< audio_thread → audio_thread (dry alineada @ inputSr)
+
+    // ─── Resampler 48↔16 (encapsulado, ver Resampler arriba) ───────────
+    /// Sample rate de entrada/salida observado del audio engine.
+    /// 0 = no configurado todavía → asumimos 16 kHz (bypass).
+    int       inputSr = kDnnSampleRate;
+    /// LPF prototipo precomputado (96 taps, Kaiser β=8, fc=7.5 kHz).
+    /// Compartido entre downsampler y upsampler.
+    std::vector<float> protoLpf;
+    /// Down: inputSr → 16 kHz (audio thread input → inputRing).
+    Resampler down;
+    /// Up:   16 kHz → inputSr (outputRing → wet buffer en rate nativa).
+    Resampler up;
+    /// Buffer staging para los samples a 16 kHz tras downsample.
+    std::vector<float> downStaging;
+    /// Buffer staging para los samples enhanced @ 16 kHz tirados del outputRing.
+    std::vector<float> wet16k;
+    /// Buffer staging para wet upsampleado a inputSr (mismo blockSize que input).
+    std::vector<float> wetNativeRate;
 
     // ─── Worker thread ─────────────────────────────────────────────────
     std::thread             worker;
@@ -284,18 +623,37 @@ struct DnnDenoiser::Impl {
         fftIm.assign(kDnnFftSize, 0.0f);
         outputFrame.assign(kDnnHopSize, 0.0f);
 
-        // Hann window (sqrt-Hann es más común para COLA con OLA, pero Hann
-        // simple también es perfect-reconstruction con hop=N/2 si se aplica
-        // sólo en análisis; aplicamos en análisis y síntesis, así que usamos
-        // sqrt-Hann para que el producto en el solapamiento sume a 1).
+        // Hann window — versión PERIÓDICA (no simétrica).
+        // GTCRN/sherpa-onnx esperan ventana Hann periódica, equivalente a
+        // numpy.hanning(N+1)[:N] o torch.hann_window(N, periodic=True),
+        // que cumple COLA exacta con hop = N/2. Si usáramos la simétrica
+        // ((N-1) en el denominador) introduciríamos un sesgo de amplitud
+        // de ~0.4% en cada bin que el modelo no espera.
+        // Aplicamos sqrt-Hann en análisis y síntesis, así el producto
+        // (window² sumado en el solapamiento) cumple unity-gain OLA.
         for (int i = 0; i < kDnnFftSize; ++i) {
-            const float w = 0.5f * (1.0f - std::cos(2.0f * kPi * i / (kDnnFftSize - 1)));
+            const float w = 0.5f * (1.0f - std::cos(2.0f * kPi * i / kDnnFftSize));
             hannWin[i] = std::sqrt(w);
         }
 
         inputRing.init(kDnnRingCapacity);
         outputRing.init(kDnnRingCapacity);
         dryDelayRing.init(kDnnRingCapacity);
+
+        // ── Resampler: prototipo Kaiser y modo identidad por default ──
+        // El verdadero modo se activa cuando AudioEngine llama
+        // setInputSampleRate(48000). Hasta entonces asumimos 16 kHz
+        // (passthrough bit-exact).
+        protoLpf.assign(96, 0.0f);
+        designResamplerProtoLpf(protoLpf.data(), 96);
+        down.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
+        up.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
+        // Staging buffers: dimensionar generoso para blockSize típico de Oboe.
+        // Oboe suele dar burst de 96-192 frames @ 48 kHz; con M=3 → ~64 a 16 kHz.
+        // Reservamos 1024 para absorber bursts más grandes sin reasignar.
+        downStaging.assign(1024, 0.0f);
+        wet16k.assign(1024, 0.0f);
+        wetNativeRate.assign(2048, 0.0f);
     }
 
     ~Impl() {
@@ -394,48 +752,44 @@ struct DnnDenoiser::Impl {
             }().c_str());
         }
 
-        // ── Identificar "mix" / "enh" / caches ─────────────────────────
-        // Heurística: el primer input cuyo nombre contenga "mix" o sea el
-        // único 4D (batch, freq, time, complex) es el mix; los demás son caches.
-        for (size_t i = 0; i < inputNames.size(); ++i) {
-            const std::string& n = inputNames[i];
-            if (n.find("mix") != std::string::npos) {
-                mixInputIdx = static_cast<int>(i);
-            } else {
-                cacheInputIdx.push_back(static_cast<int>(i));
-            }
+        // ── Asignación POSICIONAL FIJA de mix/enh/caches ──────────────
+        //
+        // Convención GTCRN oficial (sherpa-onnx, csukuangfj/sherpa-onnx-hf):
+        //   inputs[0]  = "mix"           (audio en frecuencia, [B, F, T, 2])
+        //   inputs[1]  = "conv_cache"    (cache recurrente conv layers)
+        //   inputs[2]  = "tra_cache"     (cache recurrente transformer)
+        //   inputs[3]  = "inter_cache"   (cache recurrente inter-frame)
+        //   outputs[0] = "enh"           (audio enhanced en frecuencia)
+        //   outputs[1] = "conv_cache"    (cache actualizado)
+        //   outputs[2] = "tra_cache"     (cache actualizado)
+        //   outputs[3] = "inter_cache"   (cache actualizado)
+        //
+        // ELIMINADA la heurística por nombre (substring "mix"/"enh"): los
+        // exporters ONNX a veces renombran los IO ("input_0", "output_0",
+        // o nombres traducidos) y la búsqueda por substring fallaba
+        // silenciosamente, dejando el modelo corriendo con caches sin
+        // actualizar y produciendo audio "metálico" tras unos segundos.
+        // El orden POSICIONAL es el contrato real del modelo.
+        mixInputIdx  = 0;
+        enhOutputIdx = 0;
+
+        if (inputNames.size() != 4) {
+            DNN_LOGW("Expected 4 inputs (GTCRN convention: mix + 3 caches), "
+                     "got %zu — sherpa-onnx fallback path",
+                     inputNames.size());
         }
-        for (size_t i = 0; i < outputNames.size(); ++i) {
-            const std::string& n = outputNames[i];
-            if (n.find("enh") != std::string::npos ||
-                n == "out" || n == "output") {
-                enhOutputIdx = static_cast<int>(i);
-            } else {
-                cacheOutputIdx.push_back(static_cast<int>(i));
-            }
+        if (outputNames.size() != 4) {
+            DNN_LOGW("Expected 4 outputs (GTCRN convention: enh + 3 caches), "
+                     "got %zu — sherpa-onnx fallback path",
+                     outputNames.size());
         }
 
-        // Fallback: si no encontramos "mix"/"enh" por nombre, asumimos
-        // input[0]/output[0] (convención GTCRN).
-        if (mixInputIdx < 0)  mixInputIdx  = 0;
-        if (enhOutputIdx < 0) enhOutputIdx = 0;
-
-        // Re-armar caches si caímos al fallback.
-        if (cacheInputIdx.empty() && inputNames.size() > 1) {
-            cacheInputIdx.clear();
-            for (size_t i = 0; i < inputNames.size(); ++i) {
-                if (static_cast<int>(i) != mixInputIdx) {
-                    cacheInputIdx.push_back(static_cast<int>(i));
-                }
-            }
+        // Caches: TODOS los inputs/outputs distintos de la posición 0.
+        for (size_t i = 1; i < inputNames.size(); ++i) {
+            cacheInputIdx.push_back(static_cast<int>(i));
         }
-        if (cacheOutputIdx.empty() && outputNames.size() > 1) {
-            cacheOutputIdx.clear();
-            for (size_t i = 0; i < outputNames.size(); ++i) {
-                if (static_cast<int>(i) != enhOutputIdx) {
-                    cacheOutputIdx.push_back(static_cast<int>(i));
-                }
-            }
+        for (size_t i = 1; i < outputNames.size(); ++i) {
+            cacheOutputIdx.push_back(static_cast<int>(i));
         }
 
         if (cacheInputIdx.size() != cacheOutputIdx.size()) {
@@ -708,6 +1062,54 @@ struct DnnDenoiser::Impl {
         workerCv.notify_all();
         if (worker.joinable()) worker.join();
     }
+
+    /// Configura el resampler para una rate de entrada dada.
+    /// Se llama desde el hilo de control (NO el audio thread).
+    /// Idempotente: si la rate no cambió respecto a la anterior, es no-op.
+    void applyInputSampleRate(int sr) {
+        if (sr <= 0) sr = kDnnSampleRate;
+        if (sr == inputSr && down.groupDelaySamples() >= 0.0f) {
+            // Misma rate ya configurada: no-op.
+            return;
+        }
+        inputSr = sr;
+        if (sr == kDnnSampleRate) {
+            // 16 kHz: bypass del resampler.
+            down.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
+            up.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
+            DNN_LOGI("Resampler: 16 kHz native — bypass (latency = 0 ms)");
+        } else if (sr == 48000) {
+            // 48 kHz: polyphase 3:1 con prototipo Kaiser de 96 taps.
+            down.configure(Resampler::Mode::kPolyDown48to16,
+                           protoLpf.data(),
+                           static_cast<int>(protoLpf.size()), 0.0f);
+            up.configure(Resampler::Mode::kPolyUp16to48,
+                         protoLpf.data(),
+                         static_cast<int>(protoLpf.size()), 0.0f);
+            const float dlyDownMs = down.groupDelayMs(kDnnSampleRate);
+            const float dlyUpMs   = up.groupDelayMs(48000);
+            DNN_LOGI("Resampler: 48000 → polyphase 3:1, 96 taps Kaiser β=8, "
+                     "fc=7.5 kHz. Down delay=%.2f ms, Up delay=%.2f ms, "
+                     "round-trip ≈ %.2f ms",
+                     dlyDownMs, dlyUpMs, dlyDownMs + dlyUpMs);
+        } else {
+            // Rate genérico: linear con ratio inputSr/16000 (down) y 16000/inputSr (up).
+            const float downRatio = static_cast<float>(sr) / static_cast<float>(kDnnSampleRate);
+            const float upRatio   = static_cast<float>(kDnnSampleRate) / static_cast<float>(sr);
+            down.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, downRatio);
+            up.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, upRatio);
+            DNN_LOGW("Resampler: %d Hz → linear interpolation (downRatio=%.4f, "
+                     "upRatio=%.4f). Quality OK for denoiser, suboptimal for "
+                     "non-integer ratios.", sr, downRatio, upRatio);
+        }
+        // Limpiar rings: las dimensiones lógicas cambian al cambiar la rate.
+        inputRing.clear();
+        outputRing.clear();
+        dryDelayRing.clear();
+        // Reset estado interno worker para evitar mezclar buffers de la rate vieja.
+        resetRequested.store(true, std::memory_order_release);
+        workerCv.notify_one();
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -717,6 +1119,11 @@ struct DnnDenoiser::Impl {
 DnnDenoiser::DnnDenoiser() : impl_(std::make_unique<Impl>()) {}
 
 DnnDenoiser::~DnnDenoiser() = default;
+
+void DnnDenoiser::setInputSampleRate(int sampleRateHz) {
+    if (!impl_) return;
+    impl_->applyInputSampleRate(sampleRateHz);
+}
 
 bool DnnDenoiser::initialize(AAssetManager* assetMgr, const char* assetPath) {
     if (impl_->modelReady) {
@@ -789,35 +1196,72 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
     // Actualizar target del crossfade.
     crossfadeTarget_ = en ? 1.0f : 0.0f;
 
-    // Empujar input al inputRing y al dryDelayRing simultáneamente.
-    // Si el inputRing está lleno (worker congestionado), hacemos drop:
-    // simplemente saltamos el push y contamos los frames perdidos.
-    const int pushedIn  = impl_->inputRing.push(buffer, blockSize);
+    // ── Etapa 1: dryDelayRing va SIEMPRE en samples a la rate nativa ────
+    // Esto garantiza que dry y wet quedan alineados 1:1 a la salida (ya
+    // upsampleada) sin interpolar el dry (que perdería calidad).
     const int pushedDry = impl_->dryDelayRing.push(buffer, blockSize);
-    if (pushedIn < blockSize) {
-        droppedFrames_.fetch_add(1, std::memory_order_relaxed);
+    (void)pushedDry;  // si el ring se llena, el reset lo limpia.
+
+    // ── Etapa 2: DOWNSAMPLE input → 16 kHz → inputRing ──────────────────
+    // En modo identity (inputSr==16000) el resampler hace memcpy.
+    // Garantizar que el staging buffer tiene capacidad suficiente.
+    if (static_cast<int>(impl_->downStaging.size()) < blockSize) {
+        impl_->downStaging.assign(blockSize, 0.0f);  // realloc raro fuera de hot path.
     }
-    // Notificar al worker (solo si recién llegamos al umbral).
-    if (impl_->inputRing.available() >= kDnnHopSize) {
-        impl_->workerCv.notify_one();
+    const int down16k = impl_->down.process(buffer, blockSize,
+                                            impl_->downStaging.data(),
+                                            static_cast<int>(impl_->downStaging.size()));
+    if (down16k > 0) {
+        const int pushedIn = impl_->inputRing.push(impl_->downStaging.data(), down16k);
+        if (pushedIn < down16k) {
+            droppedFrames_.fetch_add(1, std::memory_order_relaxed);
+        }
+        // Notificar al worker (solo si recién llegamos al umbral).
+        if (impl_->inputRing.available() >= kDnnHopSize) {
+            impl_->workerCv.notify_one();
+        }
     }
 
-    // Tirar wet samples del outputRing.
-    // Si no hay suficientes (worker no alcanzó la tasa), usar dry como fallback.
-    // CRÍTICO: en underrun TAMBIÉN hay que consumir del dryDelayRing para
-    // mantener el alineamiento 1:1 push/pop. Si no, el dry se acumula
-    // indefinidamente y cuando el worker se recupera mezclamos dry de hace
-    // varios bloques con wet actual → click periódico audible.
-    std::vector<float> wet(blockSize, 0.0f);
+    // ── Etapa 3: tirar wet @ 16 kHz del outputRing y UPSAMPLE a inputSr ──
+    // El upsampler es stateful; alimentamos un sample 16k a la vez hasta
+    // acumular `blockSize` muestras a la rate nativa. Si nos quedamos sin
+    // wet 16k antes de completar, marcamos underrun y pasamos al fallback.
+    if (static_cast<int>(impl_->wetNativeRate.size()) < blockSize) {
+        impl_->wetNativeRate.assign(blockSize, 0.0f);
+    }
+    int wetWritten = 0;
+    bool underrun = false;
+    while (wetWritten < blockSize) {
+        // ¿Cuántos samples 16k necesitamos para obtener al menos 1 sample nativo?
+        // En el peor caso (polyphase up con phase==L-1) basta con 1.
+        float in16k;
+        const int got = impl_->outputRing.pop(&in16k, 1);
+        if (got < 1) {
+            underrun = true;
+            break;
+        }
+        // Procesar ese 1 sample 16k → produce 1..L outputs nativos.
+        const int produced = impl_->up.process(
+            &in16k, 1,
+            impl_->wetNativeRate.data() + wetWritten,
+            blockSize - wetWritten);
+        wetWritten += produced;
+        if (produced == 0) {
+            // Lineal en ratio < 1: a veces un input no genera output todavía.
+            // Continuar pidiendo más samples 16k.
+            continue;
+        }
+    }
+
+    // ── Etapa 4: pop dry @ rate nativa para mezclar 1:1 con wetNativeRate ──
+    // Mantener alineamiento estricto: si hay underrun consumimos igualmente
+    // del dryDelayRing para que la siguiente vuelta arranque sincronizada.
     std::vector<float> dry(blockSize, 0.0f);
-    const int gotWet = impl_->outputRing.pop(wet.data(), blockSize);
     const int gotDry = impl_->dryDelayRing.pop(dry.data(), blockSize);
 
-    if (gotWet < blockSize) {
-        // Underrun: el worker no alcanzó. Reproducir dry (input original).
-        // Ya consumimos del dryDelayRing arriba para mantener 1:1.
-        // El buffer ya tiene el dry original, no hay que tocarlo.
-        // Solo avanzar el crossfade en cada sample.
+    if (underrun) {
+        // El worker no alcanzó la tasa: salida = dry original (buffer no se toca).
+        // Avanzar el crossfade en cada sample.
         for (int i = 0; i < blockSize; ++i) {
             if (crossfadeGain_ < crossfadeTarget_) {
                 crossfadeGain_ = std::min(crossfadeTarget_,
@@ -827,16 +1271,14 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
                                           crossfadeGain_ - kCrossfadeStep);
             }
         }
-        // Si el outputRing tiene wet "viejos" parciales, los descartamos
-        // para que el próximo bloque arranque sincronizado.
-        if (gotWet > 0) {
-            // Drop el wet parcial: ya no nos sirve (sale tarde).
+        // Si quedó wet parcial, descartarlo: ya no nos sirve (sale tarde).
+        if (wetWritten > 0) {
             droppedFrames_.fetch_add(1, std::memory_order_relaxed);
         }
         return;
     }
 
-    // Mezcla normal: dry ↔ wet con intensity, modulada por crossfadeGain_.
+    // ── Etapa 5: mezcla normal dry ↔ wet con intensity y crossfade ────
     const float intensityVal = intensity_.load(std::memory_order_acquire);
     for (int i = 0; i < blockSize; ++i) {
         // Avanzar crossfade un sample.
@@ -851,7 +1293,8 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
         // Mezcla: amount of DNN = crossfadeGain_ * intensity.
         const float dnnAmount = crossfadeGain_ * intensityVal;
         const float drySample = (gotDry > i) ? dry[i] : buffer[i];
-        const float mixed     = drySample * (1.0f - dnnAmount) + wet[i] * dnnAmount;
+        const float mixed     = drySample * (1.0f - dnnAmount)
+                              + impl_->wetNativeRate[i] * dnnAmount;
 
         // Clamp ±1.0 por seguridad.
         buffer[i] = std::max(-1.0f, std::min(1.0f, mixed));
@@ -883,8 +1326,12 @@ void DnnDenoiser::reset() {
     if (impl_) {
         impl_->resetRequested.store(true, std::memory_order_release);
         impl_->workerCv.notify_one();
-        // El audio thread también necesita limpiar el dryDelayRing.
+        // El audio thread también necesita limpiar el dryDelayRing y los
+        // delay-lines del resampler para evitar mezclar samples viejos
+        // (de antes del reset) con los nuevos en el siguiente bloque.
         impl_->dryDelayRing.clear();
+        impl_->down.reset();
+        impl_->up.reset();
     }
     crossfadeGain_   = 0.0f;
     crossfadeTarget_ = enabled_.load(std::memory_order_acquire) ? 1.0f : 0.0f;
