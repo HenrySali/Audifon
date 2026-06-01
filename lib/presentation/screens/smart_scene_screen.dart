@@ -104,25 +104,39 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     await _refreshHistory();
   }
 
-  /// Carga settings persistidos del DNN denoiser y arranca el polling de
-  /// `isActive` (que el wrapper nativo expone como flag operacional).
+  /// Carga settings persistidos del DNN denoiser, inicializa el modelo
+  /// nativo (`gtcrn.onnx` desde assets) y arranca el polling de
+  /// `isActive` para que la UI muestre cuándo está procesando audio.
   ///
-  /// El init del modelo nativo (carga de `gtcrn.onnx`) ya se llamó desde
-  /// la pantalla principal o el método channel handler; acá sólo cargamos
-  /// el último estado (enabled/intensity) para que la UI lo refleje.
+  /// Si el motor de audio nativo todavía no está corriendo (porque el
+  /// usuario no encendió el audífono), `nativeInitDnnDenoiser` falla
+  /// limpiamente y queda en bypass. El polling de `isActive` se reintenta
+  /// cada 500 ms, así que cuando el usuario active el audífono el modelo
+  /// se va a cargar al próximo ciclo.
   Future<void> _initDnnDenoiser() async {
     await _dnnController.loadSettings();
     if (!mounted) return;
     setState(() {
       _dnnSettingsLoaded = true;
     });
-    await _dnnController.refreshIsActive();
+
+    // Intento inicial de cargar el modelo nativo desde assets/.
+    // Si falla (ej: motor de audio aún no inicializado), no es bloqueante:
+    // los siguientes refreshIsActive() también disparan init si hace falta.
+    await _dnnController.initializeNative();
     if (!mounted) return;
     setState(() {});
+
     _dnnIsActivePollTimer?.cancel();
     _dnnIsActivePollTimer = Timer.periodic(_dnnIsActivePollInterval, (_) async {
       if (!mounted) return;
-      await _dnnController.refreshIsActive();
+      // Si todavía no está activo y el usuario quiere usarlo, reintentar
+      // la inicialización nativa por si el motor de audio recién arrancó.
+      if (_dnnController.isEnabled && !_dnnController.isActive) {
+        await _dnnController.initializeNative();
+      } else {
+        await _dnnController.refreshIsActive();
+      }
       if (!mounted) return;
       setState(() {});
     });
