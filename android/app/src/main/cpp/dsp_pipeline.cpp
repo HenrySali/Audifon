@@ -89,6 +89,18 @@ void DspPipeline::init(const AudioConfig& config) {
     // 100 Hz preserves male F0 (~120 Hz, only -3 dB) while removing rumble/vibration.
     // Literature: 80 Hz too low (amplifies ambient noise), 150 Hz cuts male voice.
     computeHighPassCoeffs(config.sampleRate, 100.0f);
+
+    // FIX Causa A (smart-scene-diagnostico-chasquido.md):
+    // Inicializar las rampas de WDRC + NR a los valores default del WdrcParams
+    // (compKnee=55 dB SPL, compRatio=2.0, nrLevel=0). Sin esto, el primer
+    // cambio de clase produciría un salto desde 0/0/0 hacia el target.
+    wdrcKneeRamp_   = 55.0f;
+    wdrcKneeTarget_ = 55.0f;
+    wdrcRatioRamp_   = 2.0f;
+    wdrcRatioTarget_ = 2.0f;
+    nrLevelTarget_                = 0;
+    currentNrLevel_               = 0;
+    nrLevelRampBlocksRemaining_   = 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,18 +166,43 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
         if (envClassInt != lastEnvClass_) {
             lastEnvClass_ = envClassInt;
 
-            // Actualizar NR level DIRECTAMENTE al target recomendado.
-            // El NR ya tiene suavizado temporal interno (attack/release en
-            // compositeGain), así que la transición gradual de nivel era
-            // redundante y causaba que nunca convergiera con hold de 3s.
-            int targetNrLevel = envClassifier_.getRecommendedNrLevel();
-            currentNrLevel_ = targetNrLevel;
-            nr_.setLevel(currentNrLevel_);
-
-            // Actualizar WDRC compression params (estos son suaves por naturaleza)
+            // FIX Causa A (smart-scene-diagnostico-chasquido.md):
+            // ANTES: aquí se sustituía el knee, ratio y nrLevel directamente,
+            //        produciendo un escalón en un solo sample → CHASQUIDO.
+            // AHORA: solo fijamos los TARGETS. La rampa exponencial del WDRC
+            //        (kWdrcRampAlpha → ~200 ms) y el step discreto del NR
+            //        (kNrLevelStepBlocks → ~300 ms entre niveles) corren cada
+            //        bloque más abajo, antes de wdrc_.process().
             EnvWdrcParams wdrcParams = envClassifier_.getRecommendedWdrcParams();
-            wdrc_.setCompressionKnee(wdrcParams.compressionKnee);
-            wdrc_.setCompressionRatio(wdrcParams.compressionRatio);
+            wdrcKneeTarget_  = wdrcParams.compressionKnee;
+            wdrcRatioTarget_ = wdrcParams.compressionRatio;
+            nrLevelTarget_   = envClassifier_.getRecommendedNrLevel();
+            nrLevelRampBlocksRemaining_ = kNrLevelInitialDelayBlocks;
+        }
+    }
+
+    // FIX Causa A (smart-scene-diagnostico-chasquido.md):
+    // Rampa de WDRC + NR ejecutada CADA bloque (sin condicional sobre cambio
+    // de clase). Esto garantiza que cualquier diferencia entre el valor actual
+    // y el target se reduzca exponencialmente, eliminando los chasquidos al
+    // transitar entre escenas (SPEECH→NOISE, QUIET→SPEECH, etc.).
+    {
+        // 1) Knee + ratio: rampa exponencial sample-by-bloque (~200 ms a 4 ms/bloque).
+        wdrcKneeRamp_  += kWdrcRampAlpha * (wdrcKneeTarget_  - wdrcKneeRamp_);
+        wdrcRatioRamp_ += kWdrcRampAlpha * (wdrcRatioTarget_ - wdrcRatioRamp_);
+        wdrc_.setCompressionKnee(wdrcKneeRamp_);
+        wdrc_.setCompressionRatio(wdrcRatioRamp_);
+
+        // 2) NR level: step discreto. El gainFloor de NoiseReduction salta
+        //    en escalones (1.0 / 0.55 / 0.32 / 0.18) que el suavizado interno
+        //    NO interpola, así que avanzamos UN nivel cada kNrLevelStepBlocks.
+        if (nrLevelRampBlocksRemaining_ > 0) {
+            nrLevelRampBlocksRemaining_--;
+        } else if (currentNrLevel_ != nrLevelTarget_) {
+            int step = (nrLevelTarget_ > currentNrLevel_) ? 1 : -1;
+            currentNrLevel_ += step;
+            nr_.setLevel(currentNrLevel_);
+            nrLevelRampBlocksRemaining_ = kNrLevelStepBlocks;
         }
     }
 

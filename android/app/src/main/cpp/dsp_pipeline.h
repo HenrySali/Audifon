@@ -207,6 +207,30 @@ private:
     int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada
     int currentNrLevel_ = 0; ///< Nivel NR actual (transiciones graduales)
 
+    // --- FIX Causa A (smart-scene-diagnostico-chasquido.md): rampa de WDRC + NR ---
+    // Antes el cambio de clase del EnvironmentClassifier sustituía el
+    // compressionKnee (55→40), compressionRatio (1.5→3.0) y nrLevel (0→3)
+    // en un solo sample, generando un click audible por transición.
+    // Ahora el cambio de clase fija TARGETS y la actualización al WDRC se
+    // interpola exponencialmente cada bloque (~200 ms hacia el target);
+    // el NR avanza un paso discreto cada kNrLevelStepBlocks bloques
+    // (~300 ms entre niveles) para evitar el escalón del gainFloor.
+    float wdrcKneeRamp_ = 55.0f;             ///< Valor actual (suavizado) del knee
+    float wdrcKneeTarget_ = 55.0f;           ///< Target solicitado por el clasificador
+    float wdrcRatioRamp_ = 2.0f;             ///< Valor actual (suavizado) del ratio
+    float wdrcRatioTarget_ = 2.0f;           ///< Target solicitado por el clasificador
+    int   nrLevelTarget_ = 0;                ///< Nivel NR objetivo
+    int   nrLevelRampBlocksRemaining_ = 0;   ///< Bloques pendientes hasta el próximo step de NR
+    /// Coeficiente de la rampa exponencial del WDRC (~200 ms a 4 ms/bloque).
+    /// y[n] = y[n-1] + alpha * (target - y[n-1])  → tau ≈ 1/alpha bloques.
+    static constexpr float kWdrcRampAlpha = 0.02f;
+    /// Bloques entre incrementos discretos del nrLevel (~300 ms a 4 ms/bloque).
+    static constexpr int kNrLevelStepBlocks = 75;
+    /// Bloques de “grace period” inicial al detectar cambio de clase (~200 ms)
+    /// antes de empezar a mover el NR de nivel — evita aplicar el escalón
+    /// del gainFloor justo en el frame de la transición.
+    static constexpr int kNrLevelInitialDelayBlocks = 50;
+
     // --- Analizador de espectro ---
     SpectrumAnalyzer spectrumAnalyzer_;  ///< FFT 128-point para visualización
 
