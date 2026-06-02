@@ -73,9 +73,17 @@ void MpoLimiter::process(float* buffer, int blockSize) {
             // Calcular ganancia objetivo para que output = threshold
             const float targetGain = threshold / absSample;
 
-            // Suavizar hacia ganancia objetivo con attack rápido
-            // gain += attackCoeff * (targetGain - gain)
-            gain_ += attackCoeff_ * (targetGain - gain_);
+            // Ataque ADAPTATIVO: coeficiente proporcional al overshoot².
+            // Picos pequeños (6 dB sobre threshold) → ataque normal.
+            // Picos enormes (20 dB sobre threshold) → ataque hasta 16× más rápido.
+            // Referencia: técnica usada en Oticon Real y web-simulator MPO.
+            const float overshootRatio = absSample / threshold;
+            const float adaptiveCoeff = std::fmin(
+                attackCoeff_ * std::fmin(overshootRatio * overshootRatio, 16.0f),
+                1.0f);
+
+            // Suavizar hacia ganancia objetivo con attack adaptativo
+            gain_ += adaptiveCoeff * (targetGain - gain_);
         } else {
             // --- RELEASE: la muestra está dentro del threshold ---
             // Recuperar lentamente hacia ganancia unitaria (1.0)

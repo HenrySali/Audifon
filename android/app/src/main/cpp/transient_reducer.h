@@ -14,8 +14,10 @@
 /// Mecanismo:
 /// 1. Calcular envelope de energía instantánea (rápido) y promedio (lento)
 /// 2. Si energía instantánea >> promedio → es un transitorio
-/// 3. Aplicar atenuación rápida (-12 dB) por hold time (~20 ms)
-/// 4. Recovery exponencial gradual al volver a 0 dB
+/// 3. Aplicar atenuación PROPORCIONAL al exceso sobre el threshold
+///    (pico pequeño → atenuación suave; pico enorme → atenuación máxima)
+/// 4. Mantener atenuación por hold time (~20 ms)
+/// 5. Recovery exponencial gradual al volver a 0 dB
 ///
 /// Diseño: opera sample-by-sample, lock-free, mínimo overhead CPU.
 
@@ -92,8 +94,24 @@ public:
             float ratio = fastEnv_ / safeSlowEnv;
 
             if (ratio > threshold) {
-                // ¡Transitorio detectado! Activar atenuación
-                currentGain_ = attenuation;
+                // ¡Transitorio detectado! Atenuación PROPORCIONAL al exceso.
+                // ratio = cuánto excede el fast envelope sobre el slow.
+                // threshold = umbral mínimo para considerar transitorio.
+                // Ejemplo con threshold=8:
+                //   ratio=10 (pico leve) → excess=1.25 → ~-4 dB
+                //   ratio=24 (pico medio) → excess=3.0 → ~-10 dB
+                //   ratio=64 (pico enorme) → excess=8.0 → atenuación máxima
+                //
+                // Fórmula: ganancia = max(attenuation, 1.0 / excess)
+                // donde excess = ratio / threshold (≥ 1.0)
+                // Esto produce atenuación proporcional clampeada al piso configurado.
+                float excess = ratio / threshold; // siempre ≥ 1.0
+                float proportionalGain = 1.0f / excess;
+                // Clamp: nunca atenuar más que el piso configurado (ej: -12 dB = 0.25)
+                if (proportionalGain < attenuation) {
+                    proportionalGain = attenuation;
+                }
+                currentGain_ = proportionalGain;
                 holdCounter_ = holdSamples_;
             } else if (holdCounter_ > 0) {
                 // Mantener atenuación durante hold time
@@ -126,7 +144,9 @@ public:
         thresholdRatio_.store(ratio, std::memory_order_relaxed);
     }
 
-    /// Establece la atenuación en dB (negativo).
+    /// Establece la atenuación máxima (piso) en dB (negativo).
+    /// Con atenuación proporcional, este valor es el PISO: el TNR nunca
+    /// atenúa más que esto, pero picos leves se atenúan menos.
     /// Default: -12 dB (factor 0.25).
     /// Rango recomendado: -6 dB (suave) a -18 dB (agresivo).
     void setAttenuationDb(float db) {
