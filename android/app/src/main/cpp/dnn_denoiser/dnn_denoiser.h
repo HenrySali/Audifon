@@ -25,14 +25,16 @@
 ///   3. Audio thread: si inputSr != 16000 → DOWNSAMPLE a 16 kHz (polyphase
 ///                     o lineal según rate). Empuja samples al input ring
 ///                     buffer (lock-free SPSC) en samples a 16 kHz.
-///   4. Worker thread: drena 256 samples → STFT(512, hop 256, Hann periódica) →
+///   4. Worker thread: drena 128 samples (kDnnHopSize, MEJORA #1) →
+///                     STFT(512, hop 128, sqrt-Hann periódica, 75% overlap) →
 ///                     OnnxRuntime.run(mix, cache0, cache1, cache2)
 ///                     → enhanced spectrum → iSTFT/OLA → output ring buffer
 ///                     (también en samples a 16 kHz).
 ///   5. Audio thread: tira samples del output ring buffer (16 kHz),
 ///                     UPSAMPLE a inputSampleRate. dryDelayRing va en
 ///                     samples a la rate nativa (alineamiento 1:1).
-///   6. Crossfade lineal de 30 ms al activar/desactivar (anti-clic).
+///   6. Crossfade lineal de 50 ms (800 samples a 16 kHz, MEJORA #1 Tier 3 #12)
+///                     al activar/desactivar (anti-clic).
 ///   7. Clamp final a ±1.0 por seguridad.
 ///
 /// SALIDAS (signal wires):
@@ -41,7 +43,7 @@
 /// INDICADORES (monitoring vía getters):
 ///   ├─ isEnabled() → bool         — flag de configuración
 ///   ├─ isActive()  → bool         — flag operacional (modelo listo + sin error)
-///   ├─ getProcessedFrames() → uint64_t — total de frames de 256 procesados
+///   ├─ getProcessedFrames() → uint64_t — total de hops (128 samples) procesados
 ///   ├─ getDroppedFrames()   → uint64_t — frames descartados por congestión
 ///   └─ getLastInferenceUs() → uint32_t — latencia última inferencia
 ///
@@ -150,8 +152,8 @@ public:
     ///
     /// Casos soportados:
     ///   - 16000      → bypass del resampler (rate nativa del modelo).
-    ///   - 48000      → polyphase FIR 3:1 (96 taps prototipo, fc=7 kHz,
-    ///                   transición ~1 kHz, ventana Kaiser β≈8).
+    ///   - 48000      → polyphase FIR 3:1 (72 taps prototipo, fc=7.5 kHz,
+    ///                   transición ~1 kHz, ventana Kaiser β=8.5; MEJORA #3).
     ///   - 22050/44100/otros → resampling lineal genérico (suficiente para
     ///                   denoising, no para audio crítico de calidad).
     ///
@@ -171,7 +173,8 @@ public:
     /// @param blockSize Número de samples (típicamente 64 a 16 kHz).
     void process(float* buffer, int blockSize);
 
-    /// Toggle ON/OFF. Inicia crossfade anti-clic de 30 ms.
+    /// Toggle ON/OFF. Inicia crossfade anti-clic de 50 ms (800 samples a 16 kHz;
+    /// MEJORA #1 Tier 3 #12, antes 30 ms).
     /// Thread-safe: lock-free. Puede llamarse desde cualquier hilo.
     void setEnabled(bool enabled);
 
@@ -204,7 +207,7 @@ public:
         return intensity_.load(std::memory_order_acquire);
     }
 
-    /// @return total de frames de 256 samples procesados con DNN.
+    /// @return total de hops (kDnnHopSize = 128 samples) procesados con DNN.
     uint64_t getProcessedFrames() const {
         return processedFrames_.load(std::memory_order_relaxed);
     }

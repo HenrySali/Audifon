@@ -9,7 +9,7 @@
 ///
 /// Diseño:
 /// - EMA smoothing (α=0.05, ~800ms time constant @ 4ms blocks)
-/// - Hold timer (125 bloques = 500ms) para evitar oscilación rápida
+/// - Hold timer (750 bloques = 3 s) para evitar oscilación rápida
 /// - Lookup tables para NR level y WDRC params por entorno
 /// - SNR estimation desde el noise reducer
 /// - Thread-safe: lecturas atómicas del estado actual
@@ -27,8 +27,13 @@
 /// Factor de suavizado EMA (~800 ms time constant @ 4 ms blocks)
 static constexpr float kEnvAlpha = 0.05f;
 
-/// Bloques de hold tras una transición (500 ms / 4 ms = 125 bloques)
-static constexpr int kEnvHoldBlocks = 125;
+/// Bloques de hold tras una transición de clase de entorno.
+/// 750 bloques × 4 ms/bloque = 3 segundos de hold.
+///
+/// Histórico: el valor original (500 ms = 125 bloques) producía oscilación
+/// audible en transiciones SPEECH ↔ SPEECH_IN_NOISE. Subido a 3 s tras
+/// pruebas en escenas reales para mayor estabilidad subjetiva.
+static constexpr int kEnvHoldBlocks = 750;
 
 /// Umbral de nivel para entorno silencioso (dB SPL)
 static constexpr float kEnvLevelQuietThreshold = 45.0f;
