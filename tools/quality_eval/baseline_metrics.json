@@ -1,0 +1,7 @@
+{
+  "_comment": "MEJORA #5 (ruido-profundo.md) — thresholds mínimos para que el pipeline DSP del audífono pase CI. Si una PR baja la mediana de PESQ o STOI por debajo de estos valores, el workflow falla. Ajustar tras cada release tras consensuar con el equipo de DSP.",
+  "pesq_min": 2.7,
+  "stoi_min": 0.91,
+  "_haspi_min_todo": 0.55,
+  "_hasqi_min_todo": 0.55
+}
