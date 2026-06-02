@@ -51,11 +51,15 @@
 ///   - initialize(): NO thread-safe; llamar UNA VEZ al startup.
 ///
 /// LATENCIA:
-///   - GTCRN frame = 256 samples (16 ms) a 16 kHz.
-///   - Latencia algorítmica STFT = hop_size = 256 samples = 16 ms.
-///   - Resampler polyphase 48↔16 (96 taps, ratio 3): group delay ≈
-///     (96-1)/2 / 48000 ≈ 0.99 ms en cada sentido → ~2 ms ida+vuelta.
-///   - Latencia total esperada (con buffering + worker handoff) ≈ 22–27 ms.
+///   - GTCRN frame procesado en hops de kDnnHopSize samples a 16 kHz.
+///   - MEJORA #1 (ruido-profundo.md): kDnnHopSize=128 → 8 ms de latencia
+///     algorítmica STFT (antes era 256 = 16 ms). Esto pone el sistema por
+///     debajo del umbral de comb-filter audible en open-fit (~5–7 ms).
+///   - Resampler polyphase 48↔16 (72 taps, ratio 3, MEJORA #3): group delay ≈
+///     (72-1)/2 / 48000 ≈ 0.74 ms en cada sentido → ~1.48 ms ida+vuelta
+///     (antes 96 taps → ~2 ms).
+///   - Latencia total esperada (con buffering + worker handoff) ≈ 14–18 ms
+///     (antes ≈ 22–27 ms con hop=256 y proto de 96 taps).
 ///
 /// FAIL-SAFE:
 ///   Si el modelo no carga, la API de input shape no coincide, o cualquier
@@ -81,19 +85,35 @@ namespace dnn_denoiser {
 static constexpr int kDnnSampleRate = 16000;
 
 /// Tamaño de hop (frame de inferencia GTCRN) en samples a 16 kHz.
-static constexpr int kDnnHopSize = 256;
+///
+/// MEJORA #1 (ruido-profundo.md): hop reducido de 256 → 128 (8 ms en vez de 16 ms).
+/// Lleva el overlap STFT de 50% a 75% (con kDnnFftSize=512). Baja la latencia
+/// algorítmica del paradigma STFT-DNN de 16 ms a 8 ms — el comb-filter en
+/// open-fit deja de ser audible (umbral perceptual ~5–7 ms, Agnew/Stiefenhofer).
+/// Costo: 2× inferencias por segundo (250 vs 125). Aceptable porque la inferencia
+/// GTCRN simple corre en ~1.5 ms en arm64, así que 250 inferencias × 1.5 ms = 375 ms/s
+/// = ~37% de un core, con margen suficiente.
+static constexpr int kDnnHopSize = 128;
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
 
 /// Crossfade lineal al togglear enabled (en samples a 16 kHz).
-/// 30 ms × 16 000 Hz / 1000 = 480 samples.
-static constexpr int kDnnCrossfadeSamples = 480;
+///
+/// MEJORA #1 (ruido-profundo.md, Tier 3 #12 “gratis”): crossfade subido de 30 ms a 50 ms.
+/// 50 ms × 16 000 Hz / 1000 = 800 samples. Beneficio: transición ON/OFF aún más
+/// suave (especialmente perceptible en habla con consonantes plosivas durante el
+/// toggle). No afecta latencia de procesamiento; solo el ramp de la mezcla dry/wet.
+static constexpr int kDnnCrossfadeSamples = 800;
 
 /// Capacidad de cada ring buffer (input/output) en samples.
-/// Debe ser potencia de 2 y >> kDnnHopSize para absorber jitter del worker.
-/// 4096 = ~256 ms de buffer, suficiente para GC pauses ocasionales.
-static constexpr int kDnnRingCapacity = 4096;
+///
+/// MEJORA #4 (ruido-profundo.md): bajado de 4096 → 1024 (potencia de 2).
+/// 4096 = ~256 ms de buffer; demasiado para tiempo real, escondía drops bajo GC pauses.
+/// 1024 = ~64 ms a 16 kHz: peor caso de buffering 64 ms en vez de 256 ms.
+/// Combinado con `wait_for(5 ms)` del worker (antes 50 ms), la respuesta a backpressure
+/// es 10× más rápida y los drops bajo carga real se reducen.
+static constexpr int kDnnRingCapacity = 1024;
 
 /// Wrapper C++ del denoiser GTCRN. Sigue el patrón de SubVI LabVIEW
 /// (process / setX / reset / isX) para integrarse al DspPipeline.

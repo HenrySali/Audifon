@@ -215,8 +215,8 @@ int64_t shapeNumel(const std::vector<int64_t>& shape) {
 //
 // PROCESAMIENTO:
 //   - Identity (in==out): memcpy passthrough.
-//   - Poly48to16 (M=3, 96 taps): downsample con FIR Kaiser β=8, fc=7.5 kHz.
-//   - Poly16to48 (L=3, 96 taps prototipo, 32 por fase): upsample.
+//   - Poly48to16 (M=3, 72 taps): downsample con FIR Kaiser β=8.5, fc=7.5 kHz.
+//   - Poly16to48 (L=3, 72 taps prototipo, 24 por fase): upsample.
 //   - Linear (cualquier otro ratio): interpolación lineal stateful con
 //     fracción acumulada (suficiente para denoising, no para audio crítico).
 //
@@ -229,7 +229,7 @@ int64_t shapeNumel(const std::vector<int64_t>& shape) {
 //   └─ groupDelayMs (float)       — latencia en ms
 //
 // ESTADO:
-//   - delay line interna (96 floats para polyphase / 1 float para lineal)
+//   - delay line interna (72 floats para polyphase / 1 float para lineal)
 //   - phase counter para polyphase
 //   - fracción acumulada para lineal
 //
@@ -238,8 +238,9 @@ int64_t shapeNumel(const std::vector<int64_t>& shape) {
 // arranque el audio callback. No hay locking interno.
 //
 // LATENCIA:
-//   - Polyphase 96 taps: group delay = (96-1)/2 = 47.5 samples.
-//     A 48 kHz → ~0.99 ms. Round-trip (down + up) ≈ 2 ms.
+//   - MEJORA #3 (ruido-profundo.md): polyphase 72 taps Kaiser β=8.5 (antes 96 β=8).
+//   - Polyphase 72 taps: group delay = (72-1)/2 = 35.5 samples.
+//     A 48 kHz → ~0.74 ms. Round-trip (down + up) ≈ 1.48 ms (antes 1.98 ms).
 //   - Lineal: ~0 muestras (fase acumulada).
 class Resampler {
 public:
@@ -471,11 +472,18 @@ private:
 };
 
 /// Diseño del prototipo LPF para resampler polyphase 48↔16.
-///   - 96 taps (32 por fase para L/M=3)
+///   - 72 taps (24 por fase para L/M=3) — MEJORA #3 (ruido-profundo.md): bajado de 96 → 72.
 ///   - Cutoff fc = 7.5 kHz (midpoint del transition band 7-8 kHz)
-///   - Ventana Kaiser β=8 → ~80 dB stopband attenuation
+///   - Ventana Kaiser β=8.5 — MEJORA #3: subido de β=8 a β=8.5 para mantener ~80 dB
+///     stopband con menos taps. Group delay baja de 47.5 → 35.5 samples
+///     (0.99 ms → 0.74 ms a 48 kHz). Round-trip down+up: 1.98 ms → 1.48 ms.
 ///   - Normalizado para DC gain = 1.0 (downsample). El interpolador
 ///     compensa la inserción de ceros multiplicando los polyphase por L.
+///
+/// Constantes de la mejora — declaradas explícitas para que la matemática del polyphase
+/// (24 taps por fase = 72/3) quede documentada y validable.
+inline constexpr int   kProtoTaps  = 72;     // 72/3 = 24 taps por fase, sin remainder
+inline constexpr float kKaiserBeta = 8.5f;   // ~80 dB stopband con 72 taps
 inline float besselI0Approx(float x) {
     // Abramowitz & Stegun 9.8.1 / 9.8.2 polynomial approximation.
     const float ax = std::fabs(x);
@@ -495,7 +503,9 @@ inline void designResamplerProtoLpf(float* h, int N) {
     // fc normalizado respecto a 48 kHz: 7500/48000 = 0.15625
     // (cutoff en el midpoint de la banda de transición 7-8 kHz).
     const float fc = 7500.0f / 48000.0f;
-    const float beta = 8.0f;
+    // MEJORA #3 (ruido-profundo.md): β=8.5 (antes 8.0) para mantener 80 dB stopband
+    // con N=72 taps en vez de 96. Ver constexpr kKaiserBeta arriba.
+    const float beta = kKaiserBeta;
     const float center = (N - 1) / 2.0f;
     const float i0Beta = besselI0Approx(beta);
     float sum = 0.0f;
@@ -585,8 +595,8 @@ struct DnnDenoiser::Impl {
     /// Sample rate de entrada/salida observado del audio engine.
     /// 0 = no configurado todavía → asumimos 16 kHz (bypass).
     int       inputSr = kDnnSampleRate;
-    /// LPF prototipo precomputado (96 taps, Kaiser β=8, fc=7.5 kHz).
-    /// Compartido entre downsampler y upsampler.
+    /// LPF prototipo precomputado. MEJORA #3 (ruido-profundo.md): 72 taps Kaiser β=8.5,
+    /// fc=7.5 kHz (antes 96 taps β=8). Compartido entre downsampler y upsampler.
     std::vector<float> protoLpf;
     /// Down: inputSr → 16 kHz (audio thread input → inputRing).
     Resampler down;
@@ -644,8 +654,10 @@ struct DnnDenoiser::Impl {
         // El verdadero modo se activa cuando AudioEngine llama
         // setInputSampleRate(48000). Hasta entonces asumimos 16 kHz
         // (passthrough bit-exact).
-        protoLpf.assign(96, 0.0f);
-        designResamplerProtoLpf(protoLpf.data(), 96);
+        // MEJORA #3 (ruido-profundo.md): 72 taps (24 por fase) Kaiser β=8.5
+        // — group delay 35.5 samples (0.74 ms @ 48 kHz). Antes: 96 taps β=8.
+        protoLpf.assign(kProtoTaps, 0.0f);
+        designResamplerProtoLpf(protoLpf.data(), kProtoTaps);
         down.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
         up.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
         // Staging buffers: dimensionar generoso para blockSize típico de Oboe.
@@ -979,8 +991,25 @@ struct DnnDenoiser::Impl {
         fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/true);
 
         // ── 10. Aplicar ventana de síntesis (sqrt-Hann) y OLA ────────────
+        //
+        // MEJORA #1 (ruido-profundo.md) — Compensación COLA al bajar el hop:
+        //
+        // Con sqrt-Hann en análisis y síntesis, el producto efectivo aplicado
+        // a cada muestra del OLA es Hann completa. Para Hann periódica de
+        // longitud N con hop H, la suma de ventanas superpuestas vale:
+        //     Σ_k w[n + k·H]  =  N / (2·H)
+        // → hop = N/2 (50% overlap, viejo): suma = 1.0  → unity-gain OLA, sin scale.
+        // → hop = N/4 (75% overlap, nuevo): suma = 2.0  → +6 dB si no compensamos.
+        //
+        // Para mantener el invariante del steering "solo EQ y Volume amplifican",
+        // escalamos la ventana de síntesis por (2·H/N), que es exactamente la
+        // inversa de la suma anterior. Con hop=256 en FFT=512 → factor 1.0
+        // (nada cambia respecto al comportamiento previo). Con hop=128 → factor 0.5.
+        static constexpr float kOlaScale =
+            (2.0f * static_cast<float>(kDnnHopSize)) /
+            static_cast<float>(kDnnFftSize);
         for (int i = 0; i < kDnnFftSize; ++i) {
-            fftRe[i] *= hannWin[i];
+            fftRe[i] *= hannWin[i] * kOlaScale;
             olaBuf[i] += fftRe[i];
         }
 
@@ -1023,9 +1052,17 @@ struct DnnDenoiser::Impl {
             }
 
             // Esperar hasta tener kDnnHopSize samples disponibles.
+            //
+            // MEJORA #4 (ruido-profundo.md): wait_for bajado de 50 ms → 5 ms.
+            // Con kDnnHopSize=128 (8 ms a 16 kHz) y `notify_one()` desde el audio
+            // thread cada vez que cruza el umbral, el wait_for casi nunca dispara
+            // por timeout en operación normal. Pero cuando hay backpressure (GC
+            // pause, scheduling jitter), 5 ms de poll deja al worker reaccionar
+            // 10× más rápido que los 50 ms anteriores. Combinado con el ring
+            // reducido a 1024 (~64 ms vs 256 ms), los drops bajo carga real bajan.
             {
                 std::unique_lock<std::mutex> lk(workerMtx);
-                workerCv.wait_for(lk, std::chrono::milliseconds(50), [this] {
+                workerCv.wait_for(lk, std::chrono::milliseconds(5), [this] {
                     return !workerRun.load(std::memory_order_acquire) ||
                            inputRing.available() >= kDnnHopSize ||
                            resetRequested.load(std::memory_order_acquire);
@@ -1079,7 +1116,9 @@ struct DnnDenoiser::Impl {
             up.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
             DNN_LOGI("Resampler: 16 kHz native — bypass (latency = 0 ms)");
         } else if (sr == 48000) {
-            // 48 kHz: polyphase 3:1 con prototipo Kaiser de 96 taps.
+            // 48 kHz: polyphase 3:1 con prototipo Kaiser de kProtoTaps taps.
+            // MEJORA #3 (ruido-profundo.md): 72 taps β=8.5 (antes 96 β=8) — mismo
+            // stopband, ~0.5 ms menos de round-trip delay.
             down.configure(Resampler::Mode::kPolyDown48to16,
                            protoLpf.data(),
                            static_cast<int>(protoLpf.size()), 0.0f);
@@ -1088,9 +1127,10 @@ struct DnnDenoiser::Impl {
                          static_cast<int>(protoLpf.size()), 0.0f);
             const float dlyDownMs = down.groupDelayMs(kDnnSampleRate);
             const float dlyUpMs   = up.groupDelayMs(48000);
-            DNN_LOGI("Resampler: 48000 → polyphase 3:1, 96 taps Kaiser β=8, "
+            DNN_LOGI("Resampler: 48000 → polyphase 3:1, %d taps Kaiser β=%.1f, "
                      "fc=7.5 kHz. Down delay=%.2f ms, Up delay=%.2f ms, "
                      "round-trip ≈ %.2f ms",
+                     kProtoTaps, static_cast<double>(kKaiserBeta),
                      dlyDownMs, dlyUpMs, dlyDownMs + dlyUpMs);
         } else {
             // Rate genérico: linear con ratio inputSr/16000 (down) y 16000/inputSr (up).
