@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 
 import '../domain/entities/audiogram.dart';
+import '../domain/entities/wdrc_params.dart';
 import '../presentation/bloc/amplification_bloc.dart';
 import '../presentation/bloc/amplification_event.dart';
 import '../presentation/bloc/amplification_state.dart';
@@ -210,20 +211,35 @@ class SceneEngine {
   /// para que sobreviva a reinicios de la app.
   ///
   /// - Despacha `UpdateEqGains` con las 12 ganancias y el nombre del preset.
+  /// - FIX Causa C (smart-scene-diagnostico-chasquido.md): despacha también
+  ///   `UpdateNrLevel`, `UpdateWdrcParams` y `SetTnrEnabled` para que el
+  ///   preset Smart Scene COMPLETO llegue al engine. Antes sólo EQ + Volume
+  ///   se aplicaban; los demás campos (`nrLevel`, `compressionKnee/Ratio`,
+  ///   `expansionKnee`, `tnrEnabled`) quedaban persistidos en Hive pero el
+  ///   `EnvironmentClassifier` automático seguía pisándolos en cada cambio
+  ///   de clase, produciendo el desbalance aleatorio reportado.
   /// - Si `volumeDeltaDb != 0` y el bloc está activo, despacha `ChangeVolume`
   ///   sumando el delta al volumen actual (clamp [-20, +10] dB).
   /// - Persiste el preset y el NR level en settings (silencioso a fallos).
-  ///
-  /// El TNR (Transient Noise Reduction) y el cambio activo de NR level no
-  /// se despachan al engine en esta fase: el `AmplificationBloc` aplica NR
-  /// vía clasificación automática y el TNR no tiene un canal nativo
-  /// dedicado (queda diferido a Fase 5+ del spec).
   Future<void> apply(
     SceneAnalysisResult result, {
     required AmplificationBloc bloc,
   }) async {
     final preset = result.preset;
     bloc.add(UpdateEqGains(gains: preset.gains, presetName: preset.name));
+
+    // FIX Causa C (smart-scene-diagnostico-chasquido.md):
+    // Despachar el resto del preset al engine para que el clasificador
+    // automático no quede manejando esos campos por separado.
+    bloc.add(UpdateNrLevel(level: preset.nrLevel));
+    bloc.add(UpdateWdrcParams(
+      params: WdrcParams(
+        expansionKnee: preset.expansionKnee,
+        compressionKnee: preset.compressionKnee,
+        compressionRatio: preset.compressionRatio,
+      ),
+    ));
+    bloc.add(SetTnrEnabled(enabled: preset.tnrEnabled));
 
     if (preset.volumeDeltaDb.abs() > 1e-3) {
       final state = bloc.state;

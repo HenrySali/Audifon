@@ -89,6 +89,11 @@ class AmplificationBloc
     on<ResumeAmplification>(_onResumeAmplification);
     on<UpdateEqGains>(_onUpdateEqGains);
     on<UpdateNrLevel>(_onUpdateNrLevel);
+    // FIX Causa C (smart-scene-diagnostico-chasquido.md): registrar handlers
+    // para que el preset Smart Scene completo llegue al engine (antes solo
+    // EQ + Volume eran despachados; nrLevel + WDRC + TNR quedaban en Hive).
+    on<UpdateWdrcParams>(_onUpdateWdrcParams);
+    on<SetTnrEnabled>(_onSetTnrEnabled);
     on<SaveCustomPreset>(_onSaveCustomPreset);
     on<DeleteCustomPreset>(_onDeleteCustomPreset);
   }
@@ -489,6 +494,45 @@ class AmplificationBloc
       await _settingsRepository.setLastNrLevel(event.level);
     } catch (_) {
       // No interrumpir por error de actualización de NR
+    }
+  }
+
+  /// FIX Causa C (smart-scene-diagnostico-chasquido.md):
+  /// Aplica un set completo de parámetros WDRC (knees + ratios + attack/release).
+  ///
+  /// Antes el preset Smart Scene persistía `compressionKnee`, `compressionRatio`
+  /// y `expansionKnee` en Hive pero el `apply()` no los despachaba al engine,
+  /// quedando el WDRC controlado solo por el `EnvironmentClassifier` automático.
+  /// Ahora este handler hace el bridge.invokeMethod correspondiente para que
+  /// el pipeline DSP nativo reciba los parámetros del preset.
+  Future<void> _onUpdateWdrcParams(
+    UpdateWdrcParams event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    if (state is! AmplificationActive) return;
+
+    try {
+      await _audioBridge.updateWdrcParams(event.params);
+    } catch (_) {
+      // No interrumpir por error de actualización de WDRC
+    }
+  }
+
+  /// FIX Causa C (smart-scene-diagnostico-chasquido.md):
+  /// Habilita/deshabilita el Transient Noise Reducer.
+  ///
+  /// Antes el `tnrEnabled` del preset Smart Scene se persistía en Hive pero
+  /// nunca llegaba al engine.
+  Future<void> _onSetTnrEnabled(
+    SetTnrEnabled event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    if (state is! AmplificationActive) return;
+
+    try {
+      await _audioBridge.updateTnrEnabled(event.enabled);
+    } catch (_) {
+      // No interrumpir por error de actualización de TNR
     }
   }
 

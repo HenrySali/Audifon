@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../domain/entities/audiogram.dart';
+import '../../domain/entities/wdrc_params.dart';
 
 /// Eventos del BLoC de amplificación.
 ///
@@ -158,6 +159,39 @@ class UpdateNrLevel extends AmplificationEvent {
 
   @override
   List<Object?> get props => [level];
+}
+
+/// Solicita actualizar los parámetros WDRC (knees + ratios + attack/release).
+///
+/// FIX Causa C (smart-scene-diagnostico-chasquido.md):
+/// Antes el preset Smart Scene persistía `compressionKnee/Ratio/expansionKnee`
+/// en Hive pero NUNCA llegaba al engine. Mientras tanto el `EnvironmentClassifier`
+/// automático seguía pisando esos parámetros en cada cambio de clase, dejando
+/// el preset "a medias" y produciendo desbalance aleatorio del nivel de voz.
+/// Este evento permite a `SceneEngine.apply()` despachar el preset WDRC completo.
+class UpdateWdrcParams extends AmplificationEvent {
+  /// Parámetros WDRC a aplicar al pipeline DSP nativo.
+  final WdrcParams params;
+
+  const UpdateWdrcParams({required this.params});
+
+  @override
+  List<Object?> get props => [params];
+}
+
+/// Habilita o deshabilita el Transient Noise Reducer (TNR).
+///
+/// FIX Causa C (smart-scene-diagnostico-chasquido.md):
+/// El preset Smart Scene incluye `tnrEnabled` pero el `apply()` original
+/// no lo despachaba al engine.
+class SetTnrEnabled extends AmplificationEvent {
+  /// true para habilitar el TNR, false para bypass.
+  final bool enabled;
+
+  const SetTnrEnabled({required this.enabled});
+
+  @override
+  List<Object?> get props => [enabled];
 }
 
 /// Solicita guardar la configuración actual del audiograma como un preset con nombre.
