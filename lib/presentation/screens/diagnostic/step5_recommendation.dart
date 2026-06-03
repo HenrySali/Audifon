@@ -5,7 +5,9 @@ import 'package:hive/hive.dart';
 import '../../../domain/entities/audiogram.dart';
 import '../../../domain/entities/diagnostic_result.dart';
 import '../../../domain/entities/eq_preset.dart';
+import '../../../domain/entities/prescription_mode.dart';
 import '../../../domain/gain_prescriber.dart';
+import '../../../domain/gain_prescriber_nl3.dart';
 import '../../bloc/amplification_bloc.dart';
 import '../../bloc/amplification_event.dart'
     show ChangeVolume, UpdateAudiogram, UpdateEqGains;
@@ -55,8 +57,25 @@ class _Step5RecommendationState extends State<Step5Recommendation> {
   }
 
   /// Calcula las ganancias prescritas para mostrar.
+  ///
+  /// Si el modo activo en el bloc es Smart-NL3, usa el prescriptor NL3
+  /// (con clasificación de pérdida + correcciones por tipo). Caso contrario
+  /// usa NL2.
   List<double> _prescribedGains() {
-    return GainPrescriber().prescribeFromAudiogram(_buildAudiogram());
+    final audiogram = _buildAudiogram();
+    final state = context.read<AmplificationBloc>().state;
+    final mode = state is AmplificationActive
+        ? state.prescriberMode
+        : PrescriberMode.smartNl2;
+
+    if (mode == PrescriberMode.smartNl3) {
+      final result = GainPrescriberNL3().prescribeFromAudiogram(
+        audiogram,
+        mode: PrescriptionMode.quiet,
+      );
+      return result.prescribedGains;
+    }
+    return GainPrescriber().prescribeFromAudiogram(audiogram);
   }
 
   /// Aplica TODO de un toque: audiograma, preset EQ, volumen sugerido.

@@ -3,6 +3,7 @@ import 'package:equatable/equatable.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
+import '../../scene/scene_snapshot.dart' show SceneClass;
 
 /// Eventos del BLoC de amplificación.
 ///
@@ -262,4 +263,22 @@ class ToggleMhlMode extends AmplificationEvent {
 
   @override
   List<Object?> get props => [activate];
+}
+
+/// Notifica al bloc que el Smart Scene Engine clasificó una nueva escena.
+///
+/// Cuando el modo de prescriptor es NL3, el bloc usa esta señal para
+/// activar/desactivar el módulo CIN (Comfort in Noise) según el dwell
+/// time configurado en [ScenePrescriptionController]. Si el modo es NL2
+/// el evento se ignora silenciosamente.
+///
+/// Requisitos: 6.1, 6.2, 6.3
+class SceneClassUpdated extends AmplificationEvent {
+  /// Clase de escena detectada por el Smart Scene Engine.
+  final SceneClass sceneClass;
+
+  const SceneClassUpdated({required this.sceneClass});
+
+  @override
+  List<Object?> get props => [sceneClass];
 }

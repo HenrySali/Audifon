@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../data/bridges/audio_bridge.dart';
+import '../../domain/cin_module.dart';
 import '../../domain/entities/audio_config.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
+import '../../domain/entities/nl3_prescription_result.dart';
 import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
 import '../../domain/gain_prescriber.dart';
@@ -14,6 +16,7 @@ import '../../domain/mhl_module.dart';
 import '../../domain/repositories/audiogram_repository.dart';
 import '../../domain/repositories/profile_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
+import '../../domain/scene_prescription_controller.dart';
 import 'amplification_event.dart';
 import 'amplification_state.dart';
 
@@ -85,6 +88,20 @@ class AmplificationBloc
   /// Prescriptor NL3-inspired (instanciado una sola vez).
   late final GainPrescriberNL3 _nl3Prescriber;
 
+  /// Controlador de transiciones Escena → Modo de prescripción (CIN).
+  /// Aplica histéresis para evitar oscilación del modo CIN cuando la
+  /// clasificación del Smart Scene Engine fluctúa.
+  late final ScenePrescriptionController _sceneController;
+
+  /// Cache de la última prescripción NL3 calculada para el audiograma
+  /// activo. Permite componer ganancias CIN en `_onSceneClassUpdated`
+  /// sin recalcular toda la prescripción.
+  NL3PrescriptionResult? _lastNl3Result;
+
+  /// Cache de las últimas ganancias NL2 (sin correcciones NL3) para
+  /// la visualización lado a lado en el [GainComparisonWidget].
+  List<double> _lastNl2Gains = const [];
+
   AmplificationBloc({
     required AudioBridge audioBridge,
     required AudiogramRepository audiogramRepository,
@@ -100,6 +117,13 @@ class AmplificationBloc
     // Instanciar el prescriptor NL3 usando el NL2 existente (composición).
     _nl3Prescriber = GainPrescriberNL3(nl2Prescriber: _gainPrescriber);
 
+    // Controlador de transiciones Escena → modo de prescripción (CIN).
+    // Default arranca en NL2: el setter se actualiza al restaurar el
+    // modo persistido en `_onStartAmplification`.
+    _sceneController = ScenePrescriptionController(
+      prescriberMode: PrescriberMode.smartNl2,
+    );
+
     on<StartAmplification>(_onStartAmplification);
     on<StopAmplification>(_onStopAmplification);
     on<ChangeProfile>(_onChangeProfile);
@@ -113,6 +137,7 @@ class AmplificationBloc
     on<UpdateNrLevel>(_onUpdateNrLevel);
     on<ChangePrescriberMode>(_onChangePrescriberMode);
     on<ToggleMhlMode>(_onToggleMhlMode);
+    on<SceneClassUpdated>(_onSceneClassUpdated);
     // FIX Causa C (smart-scene-diagnostico-chasquido.md): registrar handlers
     // para que el preset Smart Scene completo llegue al engine (antes solo
     // EQ + Volume eran despachados; nrLevel + WDRC + TNR quedaban en Hive).
@@ -153,6 +178,7 @@ class AmplificationBloc
       // 4. Calcular ganancias NAL-NL2
       final eqGains =
           _gainPrescriber.prescribeFromAudiogram(_currentAudiogram!);
+      _lastNl2Gains = List<double>.unmodifiable(eqGains);
 
       // 4b. Restaurar el modo de prescriptor persistido (Req 5.7, 5.8).
       //     Default = smartNl2 para instalaciones nuevas.
@@ -162,16 +188,18 @@ class AmplificationBloc
       } catch (_) {
         // Persistencia tolerante: si falla, mantener el default (smartNl2).
       }
+      _sceneController.setPrescriberMode(_currentPrescriberMode);
 
       // 4c. Si el modo restaurado es NL3, recalcular ganancias con ese prescriptor.
       final List<double> startupGains;
+      NL3PrescriptionResult? nl3Result;
       if (_currentPrescriberMode == PrescriberMode.smartNl3) {
-        final nl3Result =
-            _nl3Prescriber.prescribeFromAudiogram(_currentAudiogram!);
+        nl3Result = _nl3Prescriber.prescribeFromAudiogram(_currentAudiogram!);
         startupGains = nl3Result.prescribedGains;
       } else {
         startupGains = eqGains;
       }
+      _lastNl3Result = nl3Result;
 
       // 5. Construir AudioConfig
       final config = AudioConfig(
@@ -198,6 +226,10 @@ class AmplificationBloc
         volumeDb: _currentVolumeDb,
         headphonesConnected: _headphonesConnected,
         prescriberMode: _currentPrescriberMode,
+        nl2Gains: _lastNl2Gains,
+        nl3Gains: nl3Result?.prescribedGains ?? const [],
+        lossType: nl3Result?.lossType,
+        prescriptionMode: PrescriptionMode.quiet,
       ));
     } catch (e) {
       emit(AmplificationError(message: e.toString()));
@@ -311,9 +343,48 @@ class AmplificationBloc
     // Si estamos activos, recalcular y aplicar ganancias
     if (state is AmplificationActive) {
       try {
-        final newGains =
-            _gainPrescriber.prescribeFromAudiogram(newAudiogram);
-        await _audioBridge.updateEqGains(newGains);
+        final nl2Gains = _gainPrescriber.prescribeFromAudiogram(newAudiogram);
+        _lastNl2Gains = List<double>.unmodifiable(nl2Gains);
+
+        // Recalcular NL3 también para mantener el cache fresco aunque el
+        // modo activo sea NL2 (la UI muestra siempre la comparación).
+        final nl3Result =
+            _nl3Prescriber.prescribeFromAudiogram(newAudiogram);
+        _lastNl3Result = nl3Result;
+
+        final List<double> targetGains;
+        List<double>? cinGainsForState;
+        var prescriptionMode = PrescriptionMode.quiet;
+
+        if (_currentPrescriberMode == PrescriberMode.smartNl3) {
+          // Si el scene controller mantenía CIN activo, recomponerlo
+          // sobre la nueva prescripción NL3.
+          if (_sceneController.currentMode ==
+              PrescriptionMode.comfortInNoise) {
+            final cin = CinModule.apply(
+              nl3Result.prescribedGains,
+              nl3Result.compressionRatios,
+            );
+            targetGains = cin.gains;
+            cinGainsForState = cin.gains;
+            prescriptionMode = PrescriptionMode.comfortInNoise;
+          } else {
+            targetGains = nl3Result.prescribedGains;
+          }
+        } else {
+          targetGains = nl2Gains;
+        }
+
+        await _audioBridge.updateEqGains(targetGains);
+
+        emit((state as AmplificationActive).copyWith(
+          nl2Gains: _lastNl2Gains,
+          nl3Gains: nl3Result.prescribedGains,
+          cinGains: cinGainsForState,
+          clearCinGains: cinGainsForState == null,
+          lossType: nl3Result.lossType,
+          prescriptionMode: prescriptionMode,
+        ));
       } catch (e) {
         // No interrumpir por error de actualización de EQ
       }
@@ -644,6 +715,7 @@ class AmplificationBloc
     if (event.mode == _currentPrescriberMode) return;
 
     _currentPrescriberMode = event.mode;
+    _sceneController.setPrescriberMode(event.mode);
 
     // Desactivar MHL si estaba activo al cambiar de prescriptor.
     _mhlActive = false;
@@ -660,12 +732,20 @@ class AmplificationBloc
       final audiogram = _currentAudiogram ?? Audiogram.defaultAudiogram();
       final List<double> newGains;
 
+      // Refrescar caches NL2 + NL3 para mantener visualización consistente.
+      final nl2Gains = _gainPrescriber.prescribeFromAudiogram(audiogram);
+      _lastNl2Gains = List<double>.unmodifiable(nl2Gains);
+
+      NL3PrescriptionResult? nl3Result;
       if (event.mode == PrescriberMode.smartNl3) {
-        final result = _nl3Prescriber.prescribeFromAudiogram(audiogram);
-        newGains = result.prescribedGains;
+        nl3Result = _nl3Prescriber.prescribeFromAudiogram(audiogram);
+        newGains = nl3Result.prescribedGains;
       } else {
-        newGains = _gainPrescriber.prescribeFromAudiogram(audiogram);
+        // Cambio a NL2 fuerza CIN off — sceneController ya lo hizo arriba.
+        nl3Result = _nl3Prescriber.prescribeFromAudiogram(audiogram);
+        newGains = nl2Gains;
       }
+      _lastNl3Result = nl3Result;
 
       // Aplicar al engine nativo (debe completarse en ≤ 200 ms).
       await _audioBridge.updateEqGains(newGains);
@@ -675,11 +755,17 @@ class AmplificationBloc
         prescriberMode: event.mode,
         mhlActive: false,
         ptaWarning: false,
+        nl2Gains: _lastNl2Gains,
+        nl3Gains: nl3Result.prescribedGains,
+        clearCinGains: true,
+        lossType: nl3Result.lossType,
+        prescriptionMode: PrescriptionMode.quiet,
       ));
     } catch (_) {
       // No interrumpir la amplificación por error de cambio de modo.
       // Revertir el modo interno si falló la aplicación.
       _currentPrescriberMode = currentState.prescriberMode;
+      _sceneController.setPrescriberMode(currentState.prescriberMode);
     }
   }
 
@@ -759,6 +845,75 @@ class AmplificationBloc
       } catch (_) {
         // No interrumpir la amplificación por error de restauración.
       }
+    }
+  }
+
+  /// Procesa una nueva clasificación del Smart Scene Engine y, si el
+  /// modo activo es NL3, aplica/desactiva el módulo CIN respetando la
+  /// histéresis del [ScenePrescriptionController].
+  ///
+  /// Si el modo activo es NL2 o el modo MHL está habilitado, el evento
+  /// se ignora silenciosamente.
+  ///
+  /// Requisitos: 6.1, 6.2, 6.3, 6.4, 6.5
+  Future<void> _onSceneClassUpdated(
+    SceneClassUpdated event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+    if (_currentPrescriberMode != PrescriberMode.smartNl3) return;
+    if (_mhlActive) return;
+
+    final previousMode = _sceneController.currentMode;
+    _sceneController.onSceneChanged(event.sceneClass);
+    final newMode = _sceneController.currentMode;
+
+    if (newMode == previousMode) return;
+
+    final audiogram = _currentAudiogram;
+    if (audiogram == null) return;
+
+    // Asegurar prescripción NL3 fresca en cache.
+    final nl3Result = _lastNl3Result ??
+        _nl3Prescriber.prescribeFromAudiogram(audiogram);
+    _lastNl3Result = nl3Result;
+
+    try {
+      if (newMode == PrescriptionMode.comfortInNoise) {
+        // Activar CIN: componer ganancias modificadas y enviarlas al engine.
+        final cin = CinModule.apply(
+          nl3Result.prescribedGains,
+          nl3Result.compressionRatios,
+        );
+        await _audioBridge.updateEqGains(cin.gains);
+        await _audioBridge.updateWdrcParams(cin.wdrcOverrides);
+
+        emit(currentState.copyWith(
+          cinGains: cin.gains,
+          prescriptionMode: PrescriptionMode.comfortInNoise,
+        ));
+      } else {
+        // Volver a quiet (CIN off) — restaurar ganancias NL3 base.
+        await _audioBridge.updateEqGains(nl3Result.prescribedGains);
+
+        // Restaurar WDRC del perfil activo (si lo hay).
+        final profile = _currentProfile;
+        if (profile != null) {
+          await _audioBridge.updateWdrcParams(WdrcParams(
+            expansionKnee: profile.expansionKnee,
+            compressionKnee: profile.compressionKnee,
+            compressionRatio: profile.compressionRatio,
+          ));
+        }
+
+        emit(currentState.copyWith(
+          clearCinGains: true,
+          prescriptionMode: PrescriptionMode.quiet,
+        ));
+      }
+    } catch (_) {
+      // Las transiciones de escena nunca rompen la amplificación.
     }
   }
 

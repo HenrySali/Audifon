@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import '../../domain/entities/loss_type.dart';
 import '../../domain/entities/prescription_mode.dart';
 
 /// Razón por la que la amplificación está pausada.
@@ -76,6 +77,28 @@ class AmplificationActive extends AmplificationState {
   /// el modo de prescripción estándar. Requisito 4.3.
   final bool ptaWarning;
 
+  /// Últimas ganancias prescritas por NAL-NL2 (12 valores, dB).
+  /// Se exponen para que la UI compare NL2 vs NL3 lado a lado.
+  /// Lista vacía si todavía no se calculó (estado inicial).
+  final List<double> nl2Gains;
+
+  /// Últimas ganancias prescritas por NAL-NL3-inspired (12 valores, dB).
+  /// Lista vacía si el modo NL3 nunca se evaluó en esta sesión.
+  final List<double> nl3Gains;
+
+  /// Ganancias modificadas por CIN (12 valores, dB) o null si CIN
+  /// no está activo en este momento. Permite mostrar la curva CIN
+  /// como overlay en el [GainComparisonWidget].
+  final List<double>? cinGains;
+
+  /// Tipo de pérdida detectada por el clasificador NL3 (null hasta
+  /// que se calcule por primera vez).
+  final LossType? lossType;
+
+  /// Modo de prescripción efectivo aplicado al pipeline DSP.
+  /// Útil para diagnosticar si CIN está desactivado por dwell pendiente.
+  final PrescriptionMode prescriptionMode;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
@@ -86,6 +109,11 @@ class AmplificationActive extends AmplificationState {
     this.prescriberMode = PrescriberMode.smartNl2,
     this.mhlActive = false,
     this.ptaWarning = false,
+    this.nl2Gains = const [],
+    this.nl3Gains = const [],
+    this.cinGains,
+    this.lossType,
+    this.prescriptionMode = PrescriptionMode.quiet,
   });
 
   /// Crea una copia con campos actualizados.
@@ -99,6 +127,12 @@ class AmplificationActive extends AmplificationState {
     PrescriberMode? prescriberMode,
     bool? mhlActive,
     bool? ptaWarning,
+    List<double>? nl2Gains,
+    List<double>? nl3Gains,
+    List<double>? cinGains,
+    bool clearCinGains = false,
+    LossType? lossType,
+    PrescriptionMode? prescriptionMode,
   }) {
     return AmplificationActive(
       inputLevelDb: inputLevelDb ?? this.inputLevelDb,
@@ -110,6 +144,11 @@ class AmplificationActive extends AmplificationState {
       prescriberMode: prescriberMode ?? this.prescriberMode,
       mhlActive: mhlActive ?? this.mhlActive,
       ptaWarning: ptaWarning ?? this.ptaWarning,
+      nl2Gains: nl2Gains ?? this.nl2Gains,
+      nl3Gains: nl3Gains ?? this.nl3Gains,
+      cinGains: clearCinGains ? null : (cinGains ?? this.cinGains),
+      lossType: lossType ?? this.lossType,
+      prescriptionMode: prescriptionMode ?? this.prescriptionMode,
     );
   }
 
@@ -124,6 +163,11 @@ class AmplificationActive extends AmplificationState {
         prescriberMode,
         mhlActive,
         ptaWarning,
+        nl2Gains,
+        nl3Gains,
+        cinGains,
+        lossType,
+        prescriptionMode,
       ];
 }
 

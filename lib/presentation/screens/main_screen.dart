@@ -13,7 +13,10 @@ import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 import '../widgets/prescriber_mode_selector.dart';
 import '../widgets/mhl_mode_toggle.dart';
+import '../widgets/gain_comparison_widget.dart';
+import '../widgets/gain_detail_view.dart';
 import '../widgets/safety_warning_widget.dart';
+import '../../domain/entities/prescription_mode.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
@@ -429,6 +432,28 @@ class _ActiveView extends StatelessWidget {
                   .add(ToggleMhlMode(activate: activate));
             },
           ),
+          // Comparación visual NL2 vs NL3 (solo cuando hay datos NL3 y el
+          // modo activo es Smart-NL3). Tap → bottom sheet con detalle por banda.
+          if (state.prescriberMode == PrescriberMode.smartNl3 &&
+              state.nl2Gains.length == 12 &&
+              state.nl3Gains.length == 12 &&
+              state.lossType != null) ...[
+            const SizedBox(height: 12),
+            GainComparisonWidget(
+              nl2Gains: state.nl2Gains,
+              nl3Gains: state.nl3Gains,
+              cinGains: state.prescriptionMode == PrescriptionMode.comfortInNoise
+                  ? state.cinGains
+                  : null,
+              lossType: state.lossType!,
+              onTap: () => showGainDetailBottomSheet(
+                context: context,
+                nl2Gains: state.nl2Gains,
+                nl3Gains: state.nl3Gains,
+                cinGains: state.cinGains,
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           // Slider de volumen (-20 a +10 dB) — Req 5.3
           _VolumeSlider(volumeDb: state.volumeDb),

@@ -241,6 +241,11 @@ class SceneEngine {
     ));
     bloc.add(SetTnrEnabled(enabled: preset.tnrEnabled));
 
+    // Notificar al bloc del cambio de escena para que el módulo NL3 CIN
+    // (controlado por `ScenePrescriptionController`) decida activar o
+    // desactivar Comfort in Noise. En modo NL2 el bloc ignora el evento.
+    bloc.add(SceneClassUpdated(sceneClass: result.sceneClass));
+
     if (preset.volumeDeltaDb.abs() > 1e-3) {
       final state = bloc.state;
       if (state is AmplificationActive) {
