@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import '../../domain/entities/prescription_mode.dart';
+
 /// Razón por la que la amplificación está pausada.
 enum PauseReason {
   /// Auriculares Bluetooth desconectados (Req 3.3).
@@ -62,6 +64,18 @@ class AmplificationActive extends AmplificationState {
   /// Nivel de NR activo (0-3).
   final int activeNrLevel;
 
+  /// Modo de prescriptor activo (Smart-NL2 / Smart-NL3).
+  final PrescriberMode prescriberMode;
+
+  /// Indica si el modo MHL (Minimal Hearing Loss) está activo.
+  /// Requisito 4.5: acción explícita del usuario para activar/desactivar.
+  final bool mhlActive;
+
+  /// Indica si el PTA del paciente supera 25 dB HL.
+  /// Cuando true, la UI muestra una advertencia recomendando
+  /// el modo de prescripción estándar. Requisito 4.3.
+  final bool ptaWarning;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
@@ -69,6 +83,9 @@ class AmplificationActive extends AmplificationState {
     required this.headphonesConnected,
     this.activeEqPreset = 'Normal',
     this.activeNrLevel = 0,
+    this.prescriberMode = PrescriberMode.smartNl2,
+    this.mhlActive = false,
+    this.ptaWarning = false,
   });
 
   /// Crea una copia con campos actualizados.
@@ -79,6 +96,9 @@ class AmplificationActive extends AmplificationState {
     bool? headphonesConnected,
     String? activeEqPreset,
     int? activeNrLevel,
+    PrescriberMode? prescriberMode,
+    bool? mhlActive,
+    bool? ptaWarning,
   }) {
     return AmplificationActive(
       inputLevelDb: inputLevelDb ?? this.inputLevelDb,
@@ -87,6 +107,9 @@ class AmplificationActive extends AmplificationState {
       headphonesConnected: headphonesConnected ?? this.headphonesConnected,
       activeEqPreset: activeEqPreset ?? this.activeEqPreset,
       activeNrLevel: activeNrLevel ?? this.activeNrLevel,
+      prescriberMode: prescriberMode ?? this.prescriberMode,
+      mhlActive: mhlActive ?? this.mhlActive,
+      ptaWarning: ptaWarning ?? this.ptaWarning,
     );
   }
 
@@ -98,6 +121,9 @@ class AmplificationActive extends AmplificationState {
         headphonesConnected,
         activeEqPreset,
         activeNrLevel,
+        prescriberMode,
+        mhlActive,
+        ptaWarning,
       ];
 }
 

@@ -6,8 +6,11 @@ import '../../data/bridges/audio_bridge.dart';
 import '../../domain/entities/audio_config.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
+import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
 import '../../domain/gain_prescriber.dart';
+import '../../domain/gain_prescriber_nl3.dart';
+import '../../domain/mhl_module.dart';
 import '../../domain/repositories/audiogram_repository.dart';
 import '../../domain/repositories/profile_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
@@ -66,6 +69,22 @@ class AmplificationBloc
   /// Estado de conexión de auriculares.
   bool _headphonesConnected = true;
 
+  /// Modo de prescriptor activo (NL2 / NL3).
+  PrescriberMode _currentPrescriberMode = PrescriberMode.smartNl2;
+
+  /// Indica si el modo MHL está activo.
+  bool _mhlActive = false;
+
+  /// Expone el estado MHL para consultas internas.
+  bool get isMhlActive => _mhlActive;
+
+  /// Modo de prescripción previo a la activación de MHL.
+  /// Se usa para restaurar al desactivar MHL (Req 4.6).
+  PrescriptionMode _previousPrescriptionMode = PrescriptionMode.quiet;
+
+  /// Prescriptor NL3-inspired (instanciado una sola vez).
+  late final GainPrescriberNL3 _nl3Prescriber;
+
   AmplificationBloc({
     required AudioBridge audioBridge,
     required AudiogramRepository audiogramRepository,
@@ -78,6 +97,9 @@ class AmplificationBloc
         _settingsRepository = settingsRepository,
         _gainPrescriber = gainPrescriber,
         super(const AmplificationIdle()) {
+    // Instanciar el prescriptor NL3 usando el NL2 existente (composición).
+    _nl3Prescriber = GainPrescriberNL3(nl2Prescriber: _gainPrescriber);
+
     on<StartAmplification>(_onStartAmplification);
     on<StopAmplification>(_onStopAmplification);
     on<ChangeProfile>(_onChangeProfile);
@@ -89,6 +111,8 @@ class AmplificationBloc
     on<ResumeAmplification>(_onResumeAmplification);
     on<UpdateEqGains>(_onUpdateEqGains);
     on<UpdateNrLevel>(_onUpdateNrLevel);
+    on<ChangePrescriberMode>(_onChangePrescriberMode);
+    on<ToggleMhlMode>(_onToggleMhlMode);
     // FIX Causa C (smart-scene-diagnostico-chasquido.md): registrar handlers
     // para que el preset Smart Scene completo llegue al engine (antes solo
     // EQ + Volume eran despachados; nrLevel + WDRC + TNR quedaban en Hive).
@@ -130,9 +154,28 @@ class AmplificationBloc
       final eqGains =
           _gainPrescriber.prescribeFromAudiogram(_currentAudiogram!);
 
+      // 4b. Restaurar el modo de prescriptor persistido (Req 5.7, 5.8).
+      //     Default = smartNl2 para instalaciones nuevas.
+      try {
+        final savedMode = await _settingsRepository.getPrescriberMode();
+        _currentPrescriberMode = savedMode;
+      } catch (_) {
+        // Persistencia tolerante: si falla, mantener el default (smartNl2).
+      }
+
+      // 4c. Si el modo restaurado es NL3, recalcular ganancias con ese prescriptor.
+      final List<double> startupGains;
+      if (_currentPrescriberMode == PrescriberMode.smartNl3) {
+        final nl3Result =
+            _nl3Prescriber.prescribeFromAudiogram(_currentAudiogram!);
+        startupGains = nl3Result.prescribedGains;
+      } else {
+        startupGains = eqGains;
+      }
+
       // 5. Construir AudioConfig
       final config = AudioConfig(
-        eqGains: eqGains,
+        eqGains: startupGains,
         volumeDb: _currentVolumeDb,
         wdrcParams: WdrcParams(
           expansionKnee: _currentProfile!.expansionKnee,
@@ -148,12 +191,13 @@ class AmplificationBloc
       // 7. Suscribirse a streams del engine
       _subscribeToStreams();
 
-      // 8. Emitir estado activo
+      // 8. Emitir estado activo (con el modo restaurado — Req 5.7)
       emit(AmplificationActive(
         inputLevelDb: 0.0,
         activeProfile: _currentProfile!.name,
         volumeDb: _currentVolumeDb,
         headphonesConnected: _headphonesConnected,
+        prescriberMode: _currentPrescriberMode,
       ));
     } catch (e) {
       emit(AmplificationError(message: e.toString()));
@@ -581,6 +625,140 @@ class AmplificationBloc
       await _profileRepository.deleteCustomProfile(event.name);
     } catch (_) {
       // No interrumpir por error de eliminación
+    }
+  }
+
+  /// Cambia el modo de prescriptor (NL2 / NL3) y recalcula ganancias.
+  ///
+  /// Al cambiar el modo se recalculan los targets de ganancia usando el
+  /// prescriptor correspondiente y se aplican al EQ en ≤ 200 ms.
+  /// El modo se persiste para restaurarlo en el próximo inicio.
+  ///
+  /// Requisitos: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
+  Future<void> _onChangePrescriberMode(
+    ChangePrescriberMode event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+    if (event.mode == _currentPrescriberMode) return;
+
+    _currentPrescriberMode = event.mode;
+
+    // Desactivar MHL si estaba activo al cambiar de prescriptor.
+    _mhlActive = false;
+
+    // Persistir el modo seleccionado para restaurarlo al reiniciar (Req 5.6).
+    try {
+      await _settingsRepository.setPrescriberMode(event.mode);
+    } catch (_) {
+      // Persistencia tolerante: si Hive falla, el modo queda en memoria.
+    }
+
+    try {
+      // Recalcular ganancias según el prescriptor seleccionado.
+      final audiogram = _currentAudiogram ?? Audiogram.defaultAudiogram();
+      final List<double> newGains;
+
+      if (event.mode == PrescriberMode.smartNl3) {
+        final result = _nl3Prescriber.prescribeFromAudiogram(audiogram);
+        newGains = result.prescribedGains;
+      } else {
+        newGains = _gainPrescriber.prescribeFromAudiogram(audiogram);
+      }
+
+      // Aplicar al engine nativo (debe completarse en ≤ 200 ms).
+      await _audioBridge.updateEqGains(newGains);
+
+      // Emitir estado con nuevo modo activo y MHL desactivado.
+      emit(currentState.copyWith(
+        prescriberMode: event.mode,
+        mhlActive: false,
+        ptaWarning: false,
+      ));
+    } catch (_) {
+      // No interrumpir la amplificación por error de cambio de modo.
+      // Revertir el modo interno si falló la aplicación.
+      _currentPrescriberMode = currentState.prescriberMode;
+    }
+  }
+
+  /// Activa o desactiva el modo MHL (Minimal Hearing Loss).
+  ///
+  /// Al activar: guarda el modo de prescripción actual, prescribe ganancia
+  /// MHL flat y aplica al EQ. Si PTA > 25 dB HL, emite warning en el estado.
+  ///
+  /// Al desactivar: restaura el modo previo (quiet o CIN) recalculando
+  /// ganancias según el prescriptor activo, en ≤ 100 ms.
+  ///
+  /// Requisitos: 4.3, 4.5, 4.6
+  Future<void> _onToggleMhlMode(
+    ToggleMhlMode event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+
+    final audiogram = _currentAudiogram ?? Audiogram.defaultAudiogram();
+
+    if (event.activate) {
+      // Guardar el modo previo para restaurar al desactivar (Req 4.6).
+      _previousPrescriptionMode = PrescriptionMode.quiet;
+      _mhlActive = true;
+
+      try {
+        // Prescribir MHL (ganancia flat, compresión lineal, NR máximo).
+        final mhlResult = MhlModule.prescribe(audiogram);
+
+        // Aplicar ganancias MHL al engine.
+        await _audioBridge.updateEqGains(mhlResult.gains);
+
+        // Aplicar NR nivel máximo.
+        await _audioBridge.updateNrLevel(mhlResult.noiseReductionLevel);
+
+        // Emitir estado con MHL activo y flag de advertencia PTA.
+        emit(currentState.copyWith(
+          mhlActive: true,
+          ptaWarning: mhlResult.ptaWarning,
+          activeNrLevel: mhlResult.noiseReductionLevel,
+        ));
+      } catch (_) {
+        // Revertir si falla la activación.
+        _mhlActive = false;
+      }
+    } else {
+      // Desactivar MHL: restaurar modo previo en ≤ 100 ms (Req 4.6).
+      _mhlActive = false;
+
+      try {
+        final List<double> restoredGains;
+
+        if (_currentPrescriberMode == PrescriberMode.smartNl3) {
+          final result = _nl3Prescriber.prescribeFromAudiogram(
+            audiogram,
+            mode: _previousPrescriptionMode,
+          );
+          restoredGains = result.prescribedGains;
+        } else {
+          restoredGains = _gainPrescriber.prescribeFromAudiogram(audiogram);
+        }
+
+        // Aplicar ganancias restauradas al engine.
+        await _audioBridge.updateEqGains(restoredGains);
+
+        // Restaurar nivel de NR del perfil activo.
+        final nrLevel = _currentProfile?.nrLevel ?? 0;
+        await _audioBridge.updateNrLevel(nrLevel);
+
+        // Emitir estado sin MHL.
+        emit(currentState.copyWith(
+          mhlActive: false,
+          ptaWarning: false,
+          activeNrLevel: nrLevel,
+        ));
+      } catch (_) {
+        // No interrumpir la amplificación por error de restauración.
+      }
     }
   }
 

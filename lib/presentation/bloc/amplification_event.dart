@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../domain/entities/audiogram.dart';
+import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
 
 /// Eventos del BLoC de amplificación.
@@ -222,4 +223,43 @@ class DeleteCustomPreset extends AmplificationEvent {
 
   @override
   List<Object?> get props => [name];
+}
+
+/// Solicita cambiar el modo de prescriptor (NL2 / NL3).
+///
+/// Al activar Smart-NL2 se usa el prescriptor NAL-NL2 existente.
+/// Al activar Smart-NL3 se usa GainPrescriberNL3 con clasificación
+/// automática de audiograma y CIN adaptativo.
+///
+/// Las ganancias se recalculan y aplican al EQ en ≤ 200 ms.
+///
+/// Requisitos: 5.1, 5.2, 5.3, 5.4, 5.5
+class ChangePrescriberMode extends AmplificationEvent {
+  /// Nuevo modo de prescriptor a activar.
+  final PrescriberMode mode;
+
+  const ChangePrescriberMode({required this.mode});
+
+  @override
+  List<Object?> get props => [mode];
+}
+
+/// Solicita activar o desactivar el modo MHL (Minimal Hearing Loss).
+///
+/// Al activar MHL se aplica ganancia flat mínima con reducción de ruido
+/// al máximo, orientado a pacientes con audiograma normal que necesitan
+/// mejora de SNR en ambientes ruidosos.
+///
+/// Al desactivar MHL se restaura el modo de prescripción previo
+/// (quiet o comfortInNoise según escena) en ≤ 100 ms.
+///
+/// Requisitos: 4.3, 4.5, 4.6
+class ToggleMhlMode extends AmplificationEvent {
+  /// true para activar MHL, false para desactivar.
+  final bool activate;
+
+  const ToggleMhlMode({required this.activate});
+
+  @override
+  List<Object?> get props => [activate];
 }

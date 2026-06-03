@@ -19,6 +19,9 @@ dependencies:
   just_audio: ^0.9.36
   flutter_tts: ^4.0.2
   http: ^1.2.0
+  # Calibración del micrófono: SHA-256 del payload persistido en
+  # `mic_calibration_box` para audit trail (ANMAT 2318/02 — Decreto 4725/05).
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:

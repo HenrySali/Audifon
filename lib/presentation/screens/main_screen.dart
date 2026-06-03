@@ -11,6 +11,8 @@ import '../../domain/services/preset_advisor.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
+import '../widgets/prescriber_mode_selector.dart';
+import '../widgets/mhl_mode_toggle.dart';
 import '../widgets/safety_warning_widget.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
@@ -407,6 +409,27 @@ class _ActiveView extends StatelessWidget {
             },
           ),
           const SizedBox(height: 20),
+          // Selector de modo de prescriptor (Smart-NL2 / Smart-NL3) — Req 5.1–5.5
+          PrescriberModeSelector(
+            currentMode: state.prescriberMode,
+            onModeChanged: (mode) {
+              context
+                  .read<AmplificationBloc>()
+                  .add(ChangePrescriberMode(mode: mode));
+            },
+          ),
+          const SizedBox(height: 12),
+          // Toggle de modo MHL (Minimal Hearing Loss) — Req 4.3, 4.5, 4.6
+          MhlModeToggle(
+            isActive: state.mhlActive,
+            ptaWarning: state.ptaWarning,
+            onToggled: (activate) {
+              context
+                  .read<AmplificationBloc>()
+                  .add(ToggleMhlMode(activate: activate));
+            },
+          ),
+          const SizedBox(height: 16),
           // Slider de volumen (-20 a +10 dB) — Req 5.3
           _VolumeSlider(volumeDb: state.volumeDb),
           const SizedBox(height: 16),

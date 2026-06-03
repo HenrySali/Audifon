@@ -1,4 +1,5 @@
 import '../entities/calibration_data.dart';
+import '../entities/prescription_mode.dart';
 
 /// Método de prescripción de ganancia.
 enum PrescriptionMethod {
@@ -52,4 +53,12 @@ abstract class SettingsRepository {
 
   /// Guarda el nivel de NR activo.
   Future<void> setLastNrLevel(int level);
+
+  /// Obtiene el modo de prescriptor persistido (Smart-NL2 / Smart-NL3).
+  /// Retorna [PrescriberMode.smartNl2] si no hay valor guardado (default
+  /// para instalaciones nuevas — Req 5.8).
+  Future<PrescriberMode> getPrescriberMode();
+
+  /// Guarda el modo de prescriptor seleccionado por el usuario.
+  Future<void> setPrescriberMode(PrescriberMode mode);
 }

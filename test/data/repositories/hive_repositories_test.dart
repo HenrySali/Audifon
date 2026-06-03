@@ -4,6 +4,7 @@ import 'package:hive/hive.dart';
 import 'package:hearing_aid_app/domain/entities/audiogram.dart';
 import 'package:hearing_aid_app/domain/entities/environment_profile.dart';
 import 'package:hearing_aid_app/domain/entities/calibration_data.dart';
+import 'package:hearing_aid_app/domain/entities/prescription_mode.dart';
 import 'package:hearing_aid_app/domain/repositories/settings_repository.dart';
 import 'package:hearing_aid_app/data/repositories/audiogram_repository_impl.dart';
 import 'package:hearing_aid_app/data/repositories/profile_repository_impl.dart';
@@ -289,6 +290,34 @@ void main() {
 
     test('getCalibrationData returns null when not set', () async {
       expect(await settingsRepo.getCalibrationData(), isNull);
+    });
+
+    // --- Persistencia de PrescriberMode (Req 5.6, 5.7, 5.8) ---
+
+    test('getPrescriberMode defaults to smartNl2 when not set', () async {
+      // Instalación nueva: sin valor guardado → default smartNl2 (Req 5.8).
+      final mode = await settingsRepo.getPrescriberMode();
+      expect(mode, PrescriberMode.smartNl2);
+    });
+
+    test('saves and retrieves prescriberMode smartNl3', () async {
+      await settingsRepo.setPrescriberMode(PrescriberMode.smartNl3);
+      final mode = await settingsRepo.getPrescriberMode();
+      expect(mode, PrescriberMode.smartNl3);
+    });
+
+    test('saves and retrieves prescriberMode smartNl2', () async {
+      await settingsRepo.setPrescriberMode(PrescriberMode.smartNl3);
+      await settingsRepo.setPrescriberMode(PrescriberMode.smartNl2);
+      final mode = await settingsRepo.getPrescriberMode();
+      expect(mode, PrescriberMode.smartNl2);
+    });
+
+    test('getPrescriberMode falls back to smartNl2 on corrupt value', () async {
+      // Simular valor corrupto en Hive.
+      await settingsBox.put('prescriberMode', 'invalidMode');
+      final mode = await settingsRepo.getPrescriberMode();
+      expect(mode, PrescriberMode.smartNl2);
     });
   });
 }

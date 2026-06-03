@@ -17,6 +17,7 @@ import 'package:hearing_aid_app/data/bridges/audio_bridge.dart';
 import 'package:hearing_aid_app/domain/entities/audio_config.dart';
 import 'package:hearing_aid_app/domain/entities/audiogram.dart';
 import 'package:hearing_aid_app/domain/entities/environment_profile.dart';
+import 'package:hearing_aid_app/domain/entities/prescription_mode.dart';
 import 'package:hearing_aid_app/domain/entities/wdrc_params.dart';
 import 'package:hearing_aid_app/domain/gain_prescriber.dart';
 import 'package:hearing_aid_app/domain/repositories/audiogram_repository.dart';
@@ -55,6 +56,7 @@ void main() {
     registerFallbackValue(FakeAudioConfig());
     registerFallbackValue(FakeWdrcParams());
     registerFallbackValue(FakeAudiogram());
+    registerFallbackValue(PrescriberMode.smartNl2);
   });
 
   setUp(() {
@@ -95,6 +97,10 @@ void main() {
     when(() => mockSettingsRepo.setLastProfile(any()))
         .thenAnswer((_) async {});
     when(() => mockSettingsRepo.setLastVolume(any()))
+        .thenAnswer((_) async {});
+    when(() => mockSettingsRepo.getPrescriberMode())
+        .thenAnswer((_) async => PrescriberMode.smartNl2);
+    when(() => mockSettingsRepo.setPrescriberMode(any()))
         .thenAnswer((_) async {});
 
     when(() => mockGainPrescriber.prescribeFromAudiogram(any()))

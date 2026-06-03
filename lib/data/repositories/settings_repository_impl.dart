@@ -1,6 +1,7 @@
 import 'package:hive/hive.dart';
 
 import '../../domain/entities/calibration_data.dart';
+import '../../domain/entities/prescription_mode.dart';
 import '../../domain/repositories/settings_repository.dart';
 
 /// Nombre del Hive box para configuración de la app.
@@ -14,6 +15,7 @@ class _SettingsKeys {
   static const String calibrationData = 'calibrationData';
   static const String lastEqPreset = 'lastEqPreset';
   static const String lastNrLevel = 'lastNrLevel';
+  static const String prescriberMode = 'prescriberMode';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -109,6 +111,21 @@ class SettingsRepositoryImpl implements SettingsRepository {
   @override
   Future<void> setLastNrLevel(int level) async {
     await _box.put(_SettingsKeys.lastNrLevel, level);
+  }
+
+  @override
+  Future<PrescriberMode> getPrescriberMode() async {
+    final value = _box.get(_SettingsKeys.prescriberMode) as String?;
+    if (value == null) return PrescriberMode.smartNl2;
+    return PrescriberMode.values.firstWhere(
+      (m) => m.name == value,
+      orElse: () => PrescriberMode.smartNl2,
+    );
+  }
+
+  @override
+  Future<void> setPrescriberMode(PrescriberMode mode) async {
+    await _box.put(_SettingsKeys.prescriberMode, mode.name);
   }
 
   // --- Serialización de CalibrationData ---
