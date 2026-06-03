@@ -18,6 +18,7 @@ import 'entities/patient_profile.dart';
 import 'entities/prescription_mode.dart';
 import 'entities/wdrc_params.dart';
 import 'gain_prescriber.dart';
+import 'mhl_module.dart';
 
 /// Prescriptor NAL-NL3-inspired.
 ///
@@ -163,11 +164,32 @@ class GainPrescriberNL3 {
     // Validar audiograma: rechazar vacío o incompleto.
     _validateAudiogram(audiogram);
 
-    // Clasificar la forma del audiograma.
+    // Clasificar la forma del audiograma (se calcula incluso en MHL para
+    // exponer el LossType en el resultado y mantener metadata consistente).
     final lossType = classifyAudiogram(
       audiogram,
       boneConduction: profile?.boneConduction,
     );
+
+    // Modo MHL: delegar al MhlModule para unificar el path. Así, una llamada
+    // standalone a prescribeFromAudiogram(audiogram, mode: mhl) devuelve la
+    // misma prescripción que invocar MhlModule.prescribe(audiogram) directo
+    // desde el bloc — ganancia flat 8 dB clamped a [5,10], compresión 1.0:1
+    // y ptaWarning real según PTA del audiograma.
+    if (mode == PrescriptionMode.mhl) {
+      final mhlResult = MhlModule.prescribe(audiogram);
+      return NL3PrescriptionResult(
+        prescribedGains: mhlResult.gains,
+        finalGains: mhlResult.gains,
+        compressionRatios: mhlResult.compressionRatios,
+        lossType: lossType,
+        mode: mode,
+        cinActive: false,
+        wdrcOverrides: null,
+        ptaWarning: mhlResult.ptaWarning,
+        timestamp: DateTime.now(),
+      );
+    }
 
     // Obtener ganancias base NAL-NL2 del prescriptor compuesto.
     final nl2Gains = _nl2Prescriber.prescribeFromAudiogram(audiogram);
@@ -190,13 +212,15 @@ class GainPrescriberNL3 {
     // Determinar si CIN está activo.
     final cinActive = mode == PrescriptionMode.comfortInNoise;
 
-    // WDRC overrides para CIN (stub: se implementan en tarea 3.1).
-    final WdrcParams? wdrcOverrides = cinActive
-        ? const WdrcParams(attackMs: 10.0, releaseMs: 150.0)
-        : null;
+    // WDRC overrides: ahora variables según tipo de pérdida y CIN.
+    // CIN tiene prioridad si está activo (attack=10ms, release=150ms).
+    final pta = _calculatePTA(audiogram);
+    final WdrcParams? wdrcOverrides =
+        _resolveWdrcOverrides(lossType, pta, cinActive);
 
-    // PTA warning para MHL (stub: se implementa en tarea 4.1).
-    final ptaWarning = false;
+    // ptaWarning solo aplica al modo MHL (en el branch de arriba). Para los
+    // demás modos no corresponde emitir esta advertencia clínica.
+    const ptaWarning = false;
 
     return NL3PrescriptionResult(
       prescribedGains: correctedGains,
@@ -465,6 +489,59 @@ class GainPrescriberNL3 {
       sum += audiogram.thresholds[freq] ?? 0.0;
     }
     return sum / ptaFrequencies.length;
+  }
+
+  /// Resuelve los overrides WDRC (attack/release) según tipo de pérdida,
+  /// severidad y estado del modo CIN.
+  ///
+  /// Reglas:
+  /// - **CIN activo**: attack=10 ms, release=150 ms (siempre tiene prioridad
+  ///   sobre el ajuste por loss type — esto unifica el comportamiento con
+  ///   `CinModule.apply` que también setea estos valores).
+  /// - **Sloping con HL severo (PTA > 60)**: attack=8 ms, release=80 ms.
+  ///   Compresión rápida para pérdidas severas en agudos: minimiza distorsión
+  ///   de transientes y mejora inteligibilidad consonántica.
+  /// - **Reverse slope**: attack=15 ms, release=200 ms. Tiempos más lentos
+  ///   para preservar formantes en LF y evitar pumping en vocales.
+  /// - **Notch**: attack=12 ms, release=120 ms. Compromiso intermedio que
+  ///   suaviza la asimetría espectral alrededor de la muesca.
+  /// - **Resto** (flat, cookieBite, mixed, sloping leve, etc.): null,
+  ///   de modo que el WDRC base use sus defaults (attack=5 ms, release=100 ms).
+  ///
+  /// Retorna [WdrcParams] con los tiempos a forzar, o null si corresponde
+  /// usar los defaults del compresor base.
+  ///
+  /// Requisitos: 3.4 (CIN WDRC overrides), 10.x (parámetros por loss type).
+  WdrcParams? _resolveWdrcOverrides(
+    LossType lossType,
+    double pta,
+    bool cinActive,
+  ) {
+    // CIN siempre tiene prioridad: si está activo, fijar attack=10/release=150
+    // sin importar el tipo de pérdida.
+    if (cinActive) {
+      return const WdrcParams(attackMs: 10.0, releaseMs: 150.0);
+    }
+
+    switch (lossType) {
+      case LossType.sloping:
+        // Solo override para HL severo (PTA > 60 dB): compresión más rápida.
+        if (pta > 60.0) {
+          return const WdrcParams(attackMs: 8.0, releaseMs: 80.0);
+        }
+        return null;
+      case LossType.reverseSlope:
+        // Tiempos más lentos para preservar formantes en LF.
+        return const WdrcParams(attackMs: 15.0, releaseMs: 200.0);
+      case LossType.notch:
+        // Compromiso intermedio para suavizar la asimetría del notch.
+        return const WdrcParams(attackMs: 12.0, releaseMs: 120.0);
+      case LossType.flat:
+      case LossType.cookieBite:
+      case LossType.mixed:
+        // Sin override: usar defaults del WDRC base.
+        return null;
+    }
   }
 
   /// Valida que el audiograma tenga las 12 frecuencias estándar requeridas.

@@ -319,5 +319,34 @@ void main() {
       final mode = await settingsRepo.getPrescriberMode();
       expect(mode, PrescriberMode.smartNl2);
     });
+
+    // --- Persistencia de experienceMonths (NL3 acclimatization) ---
+
+    test('getExperienceMonths returns null when not set', () async {
+      // Default: usuario nuevo / onboarding pendiente.
+      expect(await settingsRepo.getExperienceMonths(), isNull);
+    });
+
+    test('saves and retrieves experienceMonths', () async {
+      await settingsRepo.setExperienceMonths(9);
+      expect(await settingsRepo.getExperienceMonths(), 9);
+    });
+
+    test('setExperienceMonths clamps negatives to zero', () async {
+      await settingsRepo.setExperienceMonths(-5);
+      expect(await settingsRepo.getExperienceMonths(), 0);
+    });
+
+    test('overwrites previous experienceMonths value', () async {
+      await settingsRepo.setExperienceMonths(3);
+      await settingsRepo.setExperienceMonths(36);
+      expect(await settingsRepo.getExperienceMonths(), 36);
+    });
+
+    test('getExperienceMonths returns null on corrupt value', () async {
+      // Simular valor corrupto (no numérico) en Hive.
+      await settingsBox.put('experienceMonths', 'not-a-number');
+      expect(await settingsRepo.getExperienceMonths(), isNull);
+    });
   });
 }

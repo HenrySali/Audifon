@@ -199,14 +199,18 @@ void SceneAnalyzer::computeFft() {
     if (snrDb >  40.0f) snrDb =  40.0f;
 
     // 8) VAD híbrido robusto: usa muestras de tiempo + bandas + piso de
-    //    ruido + flatness + tilt espectral. El nuevo VAD reactiva
-    //    flatness como gate anti respiración / roce, y consume el tilt
-    //    como discriminador adicional contra ruidos aerodinámicos.
+    //    ruido + flatness + tilt + centroide. El nuevo VAD reactiva
+    //    flatness como gate anti respiración / roce, y consume tilt y
+    //    centroide como discriminadores adicionales contra ruidos
+    //    aerodinámicos pasabandeados (breath proxy 200-2 kHz, viento,
+    //    agua corriendo) que dejan masa espectral fuera del rango
+    //    formántico.
     vad_.process(fftBuffer_, kFftSize,
                  bandsDb,
                  noise_.getProfileDb(),
                  features.flatness,
                  features.tilt_db_per_octave,
+                 features.centroid_hz,
                  inputDbSpl);
 
     // 9) Construir snapshot.

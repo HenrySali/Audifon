@@ -15,6 +15,7 @@ import '../widgets/prescriber_mode_selector.dart';
 import '../widgets/mhl_mode_toggle.dart';
 import '../widgets/gain_comparison_widget.dart';
 import '../widgets/gain_detail_view.dart';
+import '../widgets/experience_months_picker.dart';
 import '../widgets/safety_warning_widget.dart';
 import '../../domain/entities/prescription_mode.dart';
 import 'ai_chat_screen.dart';
@@ -421,6 +422,19 @@ class _ActiveView extends StatelessWidget {
                   .add(ChangePrescriberMode(mode: mode));
             },
           ),
+          // Selector de experiencia previa con audífonos — sólo aplica al
+          // prescriptor NL3 (define la corrección de aclimatización -3 dB).
+          if (state.prescriberMode == PrescriberMode.smartNl3) ...[
+            const SizedBox(height: 12),
+            ExperienceMonthsPicker(
+              currentMonths: state.experienceMonths,
+              onChanged: (months) {
+                context
+                    .read<AmplificationBloc>()
+                    .add(SetExperienceMonths(months));
+              },
+            ),
+          ],
           const SizedBox(height: 12),
           // Toggle de modo MHL (Minimal Hearing Loss) — Req 4.3, 4.5, 4.6
           MhlModeToggle(

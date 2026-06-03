@@ -61,4 +61,17 @@ abstract class SettingsRepository {
 
   /// Guarda el modo de prescriptor seleccionado por el usuario.
   Future<void> setPrescriberMode(PrescriberMode mode);
+
+  /// Obtiene la experiencia previa del usuario con audífonos en meses.
+  ///
+  /// Retorna `null` cuando todavía no hay un valor guardado, lo que
+  /// representa un usuario nuevo (sin onboarding completo). El prescriptor
+  /// NL3 utiliza este dato para aplicar la corrección de aclimatización
+  /// (-3 dB en todas las bandas) cuando `experienceMonths < 6`.
+  Future<int?> getExperienceMonths();
+
+  /// Guarda la experiencia previa del usuario con audífonos en meses.
+  ///
+  /// Acepta valores ≥ 0; los valores negativos se tratan como cero.
+  Future<void> setExperienceMonths(int months);
 }

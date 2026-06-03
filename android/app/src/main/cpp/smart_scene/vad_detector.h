@@ -194,6 +194,25 @@ public:
     /// ningún gate de no-vocal puede dispararse para bloquear voz.
     static constexpr float kNonVocalGateMidSnrDb = 6.0f;
 
+    /// Centroide máximo aceptable para considerar que la energía vive
+    /// en el rango formántico vocal. Voz humana real (vocales) tiene
+    /// centroid en 800-1500 Hz; un proxy de respiración / viento /
+    /// agua / fricativa sostenida pasabandeada arriba de 2 kHz puede
+    /// llegar a 4 kHz fácil. Por encima de este umbral, sin pitch
+    /// sostenido, NO es voz — bloqueamos. Sirve también para invalidar
+    /// el veto de "voiceEvidenceStrong" cuando el LRT/midSnr suben en
+    /// el pico de envolvente del breath proxy pero el espectro sigue
+    /// concentrado fuera del rango vocal.
+    static constexpr float kCentroidVoiceMaxHz = 3000.0f;
+
+    /// EMA alpha para el centroide. El valor instantáneo de un FFT de
+    /// 256 puntos sobre ruido pasabandeado tiene varianza alta entre
+    /// frames consecutivos — el gate basado en centroide necesita la
+    /// versión suavizada para no dejar pasar picos espurios del breath
+    /// proxy donde la masa espectral cae brevemente debajo del umbral.
+    /// 0.10 = constante de tiempo ≈ 10 frames ≈ 50 ms a 5 ms/frame.
+    static constexpr float kCentroidEmaAlpha = 0.10f;
+
     // ─── Pesos de la combinación ────────────────────────────────────────
     /// Suma debe ser 1.0. LRT pesa más por ser el feature más robusto
     /// teóricamente. Pitch baja del 0.5 anterior al 0.25 — el pre-blanqueo
@@ -228,6 +247,10 @@ public:
     ///                      anti respiración / roce.
     /// @param spectralTiltDb Tilt espectral en dB/octava. Voz tiene tilt
     ///                      muy negativo; respiración / roce ≈ 0.
+    /// @param spectralCentroidHz Centroide espectral en Hz. Voz vocal vive
+    ///                      en 800-1500 Hz; ruidos aerodinámicos pasabandeados
+    ///                      arriba (breath proxy, viento, agua) saltan a
+    ///                      3-5 kHz. Discriminador adicional contra breath.
     /// @param energyDbSpl   Nivel RMS del bloque en dB SPL.
     void process(const float* samples,
                  int numSamples,
@@ -235,6 +258,7 @@ public:
                  const float noiseFloorDb[kSceneNumBands],
                  float flatness,
                  float spectralTiltDb,
+                 float spectralCentroidHz,
                  float energyDbSpl);
 
     /// True si el voice flag está activado tras suavizado, histéresis,
@@ -357,6 +381,7 @@ private:
     // Anti-respiración / roce / fricativa sostenida.
     int   flatnessHighStreak_ = 0; ///< Frames consecutivos con flatness alta.
     float zcrRatio_           = 0.0f; ///< ZCR del último bloque [0, 1].
+    float centroidEma_        = 0.0f; ///< Centroide espectral suavizado (Hz).
     uint8_t pitchHistory_[kPitchDensityWindow] = {0}; ///< 0/1 por frame.
     int   pitchHistIdx_       = 0;
     int   pitchHistFill_      = 0;

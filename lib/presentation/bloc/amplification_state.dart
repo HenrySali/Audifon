@@ -99,6 +99,15 @@ class AmplificationActive extends AmplificationState {
   /// Útil para diagnosticar si CIN está desactivado por dwell pendiente.
   final PrescriptionMode prescriptionMode;
 
+  /// Experiencia previa del usuario con audífonos en meses.
+  ///
+  /// `null` indica que el usuario todavía no completó el onboarding,
+  /// por lo que se asume usuario nuevo (NL3 aplicará -3 dB de
+  /// aclimatización si se activa). Cuando el usuario selecciona un
+  /// chip en el [ExperienceMonthsPicker] este campo refleja el valor
+  /// guardado en `SettingsRepository`.
+  final int? experienceMonths;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
@@ -114,6 +123,7 @@ class AmplificationActive extends AmplificationState {
     this.cinGains,
     this.lossType,
     this.prescriptionMode = PrescriptionMode.quiet,
+    this.experienceMonths,
   });
 
   /// Crea una copia con campos actualizados.
@@ -133,6 +143,8 @@ class AmplificationActive extends AmplificationState {
     bool clearCinGains = false,
     LossType? lossType,
     PrescriptionMode? prescriptionMode,
+    int? experienceMonths,
+    bool clearExperienceMonths = false,
   }) {
     return AmplificationActive(
       inputLevelDb: inputLevelDb ?? this.inputLevelDb,
@@ -149,6 +161,9 @@ class AmplificationActive extends AmplificationState {
       cinGains: clearCinGains ? null : (cinGains ?? this.cinGains),
       lossType: lossType ?? this.lossType,
       prescriptionMode: prescriptionMode ?? this.prescriptionMode,
+      experienceMonths: clearExperienceMonths
+          ? null
+          : (experienceMonths ?? this.experienceMonths),
     );
   }
 
@@ -168,6 +183,7 @@ class AmplificationActive extends AmplificationState {
         cinGains,
         lossType,
         prescriptionMode,
+        experienceMonths,
       ];
 }
 

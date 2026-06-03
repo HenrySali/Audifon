@@ -16,6 +16,7 @@ class _SettingsKeys {
   static const String lastEqPreset = 'lastEqPreset';
   static const String lastNrLevel = 'lastNrLevel';
   static const String prescriberMode = 'prescriberMode';
+  static const String experienceMonths = 'experienceMonths';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -126,6 +127,30 @@ class SettingsRepositoryImpl implements SettingsRepository {
   @override
   Future<void> setPrescriberMode(PrescriberMode mode) async {
     await _box.put(_SettingsKeys.prescriberMode, mode.name);
+  }
+
+  @override
+  Future<int?> getExperienceMonths() async {
+    try {
+      final value = _box.get(_SettingsKeys.experienceMonths);
+      if (value == null) return null;
+      return (value as num).toInt();
+    } catch (_) {
+      // Persistencia tolerante: ante un valor corrupto retornar null
+      // (equivale a usuario nuevo / onboarding pendiente).
+      return null;
+    }
+  }
+
+  @override
+  Future<void> setExperienceMonths(int months) async {
+    final clamped = months < 0 ? 0 : months;
+    try {
+      await _box.put(_SettingsKeys.experienceMonths, clamped);
+    } catch (_) {
+      // Persistencia tolerante: si Hive falla, no propagar el error
+      // para no interrumpir el flujo de UI.
+    }
   }
 
   // --- Serialización de CalibrationData ---

@@ -419,4 +419,121 @@ void main() {
       expect: () => [],
     );
   });
+
+  group('SetExperienceMonths', () {
+    blocTest<AmplificationBloc, AmplificationState>(
+      'persists value and emits experienceMonths in active state',
+      build: buildBloc,
+      seed: () => const AmplificationActive(
+        inputLevelDb: 50.0,
+        activeProfile: 'Conversación',
+        volumeDb: 0.0,
+        headphonesConnected: true,
+      ),
+      act: (bloc) => bloc.add(const SetExperienceMonths(9)),
+      expect: () => [
+        isA<AmplificationActive>()
+            .having((s) => s.experienceMonths, 'experienceMonths', 9),
+      ],
+      verify: (_) {
+        verify(() => mockSettingsRepo.setExperienceMonths(9)).called(1);
+      },
+    );
+
+    blocTest<AmplificationBloc, AmplificationState>(
+      'clamps negative months to zero before persisting',
+      build: buildBloc,
+      seed: () => const AmplificationActive(
+        inputLevelDb: 0.0,
+        activeProfile: 'Conversación',
+        volumeDb: 0.0,
+        headphonesConnected: true,
+      ),
+      act: (bloc) => bloc.add(const SetExperienceMonths(-5)),
+      expect: () => [
+        isA<AmplificationActive>()
+            .having((s) => s.experienceMonths, 'experienceMonths', 0),
+      ],
+      verify: (_) {
+        verify(() => mockSettingsRepo.setExperienceMonths(0)).called(1);
+      },
+    );
+
+    blocTest<AmplificationBloc, AmplificationState>(
+      'is ignored persistence-only when not Active',
+      build: buildBloc,
+      seed: () => const AmplificationIdle(),
+      act: (bloc) => bloc.add(const SetExperienceMonths(12)),
+      expect: () => [],
+      verify: (_) {
+        // Aún cuando el estado no sea Active, el valor se persiste.
+        verify(() => mockSettingsRepo.setExperienceMonths(12)).called(1);
+      },
+    );
+
+    test(
+      'in NL3 mode, new user (3 months) gets gains 3 dB lower than '
+      'experienced (24 months)',
+      () async {
+        // Configurar el bloc en modo NL3 desde el arranque.
+        when(() => mockSettingsRepo.getPrescriberMode())
+            .thenAnswer((_) async => PrescriberMode.smartNl3);
+        when(() => mockSettingsRepo.getExperienceMonths())
+            .thenAnswer((_) async => null);
+
+        // Capturar las llamadas a updateEqGains para comparar luego.
+        final capturedGains = <List<double>>[];
+        when(() => mockAudioBridge.updateEqGains(any())).thenAnswer((inv) async {
+          final gains = inv.positionalArguments.first as List<double>;
+          capturedGains.add(List<double>.from(gains));
+        });
+
+        final bloc = buildBloc();
+
+        // Arrancar la amplificación.
+        bloc.add(const StartAmplification());
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Limpiar captures antes de los SetExperienceMonths para aislar
+        // las llamadas que provoca el evento bajo test.
+        capturedGains.clear();
+
+        // Setear usuario experimentado (24 meses) — sin aclimatización.
+        bloc.add(const SetExperienceMonths(24));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Setear usuario nuevo (3 meses) — aplica -3 dB.
+        bloc.add(const SetExperienceMonths(3));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Esperamos al menos una llamada por cada SetExperienceMonths.
+        expect(capturedGains.length, greaterThanOrEqualTo(2));
+
+        // Las dos últimas son las que nos interesan: experienced=24 → 3.
+        final experiencedGains = capturedGains[capturedGains.length - 2];
+        final newUserGains = capturedGains.last;
+
+        expect(experiencedGains.length, 12);
+        expect(newUserGains.length, 12);
+
+        // El mock de GainPrescriber retorna 10.0 dB para todas las bandas
+        // del audiograma por defecto. En NL3 el clasificador detecta `flat`
+        // (audiograma uniforme), por lo que no aplica correcciones de
+        // forma. La única diferencia entre los dos perfiles debe ser el
+        // ajuste de aclimatización para usuario nuevo (-3 dB en todas las
+        // bandas), antes del clamp [0, 50].
+        for (int i = 0; i < 12; i++) {
+          // El mock devuelve 10.0 ≥ 3.0, así que el clamp no entra en juego.
+          expect(
+            experiencedGains[i] - newUserGains[i],
+            closeTo(3.0, 0.001),
+            reason: 'banda $i: experienced=${experiencedGains[i]} '
+                'newUser=${newUserGains[i]}',
+          );
+        }
+
+        await bloc.close();
+      },
+    );
+  });
 }

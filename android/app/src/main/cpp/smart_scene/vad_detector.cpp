@@ -64,6 +64,7 @@ void VadDetector::reset() {
     prevEnergyDb_   = -90.0f;
     flatnessHighStreak_ = 0;
     zcrRatio_           = 0.0f;
+    centroidEma_        = 0.0f;
     pitchDensity_       = 0.0f;
     pitchHistIdx_       = 0;
     pitchHistFill_      = 0;
@@ -80,6 +81,7 @@ void VadDetector::process(const float* samples,
                           const float noiseFloorDb[kSceneNumBands],
                           float flatness,
                           float spectralTiltDb,
+                          float spectralCentroidHz,
                           float energyDbSpl) {
     if (samples == nullptr || numSamples <= 0 ||
         bandEnergyDb == nullptr || noiseFloorDb == nullptr) {
@@ -88,6 +90,21 @@ void VadDetector::process(const float* samples,
     if (!std::isfinite(energyDbSpl)) energyDbSpl = 0.0f;
     if (!std::isfinite(flatness))    flatness    = 1.0f;
     if (!std::isfinite(spectralTiltDb)) spectralTiltDb = 0.0f;
+    if (!std::isfinite(spectralCentroidHz) || spectralCentroidHz < 0.0f) {
+        spectralCentroidHz = 0.0f;
+    }
+
+    // Suavizamos el centroide con EMA. La FFT de 256 puntos sobre ruido
+    // pasabandeado da varianza alta del centroide entre frames; un único
+    // frame puede caer brevemente al rango vocal por azar y abrir el gate.
+    // El EMA reduce esa fuga sin afectar voz real (cuyo centroide es
+    // estable en 800-1500 Hz durante toda la fonación).
+    if (centroidEma_ <= 0.0f) {
+        centroidEma_ = spectralCentroidHz;
+    } else {
+        centroidEma_ = kCentroidEmaAlpha * spectralCentroidHz +
+                       (1.0f - kCentroidEmaAlpha) * centroidEma_;
+    }
 
     // 1) Acumular muestras con HPF para matar DC + hum.
     pushSamplesWithHpf(samples, numSamples);
@@ -209,15 +226,34 @@ void VadDetector::process(const float* samples,
         (flatness        > kTiltGateFlatnessMin) &&
         (pitchStrength_  < kVoicingMinPitch);
 
+    // Centroid gate: ruido pasabandeado en 200-2000 Hz con LPF de 1er
+    // orden (proxy de respiración) deja un centroid > 3.5 kHz porque la
+    // cola de alta frecuencia no se atenúa lo suficiente. Voz vocal real
+    // tiene centroid en 800-1500 Hz (vocales) y < 2.5 kHz incluso con
+    // fricativas. Si el centroid suavizado se va arriba del rango vocal
+    // y NO hay pitch sostenido, es ruido aerodinámico — bloqueamos.
+    // Este gate captura el caso T4/T4b/T4c donde flatness, ZCR y tilt
+    // están dentro de rangos "vocales" pero la masa espectral está
+    // concentrada fuera de la banda formántica.
+    const bool centroidGateBlock =
+        (centroidEma_      > kCentroidVoiceMaxHz) &&
+        (pitchStrength_    < kVoicingMinPitch);
+
     // Veto: si hay evidencia clara de voz (LRT alto Y mid-SNR alto) los
     // gates de no-vocal no pueden bloquear. Esto protege la voz natural
     // que momentáneamente arroja flatness alta entre vocal y consonante.
+    // PERO el veto exige también que el centroide caiga dentro del rango
+    // vocal — sin esa condición, la envolvente del breath proxy a 0.5 Hz
+    // levanta midSnr arriba de 6 dB en sus picos y dispara el onset.
+    const bool centroidInVocalRange =
+        centroidEma_ < kCentroidVoiceMaxHz;
     const bool voiceEvidenceStrong =
-        (lrtScore_ > 1.0f) ||
-        (midSnrDb_ > kNonVocalGateMidSnrDb);
+        centroidInVocalRange &&
+        ((lrtScore_ > 1.0f) || (midSnrDb_ > kNonVocalGateMidSnrDb));
     const bool nonVocalGateBlock =
         !voiceEvidenceStrong &&
-        (flatnessGateBlock || zcrBreathBlock || tiltGateBlock);
+        (flatnessGateBlock || zcrBreathBlock || tiltGateBlock ||
+         centroidGateBlock);
 
     if (energyDbSpl < kMinSpeechDbSpl) {
         // Gate 1: silencio absoluto.
@@ -246,6 +282,18 @@ void VadDetector::process(const float* samples,
     } else if (nonVocalGateBlock && !voiceActive_) {
         // Gate 3: respiración / roce / viento / fricativa sostenida.
         // Idem Gate 2: sólo bloquea ARRANQUE de voz.
+        voiceActive_   = false;
+        hangover_      = 0;
+        hangoverActive_ = false;
+        onsetSustain_  = 0;
+    } else if (centroidGateBlock && voiceActive_ && !voiceEvidenceStrong) {
+        // Gate 3b: si ya estamos en voz pero el centroide se va arriba
+        // del rango vocal Y no hay pitch sostenido Y no hay evidencia
+        // espectral fuerte, cortamos. Voz humana real nunca sostiene un
+        // centroide > 3 kHz; si pasa, es porque el breath proxy ganó la
+        // hysteresis tras un pico de envolvente. Sin este corte de la
+        // banda muerta el detector queda enganchado los 5 segundos del
+        // test T4/T4b/T4c.
         voiceActive_   = false;
         hangover_      = 0;
         hangoverActive_ = false;

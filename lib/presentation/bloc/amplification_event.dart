@@ -282,3 +282,21 @@ class SceneClassUpdated extends AmplificationEvent {
   @override
   List<Object?> get props => [sceneClass];
 }
+
+/// Solicita actualizar la experiencia previa del usuario con audífonos.
+///
+/// El valor (en meses) se persiste en `SettingsRepository` y se inyecta
+/// en el [PatientProfile] que el bloc le pasa al `GainPrescriberNL3`.
+/// Si el modo activo es Smart-NL3, las ganancias se recalculan y el
+/// estado se emite con `experienceMonths` actualizado para que la UI
+/// refleje el cambio (por ejemplo, la aplicación de la corrección de
+/// aclimatización -3 dB cuando el usuario es nuevo).
+class SetExperienceMonths extends AmplificationEvent {
+  /// Experiencia con amplificación en meses (≥ 0).
+  final int months;
+
+  const SetExperienceMonths(this.months);
+
+  @override
+  List<Object?> get props => [months];
+}

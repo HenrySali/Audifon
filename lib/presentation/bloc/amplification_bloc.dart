@@ -8,6 +8,7 @@ import '../../domain/entities/audio_config.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
 import '../../domain/entities/nl3_prescription_result.dart';
+import '../../domain/entities/patient_profile.dart';
 import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
 import '../../domain/gain_prescriber.dart';
@@ -102,6 +103,22 @@ class AmplificationBloc
   /// la visualización lado a lado en el [GainComparisonWidget].
   List<double> _lastNl2Gains = const [];
 
+  /// Experiencia previa del usuario con audífonos en meses.
+  ///
+  /// `null` indica que el usuario todavía no completó el onboarding,
+  /// por lo que se asume usuario nuevo (NL3 aplica -3 dB de
+  /// aclimatización si está activo). Se carga desde `SettingsRepository`
+  /// en `_onStartAmplification` y se actualiza con `SetExperienceMonths`.
+  int? _experienceMonths;
+
+  /// Construye un [PatientProfile] a partir de la experiencia guardada,
+  /// o `null` si todavía no hay un valor (onboarding pendiente).
+  PatientProfile? _buildPatientProfile() {
+    final months = _experienceMonths;
+    if (months == null) return null;
+    return PatientProfile(experienceMonths: months);
+  }
+
   AmplificationBloc({
     required AudioBridge audioBridge,
     required AudiogramRepository audiogramRepository,
@@ -138,6 +155,7 @@ class AmplificationBloc
     on<ChangePrescriberMode>(_onChangePrescriberMode);
     on<ToggleMhlMode>(_onToggleMhlMode);
     on<SceneClassUpdated>(_onSceneClassUpdated);
+    on<SetExperienceMonths>(_onSetExperienceMonths);
     // FIX Causa C (smart-scene-diagnostico-chasquido.md): registrar handlers
     // para que el preset Smart Scene completo llegue al engine (antes solo
     // EQ + Volume eran despachados; nrLevel + WDRC + TNR quedaban en Hive).
@@ -190,11 +208,23 @@ class AmplificationBloc
       }
       _sceneController.setPrescriberMode(_currentPrescriberMode);
 
+      // 4b'. Restaurar la experiencia previa del usuario (en meses).
+      //     `null` se interpreta como onboarding pendiente.
+      try {
+        _experienceMonths = await _settingsRepository.getExperienceMonths();
+      } catch (_) {
+        // Persistencia tolerante: dejarlo en null si falla.
+        _experienceMonths = null;
+      }
+
       // 4c. Si el modo restaurado es NL3, recalcular ganancias con ese prescriptor.
       final List<double> startupGains;
       NL3PrescriptionResult? nl3Result;
       if (_currentPrescriberMode == PrescriberMode.smartNl3) {
-        nl3Result = _nl3Prescriber.prescribeFromAudiogram(_currentAudiogram!);
+        nl3Result = _nl3Prescriber.prescribeFromAudiogram(
+          _currentAudiogram!,
+          profile: _buildPatientProfile(),
+        );
         startupGains = nl3Result.prescribedGains;
       } else {
         startupGains = eqGains;
@@ -230,6 +260,7 @@ class AmplificationBloc
         nl3Gains: nl3Result?.prescribedGains ?? const [],
         lossType: nl3Result?.lossType,
         prescriptionMode: PrescriptionMode.quiet,
+        experienceMonths: _experienceMonths,
       ));
     } catch (e) {
       emit(AmplificationError(message: e.toString()));
@@ -348,8 +379,10 @@ class AmplificationBloc
 
         // Recalcular NL3 también para mantener el cache fresco aunque el
         // modo activo sea NL2 (la UI muestra siempre la comparación).
-        final nl3Result =
-            _nl3Prescriber.prescribeFromAudiogram(newAudiogram);
+        final nl3Result = _nl3Prescriber.prescribeFromAudiogram(
+          newAudiogram,
+          profile: _buildPatientProfile(),
+        );
         _lastNl3Result = nl3Result;
 
         final List<double> targetGains;
@@ -738,11 +771,17 @@ class AmplificationBloc
 
       NL3PrescriptionResult? nl3Result;
       if (event.mode == PrescriberMode.smartNl3) {
-        nl3Result = _nl3Prescriber.prescribeFromAudiogram(audiogram);
+        nl3Result = _nl3Prescriber.prescribeFromAudiogram(
+          audiogram,
+          profile: _buildPatientProfile(),
+        );
         newGains = nl3Result.prescribedGains;
       } else {
         // Cambio a NL2 fuerza CIN off — sceneController ya lo hizo arriba.
-        nl3Result = _nl3Prescriber.prescribeFromAudiogram(audiogram);
+        nl3Result = _nl3Prescriber.prescribeFromAudiogram(
+          audiogram,
+          profile: _buildPatientProfile(),
+        );
         newGains = nl2Gains;
       }
       _lastNl3Result = nl3Result;
@@ -822,6 +861,7 @@ class AmplificationBloc
         if (_currentPrescriberMode == PrescriberMode.smartNl3) {
           final result = _nl3Prescriber.prescribeFromAudiogram(
             audiogram,
+            profile: _buildPatientProfile(),
             mode: _previousPrescriptionMode,
           );
           restoredGains = result.prescribedGains;
@@ -876,7 +916,10 @@ class AmplificationBloc
 
     // Asegurar prescripción NL3 fresca en cache.
     final nl3Result = _lastNl3Result ??
-        _nl3Prescriber.prescribeFromAudiogram(audiogram);
+        _nl3Prescriber.prescribeFromAudiogram(
+          audiogram,
+          profile: _buildPatientProfile(),
+        );
     _lastNl3Result = nl3Result;
 
     try {
@@ -915,6 +958,75 @@ class AmplificationBloc
     } catch (_) {
       // Las transiciones de escena nunca rompen la amplificación.
     }
+  }
+
+  /// Persiste y aplica la experiencia previa del usuario con audífonos.
+  ///
+  /// Si el modo activo es Smart-NL3, recalcula la prescripción inyectando
+  /// el [PatientProfile] con `experienceMonths` y aplica las nuevas
+  /// ganancias al engine. Si el modo es NL2, sólo persiste el valor: la
+  /// próxima activación de NL3 lo levantará desde el campo en memoria.
+  Future<void> _onSetExperienceMonths(
+    SetExperienceMonths event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final clamped = event.months < 0 ? 0 : event.months;
+    _experienceMonths = clamped;
+
+    // Persistir tolerantemente — el repo ya hace try/catch interno.
+    try {
+      await _settingsRepository.setExperienceMonths(clamped);
+    } catch (_) {
+      // No interrumpir por error de persistencia.
+    }
+
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+
+    // Si NL3 está activo, recalcular ganancias para que la corrección de
+    // aclimatización surta efecto inmediatamente.
+    if (_currentPrescriberMode == PrescriberMode.smartNl3 && !_mhlActive) {
+      try {
+        final audiogram = _currentAudiogram ?? Audiogram.defaultAudiogram();
+        final nl3Result = _nl3Prescriber.prescribeFromAudiogram(
+          audiogram,
+          profile: _buildPatientProfile(),
+        );
+        _lastNl3Result = nl3Result;
+
+        final List<double> targetGains;
+        List<double>? cinGainsForState;
+        var prescriptionMode = PrescriptionMode.quiet;
+
+        if (_sceneController.currentMode == PrescriptionMode.comfortInNoise) {
+          final cin = CinModule.apply(
+            nl3Result.prescribedGains,
+            nl3Result.compressionRatios,
+          );
+          targetGains = cin.gains;
+          cinGainsForState = cin.gains;
+          prescriptionMode = PrescriptionMode.comfortInNoise;
+        } else {
+          targetGains = nl3Result.prescribedGains;
+        }
+
+        await _audioBridge.updateEqGains(targetGains);
+
+        emit(currentState.copyWith(
+          experienceMonths: clamped,
+          nl3Gains: nl3Result.prescribedGains,
+          cinGains: cinGainsForState,
+          clearCinGains: cinGainsForState == null,
+          lossType: nl3Result.lossType,
+          prescriptionMode: prescriptionMode,
+        ));
+        return;
+      } catch (_) {
+        // Si falla el recálculo, igual emitir el nuevo experienceMonths.
+      }
+    }
+
+    emit(currentState.copyWith(experienceMonths: clamped));
   }
 
   /// Cancela suscripciones a streams.
