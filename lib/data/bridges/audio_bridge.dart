@@ -115,6 +115,18 @@ abstract class AudioBridge {
   /// del auricular en el pipeline DSP nativo.
   Future<void> applyCalibration(CalibrationData calibration);
 
+  /// Actualiza el umbral MPO del limitador broadband en runtime.
+  ///
+  /// [thresholdDbSpl] rango cerrado: [80.0, 132.0] dB SPL.
+  /// Aplica el nuevo techo al limitador MPO del pipeline DSP nativo
+  /// sin reiniciar el motor de audio.
+  ///
+  /// Lanza [ArgumentError] si el valor es NaN, Infinity o fuera de rango.
+  /// Propagación al motor: ≤ 50 ms p95.
+  ///
+  /// Requisitos: audiogram-driven-presets Req 3.1
+  Future<void> setMpoThresholdDbSpl(double thresholdDbSpl);
+
   /// Obtiene información de los dispositivos de audio activos.
   ///
   /// Retorna un mapa con:

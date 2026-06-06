@@ -4,7 +4,7 @@
 
 > Spec orientado a la certificación regulatoria del audífono digital pediátrico/adulto V2 (nRF5340 + Zephyr + Flutter) en **Argentina (ANMAT)** y **Colombia (INVIMA)**, con armonización Mercosur y soporte para mercados internacionales.
 >
-> Spec ID: `microphone-and-biological-calibration-extension`
+> Spec ID: `mic-calibration`
 > Fecha: 2 de junio de 2026.
 
 ## Introduction

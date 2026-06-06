@@ -29,6 +29,21 @@ Map<int, double> _seedToCompensation(double seed) {
   return map;
 }
 
+/// Convert a seed value to a clinically realistic descending audiogram
+/// (presbycusis profile: HL grows with frequency, the common case where
+/// NAL-NL2 emphasizes 2-4 kHz for speech intelligibility).
+Map<int, double> _seedToDescendingAudiogram(double seed) {
+  final freqs = Audiogram.standardFrequencies;
+  final map = <int, double>{};
+  // Base HL at 250 Hz in [10, 50], slope 1-4 dB per band toward 8 kHz.
+  final base = 10.0 + (seed * 7.0) % 40.0;
+  final slope = 1.0 + (seed * 3.1) % 3.0;
+  for (int i = 0; i < 12; i++) {
+    map[freqs[i]] = (base + slope * i).clamp(0.0, 120.0);
+  }
+  return map;
+}
+
 void main() {
   final prescriber = GainPrescriber();
 
@@ -53,12 +68,16 @@ void main() {
     );
 
     Glados(any.doubleInRange(30, 120), ExploreConfig(numRuns: 100)).test(
-      '2-4 kHz emphasis when average HL > 20 dB',
+      '2-4 kHz emphasis on descending (presbycusis-like) audiograms',
       (seed) {
-        final thresholds = _seedToThresholds(seed);
-        final avgHl = thresholds.values.reduce((a, b) => a + b) / 12.0;
-        if (avgHl <= 20.0) return;
-
+        // NAL-NL2 emphasizes 2-4 kHz for speech intelligibility *when the
+        // audiogram has more loss in that region*. With pseudo-random
+        // multiplicative seeds the per-band HL pattern can be erratic
+        // (low band 17 dB, mid band 34 dB, high band 8 dB, etc.), and
+        // the 2-4 kHz emphasis is a property of the audiogram shape
+        // rather than of the prescriber. We therefore restrict the
+        // property to clinically realistic descending profiles.
+        final thresholds = _seedToDescendingAudiogram(seed);
         final audiogram = Audiogram(thresholds: thresholds);
         final gains = prescriber.prescribeFromAudiogram(audiogram);
 
@@ -74,8 +93,8 @@ void main() {
         expect(
           avg2to4kHz,
           greaterThanOrEqualTo(avgOutside),
-          reason: 'Avg 2-4kHz ($avg2to4kHz) should be >= avg outside ($avgOutside) '
-              'for avgHL=$avgHl',
+          reason: 'Avg 2-4kHz ($avg2to4kHz) should be >= avg outside '
+              '($avgOutside) for descending profile thresholds=$thresholds',
         );
       },
     );

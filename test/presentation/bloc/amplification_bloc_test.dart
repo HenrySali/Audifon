@@ -9,8 +9,11 @@
 /// - Error states (no mic, no headphones, permission denied)
 ///
 /// **Validates: Requirements 1.1, 1.3, 1.4, 3.3, 3.4, 3.5, 6.2, 6.3**
+import 'dart:io';
+
 import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
 import 'package:mocktail/mocktail.dart';
 
 import 'package:hearing_aid_app/data/bridges/audio_bridge.dart';
@@ -52,11 +55,26 @@ void main() {
   late MockSettingsRepository mockSettingsRepo;
   late MockGainPrescriber mockGainPrescriber;
 
+  late Directory hiveTempDir;
+
   setUpAll(() {
+    // Inicializar Hive en un directorio temporal para que los tests del
+    // bloc que invocan `Hive.openBox(...)` no fallen con
+    // `HiveError: You need to initialize Hive`.
+    hiveTempDir = Directory.systemTemp.createTempSync('hive_amp_test_');
+    Hive.init(hiveTempDir.path);
+
     registerFallbackValue(FakeAudioConfig());
     registerFallbackValue(FakeWdrcParams());
     registerFallbackValue(FakeAudiogram());
     registerFallbackValue(PrescriberMode.smartNl2);
+  });
+
+  tearDownAll(() async {
+    await Hive.close();
+    if (hiveTempDir.existsSync()) {
+      hiveTempDir.deleteSync(recursive: true);
+    }
   });
 
   setUp(() {
@@ -82,6 +100,8 @@ void main() {
     when(() => mockAudioBridge.updateWdrcParams(any()))
         .thenAnswer((_) async {});
     when(() => mockAudioBridge.updateNrLevel(any()))
+        .thenAnswer((_) async {});
+    when(() => mockAudioBridge.setMpoThresholdDbSpl(any()))
         .thenAnswer((_) async {});
 
     when(() => mockAudiogramRepo.getAudiogram())
@@ -120,12 +140,20 @@ void main() {
       'emits [Starting, Active] when StartAmplification succeeds',
       build: buildBloc,
       act: (bloc) => bloc.add(const StartAmplification()),
+      // Tras system-audit-fix, el flujo emite Starting → Active inicial
+      // (sin bundle) → Active con bundle aplicado por `_onApplyBundle`.
+      // Aceptamos cualquier cantidad de Actives subsiguientes con
+      // `headphonesConnected: true` y `activeProfile: 'Conversación'`.
+      wait: const Duration(milliseconds: 100),
       expect: () => [
         const AmplificationStarting(),
         isA<AmplificationActive>()
             .having((s) => s.activeProfile, 'activeProfile', 'Conversación')
             .having((s) => s.volumeDb, 'volumeDb', 0.0)
             .having((s) => s.headphonesConnected, 'headphonesConnected', true),
+        isA<AmplificationActive>()
+            .having((s) => s.activeProfile, 'activeProfile', 'Conversación')
+            .having((s) => s.bundle, 'bundle', isNotNull),
       ],
       verify: (_) {
         verify(() => mockAudioBridge.startAudio(any())).called(1);
@@ -153,11 +181,17 @@ void main() {
       build: buildBloc,
       act: (bloc) async {
         bloc.add(const StartAmplification());
-        await Future.delayed(const Duration(milliseconds: 50));
+        await Future.delayed(const Duration(milliseconds: 100));
         bloc.add(const StopAmplification());
       },
+      // Tras system-audit-fix, el bloc emite el Active inicial seguido
+      // por uno o más Actives reemitidos por `_onApplyBundle`. La
+      // cantidad exacta depende del scheduling — aquí solo nos importa
+      // que arranque con Starting, transicione por al menos un Active y
+      // termine en Idle.
       expect: () => [
         const AmplificationStarting(),
+        isA<AmplificationActive>(),
         isA<AmplificationActive>(),
         const AmplificationIdle(),
       ],
@@ -334,7 +368,14 @@ void main() {
 
     blocTest<AmplificationBloc, AmplificationState>(
       'ChangeProfile updates state and persists',
-      build: buildBloc,
+      build: () {
+        // El default stub devuelve siempre `conversation`. Override
+        // para que `getProfileByName('Ruidoso')` retorne el perfil
+        // correcto y el bloc emita un Active con `activeProfile: 'Ruidoso'`.
+        when(() => mockProfileRepo.getProfileByName('Ruidoso'))
+            .thenAnswer((_) async => EnvironmentProfile.noisy);
+        return buildBloc();
+      },
       seed: () => const AmplificationActive(
         inputLevelDb: 50.0,
         activeProfile: 'Conversación',
@@ -342,9 +383,16 @@ void main() {
         headphonesConnected: true,
       ),
       act: (bloc) => bloc.add(const ChangeProfile(profile: 'Ruidoso')),
+      // Tras system-audit-fix, `_onChangeProfile` emite el Active con el
+      // nuevo `activeProfile` y dispatch'a `ApplyAudiogramDrivenBundle`,
+      // que reemite Active con el bundle aplicado al bridge.
+      wait: const Duration(milliseconds: 100),
       expect: () => [
         isA<AmplificationActive>()
-            .having((s) => s.activeProfile, 'activeProfile', 'Conversación'),
+            .having((s) => s.activeProfile, 'activeProfile', 'Ruidoso'),
+        isA<AmplificationActive>()
+            .having((s) => s.activeProfile, 'activeProfile', 'Ruidoso')
+            .having((s) => s.bundle, 'bundle', isNotNull),
       ],
       verify: (_) {
         verify(() => mockProfileRepo.getProfileByName('Ruidoso')).called(1);
@@ -359,6 +407,34 @@ void main() {
       seed: () => const AmplificationIdle(),
       act: (bloc) => bloc.add(const ChangeVolume(volumeDb: 5.0)),
       expect: () => [],
+    );
+
+    blocTest<AmplificationBloc, AmplificationState>(
+      'ChangeVolume emits AmplificationError when bridge fails',
+      build: () {
+        // Override del default stub para que el bridge falle.
+        when(() => mockAudioBridge.updateVolume(any()))
+            .thenThrow(Exception('engine offline'));
+        return buildBloc();
+      },
+      seed: () => const AmplificationActive(
+        inputLevelDb: 50.0,
+        activeProfile: 'Conversación',
+        volumeDb: 0.0,
+        headphonesConnected: true,
+      ),
+      act: (bloc) => bloc.add(const ChangeVolume(volumeDb: 5.0)),
+      expect: () => [
+        isA<AmplificationError>()
+            .having((s) => s.message, 'message',
+                contains('No se pudo actualizar el volumen')),
+      ],
+      verify: (_) {
+        verify(() => mockAudioBridge.updateVolume(5.0)).called(1);
+        // No debe persistir si el bridge falló (state está
+        // desincronizado del engine; no tiene sentido cachear).
+        verifyNever(() => mockSettingsRepo.setLastVolume(any()));
+      },
     );
   });
 

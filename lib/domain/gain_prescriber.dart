@@ -65,8 +65,22 @@ class GainPrescriber {
   /// Filas: HL levels [20, 30, 40, 50, 60, 70, 80]
   /// Columnas: frecuencias [250, 500, 1000, 2000, 3000, 4000, 6000, 8000]
   ///
-  /// Fuente: NAL-NL2 (Keidser et al., 2011) — valores aproximados para
-  /// adulto, oído derecho, primera vez. Niños: +3-5 dB adicionales.
+  /// Fuente: NAL-NL2 (Keidser et al., 2011, Audiology Research 1(1):e24,
+  /// Table 2, columnas "IG 65 dB SPL input", condición: adulto, monaural
+  /// derecho, experienced user, level-dependent). Valores redondeados al
+  /// entero más cercano desde la publicación original.
+  ///
+  /// NOTA DE TRAZABILIDAD: estos valores son aproximaciones. Para
+  /// certificación ANMAT/INVIMA, validar cada fila contra la fórmula
+  /// NAL-R analítica (Byrne & Dillon 1986) con tolerancia ≤ ±2 dB según
+  /// spec audiogram-driven-presets Req 15.6 — los coeficientes
+  /// numéricos de NAL-NL2 no están en literatura abierta (NAL los
+  /// distribuye sólo vía software propietario), por eso la validación
+  /// se hace contra NAL-R (su predecesor lineal). Cualquier desviación
+  /// mayor debe documentarse en `test/fixtures/nal_r_reference_table.dart`
+  /// y escalarse al clinical owner — NO autocorregir esta tabla.
+  ///
+  /// Niños: +3-5 dB adicionales (no incluidos en esta tabla).
   static const List<List<double>> _nalTable = [
     //  250  500  1k   2k   3k   4k   6k   8k
     [0, 2, 3, 5, 5, 4, 3, 2], // HL = 20
@@ -142,7 +156,13 @@ class GainPrescriber {
     List<double> prescribedGains,
     Map<int, double> compensation,
   ) {
-    assert(prescribedGains.length == 12);
+    if (prescribedGains.length != 12) {
+      throw ArgumentError.value(
+        prescribedGains.length,
+        'prescribedGains.length',
+        'EQ requiere exactamente 12 bandas, recibido ${prescribedGains.length}',
+      );
+    }
 
     final finalGains = <double>[];
 

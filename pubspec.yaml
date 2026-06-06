@@ -22,9 +22,21 @@ dependencies:
   # Calibración del micrófono: SHA-256 del payload persistido en
   # `mic_calibration_box` para audit trail (ANMAT 2318/02 — Decreto 4725/05).
   crypto: ^3.0.3
+  pdf: ^3.12.0
+  path_provider: ^2.1.5
+  # BLE: comunicación con el firmware del audífono. Se invoca desde
+  # `lib/data/repositories/ble_repository.dart` para enviar comandos
+  # (gains, volume, profile, MPO, NR, FB) y leer status/batería.
+  flutter_blue_plus: ^1.32.12
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # Tests E2E sobre flujos completos (BLE ↔ DSP ↔ UI). Requerido por
+  # `integration_test/e2e_integration_test.dart` para que Flutter
+  # registre el binding `IntegrationTestWidgetsFlutterBinding` antes de
+  # ejecutar los `testWidgets` del suite e2e.
+  integration_test:
     sdk: flutter
   flutter_lints: ^3.0.0
   build_runner: ^2.4.6

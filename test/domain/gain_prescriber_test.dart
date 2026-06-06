@@ -156,8 +156,13 @@ void main() {
     });
 
     test('énfasis en 2-4 kHz para pérdida en frecuencias altas', () {
-      // Audiograma predeterminado: pérdida en frecuencias altas
-      final audiogram = Audiogram.defaultAudiogram();
+      // Audiograma de presbiacusia (pérdida creciente con frecuencia).
+      // Antes este test usaba `Audiogram.defaultAudiogram()`, pero el
+      // default cambió a plano 10 dB HL para no amplificar pre-medición.
+      final audiogram = const Audiogram(thresholds: {
+        250: 20, 500: 25, 750: 30, 1000: 40, 1500: 45,
+        2000: 50, 2500: 55, 3000: 60, 3500: 65, 4000: 70, 6000: 75, 8000: 75,
+      });
       final gains = prescriber.prescribeFromAudiogram(audiogram);
 
       // Ganancia promedio en 2-4 kHz (bandas 5-9: 2000, 2500, 3000, 3500, 4000)
@@ -333,41 +338,43 @@ void main() {
   });
 
   group('GainPrescriber - audiograma predeterminado del usuario', () {
-    test('audiograma predeterminado produce ganancias esperadas según tabla', () {
-      // Audiograma predeterminado: 0 dB HL (250-750), 40 dB HL (1000),
-      // +5 dB por frecuencia hasta 75 dB HL (8000)
+    test('audiograma predeterminado (plano 10 dB HL) produce ganancias bajas',
+        () {
+      // Default clínico: 10 dB HL plano (audición casi normal).
+      // Decisión deliberada: NO amplificar antes de que el usuario mida
+      // un audiograma real. La prescripción NAL-NL2 sobre HL=10 extrapola
+      // bajo el inicio de tabla (20 dB HL); las frecuencias NAL directas
+      // se clampean a 0, las interpoladas pueden dar valores < 1 dB por
+      // la interpolación log entre vecinos. Limite clínicamente: < 2 dB.
       final audiogram = Audiogram.defaultAudiogram();
       final gains = prescriber.prescribeFromAudiogram(audiogram);
 
-      // 250 Hz: HL=0 → extrapolación debajo de tabla → 0 (clamped)
-      expect(gains[0], equals(0.0));
-
-      // 500 Hz: HL=0 → 0 (clamped)
-      expect(gains[1], equals(0.0));
-
-      // 1000 Hz: HL=40 → tabla dice 10
-      expect(gains[3], closeTo(10.0, 0.01));
-
-      // 2000 Hz: HL=50 → tabla dice 18
-      expect(gains[5], closeTo(18.0, 0.01));
-
-      // 3000 Hz: HL=60 → tabla dice 22
-      expect(gains[7], closeTo(22.0, 0.01));
-
-      // 4000 Hz: HL=70 → tabla dice 24
-      expect(gains[9], closeTo(24.0, 0.01));
-
-      // 8000 Hz: HL=75 → interpola entre HL=70 (17) y HL=80 (19)
-      // ratio = (75-70)/(80-70) = 0.5 → 17 + 0.5*(19-17) = 18
-      expect(gains[11], closeTo(18.0, 0.01));
+      expect(gains.length, equals(12));
+      for (int i = 0; i < 12; i++) {
+        expect(
+          gains[i],
+          lessThan(2.0),
+          reason:
+              'Banda ${GainPrescriber.bandFrequencies[i]} Hz: con HL=10 plano '
+              'la ganancia debe ser inaudible (< 2 dB), got ${gains[i]}',
+        );
+        expect(gains[i], greaterThanOrEqualTo(0.0));
+      }
     });
 
-    test('audiograma predeterminado: ganancias crecen con la frecuencia', () {
-      final audiogram = Audiogram.defaultAudiogram();
+    test('audiograma con pérdida creciente por frecuencia: ganancias también crecen',
+        () {
+      // Audiograma representativo de presbiacusia (lo que era el default
+      // anterior): 0-20 en graves → 75 en agudos. Sirve para verificar la
+      // monotonía de la prescripción cuando hay pérdida real.
+      final audiogram = const Audiogram(thresholds: {
+        250: 20, 500: 25, 750: 30, 1000: 40, 1500: 45,
+        2000: 50, 2500: 55, 3000: 60, 3500: 65, 4000: 70, 6000: 75, 8000: 75,
+      });
       final gains = prescriber.prescribeFromAudiogram(audiogram);
 
       // Las ganancias deben crecer desde frecuencias bajas a altas
-      // (porque la pérdida auditiva crece con la frecuencia)
+      // porque la pérdida auditiva crece con la frecuencia.
       expect(gains[3], greaterThan(gains[0])); // 1kHz > 250Hz
       expect(gains[5], greaterThan(gains[3])); // 2kHz > 1kHz
       expect(gains[7], greaterThan(gains[5])); // 3kHz > 2kHz

@@ -6,7 +6,7 @@ import 'package:equatable/equatable.dart';
 /// para diferentes situaciones de escucha. Incluye 3 perfiles predefinidos:
 /// Silencioso, Conversación y Ruidoso.
 ///
-/// Requisitos: 8.1
+/// Requisitos: 8.1, 6.4
 class EnvironmentProfile extends Equatable {
   /// Nombre descriptivo del perfil.
   final String name;
@@ -23,12 +23,26 @@ class EnvironmentProfile extends Equatable {
   /// Kneepoint de compresión en dB SPL.
   final double compressionKnee;
 
+  /// Override opcional sobre `bundle.nrLevel` derivado del audiograma.
+  ///
+  /// Rango válido: `[-3, +3]`. Se suma al `nrLevel` calculado por el
+  /// `BundleBuilder` y luego se clampa a `[0, 3]` mediante
+  /// `EnvironmentProfileMapper.adjustNr`.
+  ///
+  /// Permite que un perfil de entorno (por ejemplo, "Ruidoso") refuerce
+  /// la NR sin reescribir la prescripción base; default `0` significa
+  /// "respetar el nivel derivado del audiograma".
+  ///
+  /// Requisitos: 6.4
+  final int nrDelta;
+
   const EnvironmentProfile({
     required this.name,
     required this.nrLevel,
     required this.compressionRatio,
     required this.expansionKnee,
     required this.compressionKnee,
+    this.nrDelta = 0,
   });
 
   /// Perfil Silencioso: NR bajo, compresión suave.
@@ -39,6 +53,7 @@ class EnvironmentProfile extends Equatable {
     compressionRatio: 1.5,
     expansionKnee: 35,
     compressionKnee: 55,
+    nrDelta: 0,
   );
 
   /// Perfil Conversación: NR moderado, compresión media.
@@ -49,6 +64,7 @@ class EnvironmentProfile extends Equatable {
     compressionRatio: 2.0,
     expansionKnee: 35,
     compressionKnee: 50,
+    nrDelta: 0,
   );
 
   /// Perfil Ruidoso: NR alto, compresión agresiva.
@@ -59,6 +75,7 @@ class EnvironmentProfile extends Equatable {
     compressionRatio: 3.0,
     expansionKnee: 35,
     compressionKnee: 45,
+    nrDelta: 0,
   );
 
   /// Lista de todos los perfiles predefinidos.
@@ -75,5 +92,6 @@ class EnvironmentProfile extends Equatable {
         compressionRatio,
         expansionKnee,
         compressionKnee,
+        nrDelta,
       ];
 }

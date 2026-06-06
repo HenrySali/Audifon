@@ -17,7 +17,10 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/bundle_builder.dart';
 import 'package:hearing_aid_app/domain/entities/audiogram.dart';
+import 'package:hearing_aid_app/domain/entities/prescription_mode.dart';
 import 'package:hearing_aid_app/scene/scene_decision_maker.dart';
 import 'package:hearing_aid_app/scene/scene_personalized_generator.dart';
 import 'package:hearing_aid_app/scene/scene_preset_generator.dart';
@@ -164,9 +167,19 @@ void main() {
 
   group('Smoke validation — Generador genérico', () {
     final gen = SceneGenericPresetGenerator();
+    final bundle = BundleBuilder().buildFromAudiogram(
+      _moderateHighLossAudiogram(),
+      mode: PrescriptionMode.quiet,
+      derivedAt: DateTime.utc(2026, 1, 1),
+    );
     for (final s in scenarios) {
       test('${s.label} → preset válido', () {
-        final preset = gen.generate(s.expected, confidence: 0.8);
+        final preset = gen.generate(
+          bundle: bundle,
+          sceneClass: s.expected,
+          snapshot: s.builder(),
+          confidence: 0.8,
+        );
         expect(preset.gains.length, 12);
         expect(preset.gains.every((g) => g >= 0 && g <= 50), isTrue);
         expect(preset.compressionRatio, greaterThan(1.0));
@@ -178,21 +191,28 @@ void main() {
   group('Smoke validation — Generador personalizado respeta headroom', () {
     final gen = ScenePersonalizedPresetGenerator();
     final audiogram = _moderateHighLossAudiogram();
+    final bundle = BundleBuilder().buildFromAudiogram(
+      audiogram,
+      mode: PrescriptionMode.quiet,
+      derivedAt: DateTime.utc(2026, 1, 1),
+    );
     for (final s in scenarios) {
-      test('${s.label} → ganancias dentro de [0, maxSafe]', () {
+      test('${s.label} → ganancias dentro de [0, maxSafePerBand]', () {
         final snap = s.builder();
         final preset = gen.generate(
-          audiogram: audiogram,
+          bundle: bundle,
           sceneClass: s.expected,
           snapshot: snap,
           confidence: 0.8,
         );
-        // Headroom: maxSafe = 110 - input - 3.
-        final maxSafe = (110.0 - snap.inputDbSpl - 3.0).clamp(0.0, 50.0);
-        for (final g in preset.gains) {
-          expect(g, greaterThanOrEqualTo(0.0));
-          expect(g, lessThanOrEqualTo(maxSafe + 1e-6),
-              reason: 'banda excede headroom para ${s.expected.name}');
+        // Headroom por banda: maxSafe[i] = mpoProfile[i] - input - 3.
+        for (var i = 0; i < AudiogramDrivenBundle.bandCount; i++) {
+          final maxSafe =
+              (bundle.mpoProfileDbSpl[i] - snap.inputDbSpl - 3.0)
+                  .clamp(0.0, 50.0);
+          expect(preset.gains[i], greaterThanOrEqualTo(0.0));
+          expect(preset.gains[i], lessThanOrEqualTo(maxSafe + 1e-6),
+              reason: 'banda $i excede headroom para ${s.expected.name}');
         }
       });
     }

@@ -1,7 +1,7 @@
 /// Tests unitarios del modelo [MicCalibrationResult].
 ///
 /// Cubre los 8 casos exigidos por la task 1.1 del spec
-/// `microphone-and-biological-calibration-extension`:
+/// `mic-calibration`:
 ///
 ///   1. Construcción válida con todos los campos requeridos.
 ///   2. ArgumentError si splOffset < 60.0.

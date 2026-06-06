@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
 import '../../domain/entities/eq_preset.dart';
 import '../../domain/entities/environment_profile.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_state.dart';
+import '../widgets/clamped_bands_indicator.dart';
 
 /// Pantalla de detalle completo de la configuración DSP activa.
 ///
@@ -247,6 +249,15 @@ class _ConfigDetailBody extends StatelessWidget {
           // Sección 5: MPO y seguridad
           _MpoCard(inputLevel: state.inputLevelDb),
           const SizedBox(height: 16),
+          // Indicador de bandas limitadas por MPO (sólo cuando hay bundle activo).
+          // Las bandas clamped se detectan comparando `bundle.gainsDb[i]` contra
+          // el techo `AudiogramDrivenBundle.gainMaxDb` (50 dB): cuando una banda
+          // alcanza el ceiling indica que el prescriptor recortó la ganancia
+          // objetivo para respetar el headroom MPO derivado del audiograma.
+          if (state.bundle != null) ...[
+            _BundleClampedBandsCard(bundle: state.bundle!),
+            const SizedBox(height: 16),
+          ],
           // Sección 6: Pipeline completo
           _PipelineCard(
             state: state,
@@ -890,6 +901,56 @@ class _PipelineStage extends StatelessWidget {
           Text(gain, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
         ],
       ),
+    );
+  }
+}
+// =============================================================================
+// BUNDLE CLAMPED BANDS CARD — Indicador de bandas recortadas por techo MPO
+// =============================================================================
+
+/// Tarjeta envoltorio del [ClampedBandsIndicator] alimentada por el último
+/// [AudiogramDrivenBundle] aplicado al motor DSP.
+///
+/// El bundle no expone directamente la lista de bandas clamped (esa metadata
+/// vive en `SmartPreset.clampedBands`, generada por los generadores de
+/// escena). Como aproximación operativa para la UI, este card detecta las
+/// bandas cuyo `gainsDb[i]` quedó saturado contra el techo absoluto de
+/// ganancia del bundle ([AudiogramDrivenBundle.gainMaxDb] = 50 dB) — es
+/// decir, las bandas donde el prescriptor tuvo que recortar la ganancia
+/// objetivo para no superar el límite de seguridad.
+///
+/// Sólo se renderiza cuando hay al menos una banda saturada (el propio
+/// widget core retorna `SizedBox.shrink()` cuando la lista está vacía).
+class _BundleClampedBandsCard extends StatelessWidget {
+  final AudiogramDrivenBundle bundle;
+
+  const _BundleClampedBandsCard({required this.bundle});
+
+  /// Tolerancia en dB para considerar una banda saturada contra el ceiling
+  /// absoluto del bundle. Un valor pequeño absorbe el ruido de coma flotante
+  /// del clamp final aplicado por [BundleBuilder].
+  static const double _ceilingTolerance = 0.01;
+
+  List<int> _detectClampedBands() {
+    final clamped = <int>[];
+    for (var i = 0; i < bundle.gainsDb.length; i++) {
+      if (bundle.gainsDb[i] >= AudiogramDrivenBundle.gainMaxDb - _ceilingTolerance) {
+        clamped.add(i);
+      }
+    }
+    return clamped;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = _detectClampedBands();
+    if (clamped.isEmpty) return const SizedBox.shrink();
+
+    return _CardContainer(
+      title: 'Bandas limitadas por MPO',
+      icon: Icons.vertical_align_top,
+      iconColor: Colors.orange,
+      child: ClampedBandsIndicator(clampedBands: clamped),
     );
   }
 }

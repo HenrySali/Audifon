@@ -1,7 +1,7 @@
 # Design — Calibración del Micrófono y Extensión de la Calibración Biológica
 
 > Documento de diseño técnico para implementar el spec
-> `microphone-and-biological-calibration-extension`. Pensado para certificación
+> `mic-calibration`. Pensado para certificación
 > regulatoria en Argentina (ANMAT) y Colombia (INVIMA).
 
 ## Overview

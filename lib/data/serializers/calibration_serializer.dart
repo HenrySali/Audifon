@@ -95,9 +95,29 @@ class CalibrationMeasurement {
     required this.degradationIndex,
     required this.severity,
     required this.underCompensatedBands,
-  })  : assert(ospl90.length == numBands),
-        assert(fullOnGain.length == numBands),
-        assert(thd.length == 3);
+  }) {
+    if (ospl90.length != numBands) {
+      throw ArgumentError.value(
+        ospl90.length,
+        'ospl90.length',
+        'OSPL90 requiere $numBands bandas, recibido ${ospl90.length}',
+      );
+    }
+    if (fullOnGain.length != numBands) {
+      throw ArgumentError.value(
+        fullOnGain.length,
+        'fullOnGain.length',
+        'fullOnGain requiere $numBands bandas, recibido ${fullOnGain.length}',
+      );
+    }
+    if (thd.length != 3) {
+      throw ArgumentError.value(
+        thd.length,
+        'thd.length',
+        'THD requiere 3 valores, recibido ${thd.length}',
+      );
+    }
+  }
 
   /// Degradation index as a double (0.0–1.0)
   double get degradationIndexDouble => degradationIndex / 1000.0;
@@ -166,13 +186,9 @@ class CalibrationMeasurement {
     buffer.setUint8(offset, underCompensatedBands);
     offset += 1;
 
-    // reserved[4] (4 bytes)
-    for (int i = 0; i < 4; i++) {
-      buffer.setUint8(offset, 0);
-      offset += 1;
-    }
-
-    // CRC32 over version + data (offset should be 71 now)
+    // CRC32 over version + data (offset is 71 here: 1 version + 70 data)
+    assert(offset == bleCalibMeasurementSize - 4,
+        'Calibration payload size mismatch: offset=$offset, expected=${bleCalibMeasurementSize - 4}');
     final dataBytes = buffer.buffer.asUint8List(0, offset);
     final crc = _computeCrc32(dataBytes);
     buffer.setUint32(offset, crc, Endian.little);

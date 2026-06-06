@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'package:flutter/services.dart';
@@ -214,47 +215,109 @@ class HeadphoneCalibrator {
 
   /// Mide el nivel del micrófono.
   ///
-  /// TODO: integrate with native input level stream
-  /// Por ahora usa un placeholder que simula mediciones razonables.
+  /// Lee el nivel de entrada (dBFS) desde el canal nativo
+  /// `com.psk.hearing_aid/audio#getInputLevel` y lo convierte a dB SPL.
+  ///
+  /// El handler nativo retorna un Map con:
+  ///   - `dbfs` (Double, RMS dBFS de los últimos 100 ms).
+  ///   - `dbSpl` (Double | null, igual a `dbfs + micOffsetDb` cuando el
+  ///     handler recibió `micOffsetDb` como argumento; null en caso
+  ///     contrario).
+  ///   - `calibrated` (Bool).
+  ///
+  /// Si el caller no provee un offset persistido, el handler retorna
+  /// `dbSpl=null` y el Dart-side cae al default histórico
+  /// [micOffsetDbSpl] (120 dB) sumado al `dbfs`.
+  ///
+  /// Si el canal nativo no está disponible o falla, **aborta la
+  /// calibración con `StateError`**. NO se inventan mediciones: una
+  /// calibración basada en datos sintéticos contaminaría toda la
+  /// prescripción NAL-NL2 sumando ganancias falsas a la receta real.
   Future<double> _measureMicLevel(int freqHz, double amplitude) async {
     try {
-      // Intentar leer del canal nativo
-      final result = await _channel.invokeMethod<double>('getInputLevel');
-      if (result != null) {
-        // Convertir dBFS a dB SPL
-        return result + micOffsetDbSpl;
+      // Leer el offset persistido (si existe) para pasarlo al handler.
+      final persistedOffset = await _readPersistedMicOffset();
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'getInputLevel',
+        <String, dynamic>{
+          if (persistedOffset != null) 'micOffsetDb': persistedOffset,
+        },
+      );
+      if (result == null) {
+        throw StateError(
+          'Calibración abortada: el canal nativo `getInputLevel` retornó null. '
+          'Implementación pendiente en android/app/src/main/kotlin/com/psk/hearing_aid_app/AudioMethodChannel.kt.',
+        );
       }
-    } on MissingPluginException {
-      // Canal nativo no disponible — usar simulación
-    } on PlatformException {
-      // Error en el canal — usar simulación
+      final dbfs = (result['dbfs'] as num?)?.toDouble();
+      final dbSpl = (result['dbSpl'] as num?)?.toDouble();
+      final calibrated = (result['calibrated'] as bool?) ?? false;
+      if (calibrated && dbSpl != null) {
+        developer.log(
+          'getInputLevel: usado offset calibrado (dbfs=$dbfs, dbSpl=$dbSpl)',
+          name: 'HeadphoneCalibrator',
+          level: 800,
+        );
+        return dbSpl;
+      }
+      if (dbfs == null) {
+        throw StateError(
+          'Calibración abortada: `getInputLevel` no retornó dbfs.',
+        );
+      }
+      developer.log(
+        'getInputLevel: sin offset persistido, usando default $micOffsetDbSpl '
+        'dB (dbfs=$dbfs)',
+        name: 'HeadphoneCalibrator',
+        level: 800,
+      );
+      return dbfs + micOffsetDbSpl;
+    } on MissingPluginException catch (e, st) {
+      developer.log(
+        'Canal nativo `getInputLevel` no registrado en esta plataforma',
+        name: 'HeadphoneCalibrator',
+        level: 1000, // SEVERE
+        error: e,
+        stackTrace: st,
+      );
+      throw StateError(
+        'Calibración abortada: el canal nativo `getInputLevel` no está disponible en esta plataforma. '
+        'Implementación pendiente en android/app/src/main/kotlin/com/psk/hearing_aid_app/AudioMethodChannel.kt. '
+        'Causa subyacente: $e',
+      );
+    } on PlatformException catch (e, st) {
+      developer.log(
+        'Error en canal nativo `getInputLevel`',
+        name: 'HeadphoneCalibrator',
+        level: 1000, // SEVERE
+        error: e,
+        stackTrace: st,
+      );
+      throw StateError(
+        'Calibración abortada: el canal nativo `getInputLevel` falló. '
+        'Implementación pendiente en android/app/src/main/kotlin/com/psk/hearing_aid_app/AudioMethodChannel.kt. '
+        'Causa subyacente: $e',
+      );
     }
+  }
 
-    // Placeholder: simular medición basada en la amplitud emitida
-    // Un auricular típico produce aproximadamente:
-    // amplitud 0.05 → ~45 dB SPL
-    // amplitud 0.1  → ~52 dB SPL
-    // amplitud 0.2  → ~58 dB SPL
-    // amplitud 0.3  → ~62 dB SPL
-    // amplitud 0.5  → ~68 dB SPL
-    //
-    // Relación: dB SPL ≈ 20*log10(amplitude) + 94 (referencia auricular)
-    // Con variación por frecuencia (respuesta del auricular)
-    final baseDbSpl = 20 * log(amplitude) / ln10 + 94;
-
-    // Ajuste por frecuencia (los auriculares típicos tienen
-    // respuesta plana 500-4000 Hz, caída en 8000 Hz)
-    double freqAdjust = 0;
-    if (freqHz >= 8000) {
-      freqAdjust = -3.0;
-    } else if (freqHz <= 500) {
-      freqAdjust = -2.0;
+  /// Lee `mic_offset_db` del Hive box de calibración nativa, si existe.
+  /// Retorna `null` si el box no está abierto o la clave no existe.
+  Future<double?> _readPersistedMicOffset() async {
+    try {
+      // El box `calibration_box` lo administra
+      // `CalibrationAuditRepository`. Si nunca se abrió, no hay offset
+      // persistido aún.
+      if (!Hive.isBoxOpen('calibration_box')) {
+        return null;
+      }
+      final box = Hive.box('calibration_box');
+      final raw = box.get('mic_offset_db');
+      if (raw is num) return raw.toDouble();
+      return null;
+    } catch (_) {
+      return null;
     }
-
-    // Añadir ruido de medición realista (±1.5 dB)
-    final noise = (Random().nextDouble() - 0.5) * 3.0;
-
-    return baseDbSpl + freqAdjust + noise;
   }
 
   /// Verifica si la medición es estable (no fluctúa demasiado).

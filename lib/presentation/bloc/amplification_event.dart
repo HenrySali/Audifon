@@ -1,4 +1,6 @@
 import 'package:equatable/equatable.dart';
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/manual_adjustment_delta.dart';
 
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/prescription_mode.dart';
@@ -299,4 +301,86 @@ class SetExperienceMonths extends AmplificationEvent {
 
   @override
   List<Object?> get props => [months];
+}
+
+/// Solicita aplicar atómicamente un [AudiogramDrivenBundle] (con un overlay
+/// opcional de [ManualAdjustmentDelta]) al motor DSP.
+///
+/// El handler ejecuta la secuencia de 4 llamadas al bridge sin yields
+/// (`setMpoThresholdDbSpl` → `updateWdrcParams` → `updateEqGains` →
+/// `updateNrLevel`), aplica el delta sumándolo al bundle base y hace
+/// rollback completo si alguna llamada falla.
+///
+/// Este evento es la única vía válida para llevar parámetros clínicos
+/// al motor: reemplaza los flujos sueltos de `UpdateEqGains`,
+/// `UpdateWdrcParams` y `UpdateNrLevel` para los caminos que parten de
+/// audiograma + estilo + perfil de entorno.
+///
+/// Requisitos: 4.1, 4.6
+class ApplyAudiogramDrivenBundle extends AmplificationEvent {
+  /// Bundle clínico derivado del audiograma (fuente única de verdad).
+  final AudiogramDrivenBundle bundle;
+
+  /// Overlay aditivo opcional con ajustes manuales del usuario.
+  ///
+  /// Si es `null`, se aplica el bundle puro sin ajustes manuales.
+  final ManualAdjustmentDelta? delta;
+
+  const ApplyAudiogramDrivenBundle({required this.bundle, this.delta});
+
+  @override
+  List<Object?> get props => [bundle, delta];
+}
+
+/// Solicita cambiar el factor de escala de ganancia en Modo Amplificador.
+///
+/// El [gainScale] es un multiplicador aplicado únicamente a `gainsDb`
+/// (no a MPO, ratios ni NR) en el dominio dB. Rango válido: [0.10, 1.00].
+///
+/// La validación de rango (clamp + warning) se realiza en el handler
+/// (wave 4); este evento solo transporta el valor solicitado.
+///
+/// Requisitos: 13.6
+class GainScaleChanged extends AmplificationEvent {
+  /// Nuevo factor de escala de ganancia [0.10, 1.00].
+  final double gainScale;
+
+  const GainScaleChanged({required this.gainScale});
+
+  @override
+  List<Object?> get props => [gainScale];
+}
+
+/// Solicita ajustar manualmente el delta de EQ de una banda específica.
+///
+/// El [deltaDelta] es un incremento aditivo: se SUMA al delta existente
+/// del [bandIndex] indicado dentro del [ManualAdjustmentDelta] activo
+/// (no reemplaza el valor actual). El handler aplica el clamp final al
+/// rango admitido por la banda y vuelve a despachar
+/// [ApplyAudiogramDrivenBundle] con el delta actualizado.
+///
+/// Requisitos: 14.1, 14.9
+class ManualEqAdjust extends AmplificationEvent {
+  /// Índice de banda a ajustar [0, 11].
+  final int bandIndex;
+
+  /// Incremento aditivo en dB a aplicar sobre el delta actual de la banda.
+  final double deltaDelta;
+
+  const ManualEqAdjust({required this.bandIndex, required this.deltaDelta});
+
+  @override
+  List<Object?> get props => [bandIndex, deltaDelta];
+}
+
+/// Solicita poner a cero el [ManualAdjustmentDelta] activo.
+///
+/// Marcador sin campos: el handler restaura el delta del modo actual
+/// (Diagnóstico o Amplificador) a `ManualAdjustmentDelta.zero()`,
+/// persiste y vuelve a despachar [ApplyAudiogramDrivenBundle] con el
+/// bundle base sin overlay.
+///
+/// Requisitos: 14.1, 14.9
+class ResetManualDelta extends AmplificationEvent {
+  const ResetManualDelta();
 }

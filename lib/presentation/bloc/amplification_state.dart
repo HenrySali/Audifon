@@ -1,5 +1,8 @@
 import 'package:equatable/equatable.dart';
 
+import '../../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import '../../domain/audiogram_driven_presets/manual_adjustment_delta.dart';
+import '../../domain/audiogram_driven_presets/operating_mode.dart';
 import '../../domain/entities/loss_type.dart';
 import '../../domain/entities/prescription_mode.dart';
 
@@ -108,6 +111,53 @@ class AmplificationActive extends AmplificationState {
   /// guardado en `SettingsRepository`.
   final int? experienceMonths;
 
+  /// Último [AudiogramDrivenBundle] aplicado atómicamente al motor DSP.
+  ///
+  /// `null` cuando todavía no se ejecutó el camino bundle-driven (por
+  /// ejemplo, antes de la primera aplicación atómica tras boot). El
+  /// bundle es la fuente única de verdad de los parámetros clínicos
+  /// (gains + compression + MPO + NR + WDRC) y replica
+  /// `lossType`/`prescriptionMode`/`mode` para consumo en la UI.
+  ///
+  /// Requisitos: 4.1, 4.7
+  final AudiogramDrivenBundle? bundle;
+
+  /// [ManualAdjustmentDelta] activo para el modo de operación corriente.
+  ///
+  /// `null` cuando no hay ajuste manual aplicado (equivalente a
+  /// [ManualAdjustmentDelta.zero]). Se persiste por modo: cada modo
+  /// tiene su propio delta independiente bajo `manual_delta_diagnostic`
+  /// o `manual_delta_amplifier` (Req 14.6).
+  final ManualAdjustmentDelta? manualDelta;
+
+  /// Modo de operación de la app (Diagnóstico vs Amplificador).
+  ///
+  /// Determinado por `_onStartAmplification` mediante auto-detección
+  /// (audiograma medido → diagnóstico; ausente → amplificador).
+  ///
+  /// Requisitos: 13.1, 13.2, 13.3
+  final OperatingMode operatingMode;
+
+  /// Factor de escala global de las ganancias EQ usado en modo
+  /// Amplificador. En modo Diagnóstico se fuerza a `1.0` por contrato.
+  ///
+  /// Rango válido: `[0.10, 1.00]`. Persistido bajo
+  /// `amplifier_gain_scale` en `settings_box`.
+  ///
+  /// Requisitos: 13.4, 13.6
+  final double gainScale;
+
+  /// Indica si los presets personalizados quedaron desfasados respecto
+  /// al audiograma actual (MAD > 5 dB en alguna banda).
+  ///
+  /// La UI debe mostrar la badge "obsoleto" en los presets
+  /// personalizados afectados y ofrecer "regenerar" cuando este flag
+  /// está en `true`. La invalidación se delega al repositorio vía
+  /// `ProfileRepository.markCustomPresetsAsStale` (task 7.3).
+  ///
+  /// Requisitos: 9.1, 9.7
+  final bool customPresetsStale;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
@@ -124,6 +174,11 @@ class AmplificationActive extends AmplificationState {
     this.lossType,
     this.prescriptionMode = PrescriptionMode.quiet,
     this.experienceMonths,
+    this.bundle,
+    this.manualDelta,
+    this.operatingMode = OperatingMode.diagnostic,
+    this.gainScale = 1.0,
+    this.customPresetsStale = false,
   });
 
   /// Crea una copia con campos actualizados.
@@ -145,6 +200,13 @@ class AmplificationActive extends AmplificationState {
     PrescriptionMode? prescriptionMode,
     int? experienceMonths,
     bool clearExperienceMonths = false,
+    AudiogramDrivenBundle? bundle,
+    bool clearBundle = false,
+    ManualAdjustmentDelta? manualDelta,
+    bool clearManualDelta = false,
+    OperatingMode? operatingMode,
+    double? gainScale,
+    bool? customPresetsStale,
   }) {
     return AmplificationActive(
       inputLevelDb: inputLevelDb ?? this.inputLevelDb,
@@ -164,6 +226,12 @@ class AmplificationActive extends AmplificationState {
       experienceMonths: clearExperienceMonths
           ? null
           : (experienceMonths ?? this.experienceMonths),
+      bundle: clearBundle ? null : (bundle ?? this.bundle),
+      manualDelta:
+          clearManualDelta ? null : (manualDelta ?? this.manualDelta),
+      operatingMode: operatingMode ?? this.operatingMode,
+      gainScale: gainScale ?? this.gainScale,
+      customPresetsStale: customPresetsStale ?? this.customPresetsStale,
     );
   }
 
@@ -184,6 +252,11 @@ class AmplificationActive extends AmplificationState {
         lossType,
         prescriptionMode,
         experienceMonths,
+        bundle,
+        manualDelta,
+        operatingMode,
+        gainScale,
+        customPresetsStale,
       ];
 }
 
@@ -219,8 +292,30 @@ class AmplificationError extends AmplificationState {
   /// Mensaje descriptivo del error.
   final String message;
 
-  const AmplificationError({required this.message});
+  /// Identificador del paso de la secuencia atómica de
+  /// `_onApplyBundle` que falló (1=`setMpoThresholdDbSpl`,
+  /// 2=`updateWdrcParams`, 3=`updateEqGains`, 4=`updateNrLevel`).
+  ///
+  /// `null` para errores no relacionados con la aplicación atómica
+  /// del bundle (por ejemplo, error de inicio del engine, validación
+  /// previa, etc.).
+  ///
+  /// Requisitos: 4.7
+  final int? failedStep;
+
+  /// Lista de violaciones de validación reportadas por
+  /// [AudiogramDrivenBundle.validate]. Vacía cuando el error no
+  /// corresponde a una validación de bundle.
+  ///
+  /// Requisitos: 4.7
+  final List<String> validationErrors;
+
+  const AmplificationError({
+    required this.message,
+    this.failedStep,
+    this.validationErrors = const [],
+  });
 
   @override
-  List<Object?> get props => [message];
+  List<Object?> get props => [message, failedStep, validationErrors];
 }

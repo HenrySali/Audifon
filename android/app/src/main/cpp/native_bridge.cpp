@@ -312,6 +312,32 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetSplOffset(
     g_engine->setSplOffset(offset);
 }
 
+/// Actualiza el threshold del MPO (Maximum Power Output) en dB SPL.
+/// Thread-safe: lock-free (usa std::atomic dentro del pipeline).
+///
+/// El motor convierte dB SPL → lineal usando el splOffset de calibración:
+///   linear = pow(10, (thresholdDbSpl - splOffset) / 20)
+/// y aplica el resultado al limitador MPO sin reiniciar el AudioEngine.
+///
+/// La validación clínica del rango [80, 132] dB SPL la hace el caller Dart
+/// (AudioBridgeImpl). Aquí solo se filtran valores no-finitos.
+///
+/// Implementa Requirement 3 de la spec audiogram-driven-presets.
+///
+/// @param thresholdDbSpl Threshold en dB SPL (rango clínico [80, 132])
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetMpoThresholdDbSpl(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jfloat thresholdDbSpl) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setMpoThresholdDbSpl(thresholdDbSpl);
+}
+
 /// Obtiene el último nivel de entrada medido PRE-EQ (dB SPL).
 /// Diseñado para ser llamado por polling desde Kotlin (~10 Hz).
 /// Thread-safe: lee un std::atomic<float>.

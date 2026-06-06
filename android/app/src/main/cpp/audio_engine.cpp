@@ -311,6 +311,10 @@ void AudioEngine::setSplOffset(float offset) {
     pipeline_.setSplOffset(offset);
 }
 
+void AudioEngine::setMpoThresholdDbSpl(float thresholdDbSpl) {
+    pipeline_.setMpoThresholdDbSpl(thresholdDbSpl);
+}
+
 float AudioEngine::getLastInputLevel() const {
     return pipeline_.getLastInputLevelDb();
 }

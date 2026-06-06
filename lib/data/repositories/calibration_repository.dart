@@ -230,7 +230,13 @@ class CalibrationRepository {
   ///
   /// [hours] debe estar entre 1 y 168 (1 hora a 1 semana).
   Future<bool> setInterval(int hours) async {
-    assert(hours >= 1 && hours <= 168);
+    if (hours < 1 || hours > 168) {
+      throw ArgumentError.value(
+        hours,
+        'hours',
+        'El intervalo debe estar entre 1 y 168 horas (1 hora a 1 semana)',
+      );
+    }
     final payload = Uint8List(2);
     payload[0] = hours & 0xFF;
     payload[1] = (hours >> 8) & 0xFF;

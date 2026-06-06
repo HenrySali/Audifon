@@ -7,6 +7,16 @@ import 'package:equatable/equatable.dart';
 ///
 /// Las frecuencias de las 12 bandas son:
 /// 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz
+///
+/// ## Nota de deprecación (Sprint 3 — core-clinico-compartido)
+///
+/// Los presets hardcoded se mantienen para tests de regresión. El runtime
+/// debe usar [`AudiogramDrivenBundle`] derivado del audiograma +
+/// [`StyleApplicator`] para aplicar estilos como deltas relativos.
+///
+/// Los miembros [findByName], [bandFrequencies], [bandLabels], [custom],
+/// [fromJson] y [toJson] se mantienen como infraestructura activa y NO
+/// están deprecados.
 class EqPreset extends Equatable {
   /// Nombre del preset.
   final String name;
@@ -56,6 +66,9 @@ class EqPreset extends Equatable {
   // Bandas: 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz
 
   /// Normal: sin amplificación. Para audición normal o referencia.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const normal = EqPreset(
     name: 'Normal',
     description: 'Sin pérdida auditiva',
@@ -67,6 +80,9 @@ class EqPreset extends Equatable {
   /// Mild High: pérdida leve en frecuencias altas (20-30 dB HL en 2-8kHz).
   /// Patrón más común en presbiacusia temprana.
   /// NAL-NL2 para sloping loss 20-30 dB HL @ 65 dB input.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const mildHigh = EqPreset(
     name: 'Mild High',
     description: 'Pérdida leve en agudos (20-30 dB HL)',
@@ -77,6 +93,9 @@ class EqPreset extends Equatable {
 
   /// Mild Flat: pérdida leve plana (25-35 dB HL en todas las frecuencias).
   /// NAL-NL2 para flat loss 30 dB HL @ 65 dB input.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const mildFlat = EqPreset(
     name: 'Mild Flat',
     description: 'Pérdida leve plana (25-35 dB HL)',
@@ -88,6 +107,9 @@ class EqPreset extends Equatable {
   /// Moderate High: pérdida moderada en frecuencias altas (35-50 dB HL en 2-8kHz).
   /// Patrón típico de presbiacusia moderada.
   /// NAL-NL2 para sloping loss 35-50 dB HL @ 65 dB input.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const moderateHigh = EqPreset(
     name: 'Moderate High',
     description: 'Pérdida moderada en agudos (35-50 dB HL)',
@@ -98,6 +120,9 @@ class EqPreset extends Equatable {
 
   /// Moderate Flat: pérdida moderada plana (40-50 dB HL).
   /// NAL-NL2 para flat loss 45 dB HL @ 65 dB input.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const moderateFlat = EqPreset(
     name: 'Moderate Flat',
     description: 'Pérdida moderada plana (40-50 dB HL)',
@@ -109,6 +134,9 @@ class EqPreset extends Equatable {
   /// Moderate Plus: pérdida moderada-severa en altas (45-55 dB HL en 2-8kHz).
   /// Máxima amplificación segura para arquitectura biquad en serie.
   /// NAL-NL2 para sloping loss 45-55 dB HL @ 65 dB input.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const moderatePlus = EqPreset(
     name: 'Moderate+',
     description: 'Pérdida moderada-severa en agudos (45-55 dB HL)',
@@ -120,6 +148,9 @@ class EqPreset extends Equatable {
   /// Voice Clarity: optimizado para inteligibilidad del habla.
   /// Enfatiza 1-4 kHz (rango de consonantes fricativas s, f, th).
   /// Basado en Speech Intelligibility Index (SII) weighting.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const voiceClarity = EqPreset(
     name: 'Voice Clarity',
     description: 'Optimizado para claridad de voz',
@@ -131,6 +162,9 @@ class EqPreset extends Equatable {
   /// Music: respuesta más plana con énfasis suave en medios-altos.
   /// Basado en Moore (2012) "Effects of Bandwidth on Preferences for Amplified Music".
   /// Evita picos >10 dB para preservar naturalidad musical.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const music = EqPreset(
     name: 'Music',
     description: 'Optimizado para escuchar música',
@@ -141,6 +175,9 @@ class EqPreset extends Equatable {
 
   /// Outdoor: reducción de graves (viento/rumble) + boost de medios-altos.
   /// Para ambientes exteriores con ruido de baja frecuencia.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const outdoor = EqPreset(
     name: 'Outdoor',
     description: 'Exteriores (reduce viento, mejora voces)',
@@ -151,6 +188,9 @@ class EqPreset extends Equatable {
 
   /// TV/Media: boost moderado en rango de voz (500-4000 Hz).
   /// Para mejorar diálogos en televisión y medios.
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const tvMedia = EqPreset(
     name: 'TV/Media',
     description: 'Mejora diálogos en TV y medios',
@@ -169,21 +209,38 @@ class EqPreset extends Equatable {
   );
 
   /// Lista de todos los presets predefinidos (10 presets).
+  @Deprecated(
+    'referencia para tests de regresión hasta migrar a core-clinico-compartido Sprint 3 — usar AudiogramDrivenBundle + StyleApplicator en runtime',
+  )
   static const List<EqPreset> allPresets = [
+    // ignore: deprecated_member_use_from_same_package
     normal,
+    // ignore: deprecated_member_use_from_same_package
     mildHigh,
+    // ignore: deprecated_member_use_from_same_package
     mildFlat,
+    // ignore: deprecated_member_use_from_same_package
     moderateHigh,
+    // ignore: deprecated_member_use_from_same_package
     moderateFlat,
+    // ignore: deprecated_member_use_from_same_package
     moderatePlus,
+    // ignore: deprecated_member_use_from_same_package
     voiceClarity,
+    // ignore: deprecated_member_use_from_same_package
     music,
+    // ignore: deprecated_member_use_from_same_package
     outdoor,
+    // ignore: deprecated_member_use_from_same_package
     tvMedia,
   ];
 
   /// Busca un preset por nombre. Retorna null si no existe.
+  ///
+  /// Nota: este helper se mantiene como infra no deprecada, pero internamente
+  /// recorre [allPresets] (deprecada) porque es la fuente de regresión.
   static EqPreset? findByName(String name) {
+    // ignore: deprecated_member_use_from_same_package
     for (final preset in allPresets) {
       if (preset.name == name) return preset;
     }

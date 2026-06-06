@@ -423,14 +423,35 @@ class BleRepository {
 
   /// Envía ganancias del ecualizador (12 bandas, 0-50 dB cada una)
   Future<BleResponse> setEqGains(List<int> gains) async {
-    assert(gains.length == 12);
-    assert(gains.every((g) => g >= 0 && g <= 50));
+    if (gains.length != 12) {
+      throw ArgumentError.value(
+        gains.length,
+        'gains.length',
+        'Must be exactly 12 bands (firmware protocol)',
+      );
+    }
+    for (var i = 0; i < gains.length; i++) {
+      final g = gains[i];
+      if (g < 0 || g > 50) {
+        throw ArgumentError.value(
+          g,
+          'gains[$i]',
+          'Out of firmware range [0, 50] dB',
+        );
+      }
+    }
     return sendCommand(BleCommands.setEqGains, Uint8List.fromList(gains));
   }
 
   /// Envía volumen maestro (-20 a +10 dB)
   Future<BleResponse> setVolume(int volumeDb) async {
-    assert(volumeDb >= -20 && volumeDb <= 10);
+    if (volumeDb < -20 || volumeDb > 10) {
+      throw ArgumentError.value(
+        volumeDb,
+        'volumeDb',
+        'Out of firmware range [-20, 10] dB',
+      );
+    }
     return sendCommand(
       BleCommands.setVolume,
       Uint8List.fromList([volumeDb & 0xFF]),
@@ -439,16 +460,33 @@ class BleRepository {
 
   /// Envía perfil activo (0=Quiet, 1=Conversation, 2=Noisy)
   Future<BleResponse> setProfile(int profileIndex) async {
-    assert(profileIndex >= 0 && profileIndex <= 2);
+    if (profileIndex < 0 || profileIndex > 2) {
+      throw ArgumentError.value(
+        profileIndex,
+        'profileIndex',
+        'Out of range [0, 2] (0=Quiet, 1=Conversation, 2=Noisy)',
+      );
+    }
     return sendCommand(
       BleCommands.setProfile,
       Uint8List.fromList([profileIndex]),
     );
   }
 
-  /// Envía umbral MPO (90-110 dB SPL)
+  /// Envía umbral MPO (rango clínico [80, 132] dB SPL)
+  ///
+  /// Rango documentado en `AudiogramDrivenBundle.mpoMaxDbSpl` (max 132)
+  /// y aplicado por `MpoDeriver` (clamp pediátrico [80, 110], adulto [80, 132]).
+  /// Se valida con `if/throw` (no `assert`) porque los `assert` se borran
+  /// en builds release y un valor fuera de rango llegaría al firmware.
   Future<BleResponse> setMpoThreshold(int thresholdDb) async {
-    assert(thresholdDb >= 90 && thresholdDb <= 110);
+    if (thresholdDb < 80 || thresholdDb > 132) {
+      throw ArgumentError.value(
+        thresholdDb,
+        'thresholdDb',
+        'Out of clinical range [80, 132] dB SPL',
+      );
+    }
     return sendCommand(
       BleCommands.setMpo,
       Uint8List.fromList([thresholdDb]),
@@ -457,7 +495,13 @@ class BleRepository {
 
   /// Envía nivel de reducción de ruido (0=off, 1=mild, 2=moderate, 3=strong)
   Future<BleResponse> setNoiseReductionLevel(int level) async {
-    assert(level >= 0 && level <= 3);
+    if (level < 0 || level > 3) {
+      throw ArgumentError.value(
+        level,
+        'level',
+        'Out of range [0, 3] (0=off, 1=mild, 2=moderate, 3=strong)',
+      );
+    }
     return sendCommand(
       BleCommands.setNrLevel,
       Uint8List.fromList([level]),

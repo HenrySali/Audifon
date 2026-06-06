@@ -1,41 +1,40 @@
-/// Smart Scene Engine — Fase 3.
+/// Smart Scene Engine — Fase 3 (refactor audiogram-driven-presets task 6.3).
 ///
-/// Generador genérico: convierte una `SceneClass` en un `SmartPreset` usando
-/// los presets clínicos existentes (`EqPreset.allPresets`) más la tabla de
-/// deltas de NR / TNR / volumen del `design.md`.
+/// Generador "genérico": usa el [AudiogramDrivenBundle] derivado del
+/// audiograma como base de las ganancias (Req 7.4) y le aplica solo la
+/// tabla de tuning por escena (NR / TNR / volumen / WDRC override). NO
+/// suma deltas por banda al EQ — esa es la diferencia con el generador
+/// personalizado: el toggle "Personalizar" controla si se aplican los
+/// deltas por escena al EQ encima del bundle (ON), o si el EQ se queda
+/// en la base audiograma-derivada (OFF, Req 7.6).
 ///
-/// No usa el audiograma del usuario. Sirve como fallback cuando el toggle
-/// "Personalizar" está OFF o cuando no hay audiograma disponible.
+/// Esta versión refactoriza el generador anterior, que seleccionaba un
+/// `EqPreset` hardcoded por escena. Ahora la base sale siempre del
+/// audiograma para que la app nunca cargue una curva genérica que
+/// ignore lo medido (Req 7.4).
 ///
-/// Validates: Requirements 3.1
+/// Validates: Requirements 7.1, 7.4, 7.5, 7.6, 10.3, 10.6
 
-import '../domain/entities/eq_preset.dart';
-import 'scene_class.dart';
-import 'scene_snapshot.dart' show SceneClass;
+import '../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import 'scene_snapshot.dart' show SceneClass, SceneSnapshot;
 import 'smart_preset.dart';
 
 class SceneGenericPresetGenerator {
-  /// Mapea cada clase a un preset clínico predefinido.
-  static EqPreset _baseFor(SceneClass cls) {
-    switch (cls) {
-      case SceneClass.silence:
-        return EqPreset.normal;
-      case SceneClass.voiceOnly:
-        return EqPreset.voiceClarity;
-      case SceneClass.voiceInNoiseLow:
-        return EqPreset.outdoor;
-      case SceneClass.voiceInNoiseMid:
-        return EqPreset.voiceClarity;
-      case SceneClass.noiseLowDominant:
-        return EqPreset.outdoor;
-      case SceneClass.noiseHighDominant:
-        return EqPreset.normal;
-      case SceneClass.music:
-        return EqPreset.music;
-      case SceneClass.unknown:
-        return EqPreset.normal;
-    }
-  }
+  /// Margen de seguridad para crest factor en el clamp por banda.
+  final double safetyMarginDb;
+
+  /// Ganancia máxima permitida por banda (red de seguridad).
+  final double absoluteMaxGainDb;
+
+  /// Tolerancia para reportar una banda como clampada en
+  /// [SmartPreset.clampedBands].
+  final double clampReportThresholdDb;
+
+  SceneGenericPresetGenerator({
+    this.safetyMarginDb = 3.0,
+    this.absoluteMaxGainDb = 50.0,
+    this.clampReportThresholdDb = 0.1,
+  });
 
   /// Tabla del design: NR / TNR / volumen / WDRC override por escena.
   static _SceneTuning _tuningFor(SceneClass cls) {
@@ -107,27 +106,60 @@ class SceneGenericPresetGenerator {
     }
   }
 
-  /// Genera un `SmartPreset` para la clase dada usando un base clínico
-  /// y la tabla de tuning. `confidence` se propaga del análisis.
-  SmartPreset generate(SceneClass cls, {required double confidence}) {
-    final base = _baseFor(cls);
-    final tuning = _tuningFor(cls);
-    final clamped = base.gains
-        .map((g) => g.clamp(0.0, 50.0).toDouble())
-        .toList(growable: false);
-    final timestamp = DateTime.now().millisecondsSinceEpoch.remainder(100000);
+  /// Genera un `SmartPreset` usando las ganancias del [bundle]
+  /// audiograma-derivado como base, clampándolas al headroom MPO por
+  /// banda (Req 10.3) y aplicando el tuning de la escena (NR / TNR /
+  /// volumen / WDRC override).
+  SmartPreset generate({
+    required AudiogramDrivenBundle bundle,
+    required SceneClass sceneClass,
+    required SceneSnapshot snapshot,
+    required double confidence,
+  }) {
+    final tuning = _tuningFor(sceneClass);
+    final input = snapshot.inputDbSpl;
+
+    final gains = List<double>.filled(
+      AudiogramDrivenBundle.bandCount,
+      0.0,
+      growable: false,
+    );
+    final clamped = <int>[];
+
+    for (var i = 0; i < AudiogramDrivenBundle.bandCount; i++) {
+      final target = bundle.gainsDb[i];
+      final maxSafePerBand = (bundle.mpoProfileDbSpl[i] - input - safetyMarginDb)
+          .clamp(0.0, absoluteMaxGainDb)
+          .toDouble();
+
+      var g = target;
+      if (g < 0.0) g = 0.0;
+      if (g > maxSafePerBand) g = maxSafePerBand;
+      if (g > absoluteMaxGainDb) g = absoluteMaxGainDb;
+
+      gains[i] = g;
+
+      if (target - g >= clampReportThresholdDb) {
+        clamped.add(i);
+      }
+    }
+
+    final timestamp =
+        DateTime.now().millisecondsSinceEpoch.remainder(100000);
+
     return SmartPreset(
-      name: 'SmartScene_${cls.name}_$timestamp',
+      name: 'SmartScene_${sceneClass.name}_$timestamp',
       isPersonalized: false,
-      sceneClass: cls,
-      gains: clamped,
+      sceneClass: sceneClass,
+      gains: List<double>.unmodifiable(gains),
       compressionRatio: tuning.compressionRatioOverride,
       compressionKnee: tuning.compressionKneeOverride,
-      expansionKnee: base.expansionKnee,
+      expansionKnee: bundle.expansionKneeDbSpl,
       nrLevel: tuning.nrLevel,
       tnrEnabled: tuning.tnrEnabled,
       volumeDeltaDb: tuning.volumeDeltaDb,
       confidence: confidence,
+      clampedBands: List<int>.unmodifiable(clamped),
     );
   }
 }

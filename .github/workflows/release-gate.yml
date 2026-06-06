@@ -1,0 +1,91 @@
+# Tarea 16.4 (`audiogram-driven-presets`): Tramo 3 QC release gate.
+#
+# Bloquea el release de producción si el operador no adjunta un QC PDF
+# firmado generado por `QcAuditRepositoryImpl.generatePdf` y dentro de
+# la ventana de 7 días previos.
+#
+# Requirements: 15.14 (audit trail completo en audit_trail_box) y
+# 15.15 (PDF firmado obligatorio para releases productivos).
+#
+# **Cómo se entrega el PDF al gate.** El audit_trail_box vive en el
+# device del operador, no en CI. Para no requerir acceso remoto al
+# Hive, el operador exporta el PDF y lo adjunta como release asset.
+# El workflow lo descarga vía `actions/github-script` (release id) y
+# lo pasa a `tool/release_gate.dart`. Si no hay assets en el release,
+# el gate falla con un mensaje accionable.
+
+name: Release gate (Tramo 3 QC)
+
+on:
+  release:
+    types: [created, published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag del release a verificar (ej: v1.4.2)"
+        required: true
+        type: string
+
+jobs:
+  qc-gate:
+    name: Verify Tramo 3 QC PDF
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Get dependencies
+        working-directory: hearing_aid_app
+        run: flutter pub get
+
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            echo "date=${{ github.event.release.created_at }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download QC audit PDF asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p hearing_aid_app/build/release_gate
+          gh release download "${{ steps.release.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "*.pdf" \
+            --dir hearing_aid_app/build/release_gate \
+            || {
+              echo "::error::No hay PDF de QC adjunto al release '${{ steps.release.outputs.tag }}'."
+              echo "::error::El operador debe exportar el PDF firmado desde audit_trail_box y adjuntarlo como release asset."
+              exit 1
+            }
+          PDF=$(ls hearing_aid_app/build/release_gate/*.pdf | head -n1)
+          echo "PDF=$PDF" >> "$GITHUB_ENV"
+
+      - name: Verify Tramo 3 QC PDF
+        working-directory: hearing_aid_app
+        run: |
+          dart run tool/release_gate.dart \
+            --audit-pdf="${{ env.PDF }}" \
+            --release-date="${{ steps.release.outputs.date }}"
+
+      - name: Upload PDF for audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tramo3-qc-audit
+          path: hearing_aid_app/build/release_gate/*.pdf
+          retention-days: 365

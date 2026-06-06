@@ -39,6 +39,17 @@ double computeWdrcGainFactor({
 /// MPO peak limiter — processes a buffer sample-by-sample.
 ///
 /// Returns the limited buffer. No output sample exceeds [thresholdLinear].
+///
+/// Modela el algoritmo de `android/app/src/main/cpp/mpo_limiter.cpp`:
+///  1. Calcular |sample|.
+///  2. Si |sample| > threshold → ataque adaptativo (coeficiente proporcional
+///     al overshoot²) hacia `targetGain = threshold / |sample|`.
+///  3. Si |sample| ≤ threshold → release lento hacia 1.0.
+///  4. Aplicar la ganancia suavizada.
+///  5. Hard-clamp final a [-threshold, +threshold]. Esta es la garantía
+///     absoluta del invariante `|output[i]| ≤ thresholdLinear` incluso
+///     durante el transitorio de attack, donde la ganancia suavizada
+///     todavía no convergió a `targetGain`.
 List<double> mpoLimit({
   required List<double> buffer,
   required double thresholdLinear,
@@ -49,19 +60,49 @@ List<double> mpoLimit({
   double gain = 1.0;
 
   for (int i = 0; i < buffer.length; i++) {
-    final absSample = buffer[i].abs();
-    if (absSample * gain > thresholdLinear) {
-      // Need to reduce gain
-      final targetGain =
-          absSample > 0 ? thresholdLinear / absSample : 1.0;
-      gain += attackCoeff * (targetGain - gain);
+    final sample = buffer[i];
+    final absSample = sample.abs();
+    if (absSample > thresholdLinear) {
+      // ATTACK: muestra excede el threshold.
+      // targetGain garantiza output = ±threshold tras converger.
+      final targetGain = absSample > 0 ? thresholdLinear / absSample : 1.0;
+
+      // Ataque adaptativo: el coeficiente crece con el overshoot² para
+      // que picos enormes se atenúen mucho más rápido (hasta 16×) y los
+      // picos pequeños usen el ataque normal. Equivalente al
+      // mpo_limiter.cpp:75-83 — referencia: técnica usada en Oticon Real.
+      final overshootRatio = absSample / thresholdLinear;
+      final adaptiveScale = overshootRatio * overshootRatio;
+      final cappedScale = adaptiveScale > 16.0 ? 16.0 : adaptiveScale;
+      double adaptiveCoeff = attackCoeff * cappedScale;
+      if (adaptiveCoeff > 1.0) adaptiveCoeff = 1.0;
+
+      gain += adaptiveCoeff * (targetGain - gain);
     } else {
-      // Release back to unity
+      // RELEASE: recuperar lentamente hacia ganancia unitaria.
       gain += releaseCoeff * (1.0 - gain);
     }
-    // Clamp gain to [0, 1]
+
+    // El MPO nunca amplifica, y la ganancia nunca debe ser negativa.
     gain = gain.clamp(0.0, 1.0);
-    output[i] = buffer[i] * gain;
+
+    // Aplicar ganancia suavizada.
+    double sampleOut = sample * gain;
+
+    // HARD-CLAMP DE SEGURIDAD (mpo_limiter.cpp:102-108):
+    // Garantía absoluta del invariante |output| ≤ threshold incluso
+    // durante el transitorio de ataque cuando la ganancia suavizada
+    // todavía no convergió. Sin este clamp, la primera muestra de un
+    // sostenido sobre-threshold (e.g. amplitude=0.6 con threshold=0.316
+    // y attackCoeff=0.125) sale como 0.6 * (1 + 0.125·(0.527-1)) ≈ 0.345,
+    // violando el invariante.
+    if (sampleOut > thresholdLinear) {
+      sampleOut = thresholdLinear;
+    } else if (sampleOut < -thresholdLinear) {
+      sampleOut = -thresholdLinear;
+    }
+
+    output[i] = sampleOut;
   }
   return output;
 }

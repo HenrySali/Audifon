@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../../domain/entities/audio_config.dart';
+import '../../domain/entities/calibration_audit_record.dart';
 import '../../domain/entities/calibration_data.dart';
 import '../../domain/entities/wdrc_params.dart';
+import '../services/calibration_audit_repository.dart';
 import 'audio_bridge.dart';
 
 /// Implementación de [AudioBridge] usando Platform Channels de Flutter.
@@ -79,7 +81,13 @@ class AudioBridgeImpl implements AudioBridge {
 
   @override
   Future<void> updateEqGains(List<double> gains) async {
-    assert(gains.length == 12, 'EQ gains must have exactly 12 values');
+    if (gains.length != 12) {
+      throw ArgumentError.value(
+        gains.length,
+        'gains.length',
+        'EQ requires exactly 12 bands, got ${gains.length}',
+      );
+    }
     await _methodChannel.invokeMethod<void>('updateEqGains', {
       'gains': gains,
     });
@@ -87,10 +95,13 @@ class AudioBridgeImpl implements AudioBridge {
 
   @override
   Future<void> updateVolume(double volumeDb) async {
-    assert(
-      volumeDb >= -20.0 && volumeDb <= 10.0,
-      'Volume must be in range [-20, +10] dB',
-    );
+    if (volumeDb < -20.0 || volumeDb > 10.0) {
+      throw ArgumentError.value(
+        volumeDb,
+        'volumeDb',
+        'Volume must be in range [-20.0, +10.0] dB, got $volumeDb',
+      );
+    }
     await _methodChannel.invokeMethod<void>('updateVolume', {
       'volumeDb': volumeDb,
     });
@@ -110,7 +121,13 @@ class AudioBridgeImpl implements AudioBridge {
 
   @override
   Future<void> updateNrLevel(int level) async {
-    assert(level >= 0 && level <= 3, 'NR level must be 0-3');
+    if (level < 0 || level > 3) {
+      throw ArgumentError.value(
+        level,
+        'level',
+        'NR level must be in range [0, 3], got $level',
+      );
+    }
     await _methodChannel.invokeMethod<void>('updateNrLevel', {
       'level': level,
     });
@@ -120,6 +137,24 @@ class AudioBridgeImpl implements AudioBridge {
   Future<void> updateTnrEnabled(bool enabled) async {
     await _methodChannel.invokeMethod<void>('updateTnrEnabled', {
       'enabled': enabled,
+    });
+  }
+
+  @override
+  Future<void> setMpoThresholdDbSpl(double thresholdDbSpl) async {
+    if (thresholdDbSpl.isNaN || thresholdDbSpl.isInfinite) {
+      throw ArgumentError(
+        'MPO threshold debe ser un número finito, recibido: $thresholdDbSpl',
+      );
+    }
+    if (thresholdDbSpl < 80.0 || thresholdDbSpl > 132.0) {
+      throw ArgumentError(
+        'MPO threshold fuera de rango [80.0, 132.0] dB SPL, '
+        'recibido: $thresholdDbSpl',
+      );
+    }
+    await _methodChannel.invokeMethod<void>('setMpoThresholdDbSpl', {
+      'thresholdDbSpl': thresholdDbSpl,
     });
   }
 
@@ -139,6 +174,24 @@ class AudioBridgeImpl implements AudioBridge {
     return _stateStreamCache!;
   }
 
+  /// Auto-injected `CalibrationAuditRepository` para persistir audit
+  /// trail al recibir resultados positivos del handler nativo. Si es
+  /// `null` (default), la persistencia se hace abriendo el box bajo
+  /// demanda. Para tests inyectables, ver constructor `withChannels`.
+  CalibrationAuditRepository? _auditRepoOverride;
+
+  /// Permite a los tests inyectar un repositorio de audit trail
+  /// preconstruido sobre un Hive box temporal.
+  set auditRepository(CalibrationAuditRepository repo) {
+    _auditRepoOverride = repo;
+  }
+
+  Future<CalibrationAuditRepository> _auditRepo() async {
+    if (_auditRepoOverride != null) return _auditRepoOverride!;
+    final box = await CalibrationAuditRepository.openBox();
+    return CalibrationAuditRepository(box);
+  }
+
   @override
   Future<MicCalibrationResult> calibrateMicrophone({
     required double referenceSplLevel,
@@ -155,13 +208,57 @@ class AudioBridgeImpl implements AudioBridge {
       );
     }
 
+    final calibratedAt = DateTime.fromMillisecondsSinceEpoch(
+      result['calibratedAtMs'] as int,
+      isUtc: true,
+    );
+    // Audit trail: construir record con SHA-256 verificable y persistirlo
+    // antes de retornar al caller. Cualquier falla de persistencia
+    // propaga PlatformException sin descartar el offset medido.
+    final repo = await _auditRepo();
+    final base = <String, dynamic>{
+      'type': 'mic',
+      'timestampUtc': calibratedAt.toIso8601String(),
+      'referenceSplLevel': (result['referenceSplLevel'] as num?)?.toDouble() ??
+          referenceSplLevel,
+      'rmsAvgDbfs': (result['rmsAvgDbfs'] as num?)?.toDouble() ?? 0.0,
+      'rmsStdDbfs': (result['rmsStdDbfs'] as num?)?.toDouble() ?? 0.0,
+      'micOffsetDb': (result['splOffset'] as num).toDouble(),
+      'calibratorModel': (result['calibratorModel'] as String?) ?? 'unknown',
+      'operatorId': (result['operatorId'] as String?) ?? 'unknown',
+      'deviceModel': (result['deviceModel'] as String?) ?? 'unknown',
+      'expectedFreqHz':
+          (result['expectedFreqHz'] as num?)?.toDouble() ?? 1000.0,
+      'windowsUsed': (result['windowsUsed'] as num?)?.toInt() ?? 0,
+    };
+    final hash = CalibrationAuditRepository.computeSha256(base);
+    final audit = MicCalibrationAudit(
+      timestampUtc: calibratedAt,
+      referenceSplLevel: (base['referenceSplLevel'] as num).toDouble(),
+      rmsAvgDbfs: (base['rmsAvgDbfs'] as num).toDouble(),
+      rmsStdDbfs: (base['rmsStdDbfs'] as num).toDouble(),
+      micOffsetDb: (base['micOffsetDb'] as num).toDouble(),
+      calibratorModel: base['calibratorModel'] as String,
+      operatorId: base['operatorId'] as String,
+      deviceModel: base['deviceModel'] as String,
+      expectedFreqHz: (base['expectedFreqHz'] as num).toDouble(),
+      windowsUsed: (base['windowsUsed'] as num).toInt(),
+      sha256: hash,
+    );
+    try {
+      await repo.appendMicCalibration(audit);
+    } catch (e) {
+      throw PlatformException(
+        code: 'PERSIST_FAILED',
+        message: 'No se pudo persistir el audit de calibración mic: $e',
+      );
+    }
+
     return MicCalibrationResult(
       splOffset: (result['splOffset'] as num).toDouble(),
       confidenceLevel: (result['confidenceLevel'] as num).toDouble(),
       method: result['method'] as String,
-      calibratedAt: DateTime.fromMillisecondsSinceEpoch(
-        result['calibratedAtMs'] as int,
-      ),
+      calibratedAt: calibratedAt,
       deviceModel: result['deviceModel'] as String,
     );
   }
@@ -170,9 +267,21 @@ class AudioBridgeImpl implements AudioBridge {
   Future<HeadphoneCalibrationResult> calibrateHeadphones({
     required String headphoneId,
   }) async {
+    // Cargar el offset persistido del mic; el handler nativo lo
+    // necesita como argumento para calcular `target_dbspl`.
+    final repo = await _auditRepo();
+    final latestMic = await repo.getLatestMic();
+    if (latestMic == null) {
+      throw PlatformException(
+        code: 'MIC_NOT_CALIBRATED',
+        message:
+            'El micrófono no está calibrado. Calibrá el micrófono primero.',
+      );
+    }
     final result = await _methodChannel
         .invokeMapMethod<String, dynamic>('calibrateHeadphones', {
       'headphoneId': headphoneId,
+      'micOffsetDb': latestMic.micOffsetDb,
     });
 
     if (result == null) {
@@ -191,14 +300,71 @@ class AudioBridgeImpl implements AudioBridge {
     final compensation = (result['compensation'] as Map).map((key, value) =>
         MapEntry(int.parse(key.toString()), (value as num).toDouble()));
 
+    final calibratedAt = DateTime.fromMillisecondsSinceEpoch(
+      result['calibratedAtMs'] as int,
+      isUtc: true,
+    );
+
+    // Audit trail HP.
+    final freqsList = (result['frequenciesHz'] as List?)
+            ?.map((e) => (e as num).toInt())
+            .toList() ??
+        frequencyResponse.keys.toList()
+      ..sort();
+    final splList = (result['splDbspl'] as List?)
+            ?.map((e) => (e as num).toDouble())
+            .toList() ??
+        freqsList.map((f) => frequencyResponse[f] ?? 0.0).toList();
+    final hpOffsetList = (result['hpOffsetDb'] as List?)
+            ?.map((e) => (e as num).toDouble())
+            .toList() ??
+        freqsList.map((f) => -(compensation[f] ?? 0.0)).toList();
+
+    final hpBase = <String, dynamic>{
+      'type': 'hp',
+      'timestampUtc': calibratedAt.toIso8601String(),
+      'headphoneId': headphoneId,
+      'headphoneName': (result['headphoneName'] as String?) ?? headphoneId,
+      'couplerModel': (result['couplerModel'] as String?) ?? 'HA-2',
+      'operatorId': (result['operatorId'] as String?) ?? 'unknown',
+      'deviceModel': (result['deviceModel'] as String?) ?? 'unknown',
+      'micOffsetDb':
+          (result['micOffsetDb'] as num?)?.toDouble() ?? latestMic.micOffsetDb,
+      'targetDbspl': (result['targetDbspl'] as num?)?.toDouble() ?? 0.0,
+      'frequenciesHz': freqsList,
+      'splDbspl': splList,
+      'hpOffsetDb': hpOffsetList,
+    };
+    final hpHash = CalibrationAuditRepository.computeSha256(hpBase);
+    final hpAudit = HpCalibrationAudit(
+      timestampUtc: calibratedAt,
+      headphoneId: headphoneId,
+      headphoneName: hpBase['headphoneName'] as String,
+      couplerModel: hpBase['couplerModel'] as String,
+      operatorId: hpBase['operatorId'] as String,
+      deviceModel: hpBase['deviceModel'] as String,
+      micOffsetDb: (hpBase['micOffsetDb'] as num).toDouble(),
+      targetDbspl: (hpBase['targetDbspl'] as num).toDouble(),
+      frequenciesHz: freqsList,
+      splDbspl: splList,
+      hpOffsetDb: hpOffsetList,
+      sha256: hpHash,
+    );
+    try {
+      await repo.appendHpCalibration(hpAudit);
+    } catch (e) {
+      throw PlatformException(
+        code: 'PERSIST_FAILED',
+        message: 'No se pudo persistir el audit de calibración hp: $e',
+      );
+    }
+
     return HeadphoneCalibrationResult(
       frequencyResponse: frequencyResponse,
       compensation: compensation,
       headphoneId: result['headphoneId'] as String,
       headphoneName: result['headphoneName'] as String,
-      calibratedAt: DateTime.fromMillisecondsSinceEpoch(
-        result['calibratedAtMs'] as int,
-      ),
+      calibratedAt: calibratedAt,
       isBluetooth: result['isBluetooth'] as bool,
     );
   }

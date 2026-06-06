@@ -56,6 +56,10 @@ public:
     void setWdrcParams(const WdrcParams& params);
     void setNrLevel(int level);
     void setSplOffset(float offset);
+    /// Actualiza el threshold del MPO en dB SPL en runtime sin reiniciar
+    /// el motor de audio. Delega a DspPipeline::setMpoThresholdDbSpl(), que
+    /// convierte el valor a lineal usando el splOffset actual. Thread-safe.
+    void setMpoThresholdDbSpl(float thresholdDbSpl);
     float getLastInputLevel() const;
 
     // ─── DSP Stage Metrics (para diagnóstico) ────────────────────────────

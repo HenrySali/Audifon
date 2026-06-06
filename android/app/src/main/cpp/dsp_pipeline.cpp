@@ -313,6 +313,44 @@ void DspPipeline::setSplOffset(float offset) {
     // El offset solo afecta la interpretación del nivel de entrada para WDRC,
     // no el threshold de protección de salida del MPO.
     mpo_.setThresholdLinear(0.85f);
+
+    // Si el caller fijó un MPO en dB SPL via setMpoThresholdDbSpl(), re-derivar
+    // el valor lineal con el nuevo offset para mantener el techo clínico
+    // consistente cuando cambia la calibración del micrófono.
+    const float dbSpl = mpoThresholdDbSpl_.load(std::memory_order_relaxed);
+    if (std::isfinite(dbSpl)) {
+        const float linear = std::pow(10.0f, (dbSpl - offset) / 20.0f);
+        // Clamp por seguridad digital: nunca permitir > 0.85 lineal (≈ -1.4 dBFS).
+        const float safeLinear = (linear > 0.85f) ? 0.85f : linear;
+        if (safeLinear > 0.0f) {
+            mpo_.setThresholdLinear(safeLinear);
+        }
+    }
+}
+
+void DspPipeline::setMpoThresholdDbSpl(float thresholdDbSpl) {
+    // Validación interna: rechazar NaN/Inf. La validación de rango clínico
+    // [80, 132] dB SPL la hace el caller (Dart AudioBridgeImpl).
+    if (!std::isfinite(thresholdDbSpl)) {
+        return;
+    }
+
+    // Persistir el valor en dB SPL para que setSplOffset() pueda re-derivar
+    // el lineal cuando cambie la calibración.
+    mpoThresholdDbSpl_.store(thresholdDbSpl, std::memory_order_relaxed);
+
+    // Conversión dB SPL → lineal usando el offset de calibración actual.
+    //   dBFS = dB_SPL - splOffset
+    //   linear = 10^(dBFS / 20)
+    const float offset = splOffset_.load(std::memory_order_relaxed);
+    const float linear = std::pow(10.0f, (thresholdDbSpl - offset) / 20.0f);
+
+    // Clamp al techo de seguridad digital (0.85 ≈ -1.4 dBFS) para preservar
+    // la protección anti-clipping del pipeline.
+    const float safeLinear = (linear > 0.85f) ? 0.85f : linear;
+    if (safeLinear > 0.0f) {
+        mpo_.setThresholdLinear(safeLinear);
+    }
 }
 
 float DspPipeline::getLastInputLevelDb() const {

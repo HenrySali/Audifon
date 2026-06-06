@@ -31,6 +31,7 @@ import '../../scene/scene_recorder.dart';
 import '../../scene/scene_snapshot.dart';
 import '../../scene/smart_preset.dart';
 import '../bloc/amplification_bloc.dart';
+import '../widgets/default_audiogram_hint.dart';
 
 class SmartSceneScreen extends StatefulWidget {
   const SmartSceneScreen({super.key});
@@ -528,6 +529,7 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
             children: [
               if (!_enginePresent) _engineOffBanner(),
               if (_errorMessage != null) _errorBanner(_errorMessage!),
+              DefaultAudiogramHint(sceneEngine: _engine),
               const SizedBox(height: 8),
               _DetectCard(
                 isAnalyzing: _isAnalyzing,

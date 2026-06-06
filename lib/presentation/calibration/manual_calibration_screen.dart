@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:hearing_aid_app/data/repositories/operator_pin_repository.dart';
 import '../../data/repositories/calibration_repository.dart';
 import '../../data/serializers/calibration_serializer.dart';
 
@@ -12,9 +13,15 @@ import '../../data/serializers/calibration_serializer.dart';
 class ManualCalibrationScreen extends StatefulWidget {
   final CalibrationRepository calibrationRepository;
 
+  /// Repositorio del PIN del operador. Opcional: si se omite, se
+  /// instancia uno nuevo. La inyección está pensada para tests
+  /// (permite usar un repo apuntando a un Hive temporal).
+  final OperatorPinRepository? operatorPinRepository;
+
   const ManualCalibrationScreen({
     super.key,
     required this.calibrationRepository,
+    this.operatorPinRepository,
   });
 
   @override
@@ -29,11 +36,14 @@ class _ManualCalibrationScreenState extends State<ManualCalibrationScreen> {
   CalibrationMeasurement? _result;
   CalibrationMeasurement? _baseline;
   String? _error;
+  String? _pinError;
 
   StreamSubscription<CalibrationProgress>? _progressSub;
   StreamSubscription<CalibrationMeasurement>? _completeSub;
 
   final _pinController = TextEditingController();
+  late final OperatorPinRepository _pinRepo =
+      widget.operatorPinRepository ?? OperatorPinRepository();
 
   @override
   void initState() {
@@ -42,6 +52,45 @@ class _ManualCalibrationScreenState extends State<ManualCalibrationScreen> {
         widget.calibrationRepository.progress.listen(_handleProgress);
     _completeSub =
         widget.calibrationRepository.completedMeasurements.listen(_handleComplete);
+    // Hallazgo C-1: si el operador todavía no configuró PIN, lo guiamos
+    // a generar uno antes de permitir cualquier autenticación.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybePromptInitialPinSetup();
+    });
+  }
+
+  /// Si no hay PIN configurado, muestra primero un diálogo invitando a
+  /// generarlo y, al confirmar, persiste el hash y muestra el PIN una
+  /// única vez para que el operador lo anote. Solo después se permite
+  /// el flow de autenticación normal.
+  Future<void> _maybePromptInitialPinSetup() async {
+    if (!mounted) return;
+    if (await _pinRepo.hasPin()) return;
+    if (!mounted) return;
+
+    final shouldGenerate = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Genere su PIN inicial'),
+        content: const Text(
+          'Aún no hay un PIN de operador configurado. '
+          'Genérelo ahora para acceder a Calibración Manual y QC Loopback.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Generar'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldGenerate != true || !mounted) return;
+
+    final generated = await _pinRepo.generateAndStoreInitialPin();
+    if (!mounted) return;
+    await _showInitialPinDialog(generated);
   }
 
   @override
@@ -67,14 +116,27 @@ class _ManualCalibrationScreenState extends State<ManualCalibrationScreen> {
     });
   }
 
-  Future<void> _authenticate() async {
-    // Simple PIN authentication for audiologist access
+  Future<void> _verifyPin() async {
     final pin = _pinController.text.trim();
-    if (pin == '1234' || pin == '0000') {
-      // TODO: Replace with real authentication
-      setState(() => _authenticated = true);
-      _loadBaseline();
+
+    if (!await _pinRepo.hasPin()) {
+      // Primer arranque sin PIN: el operador debe pasar por el flujo de
+      // generación inicial antes de poder autenticar.
+      if (!mounted) return;
+      await _maybePromptInitialPinSetup();
+      return;
+    }
+
+    if (await _pinRepo.verifyPin(pin)) {
+      if (!mounted) return;
+      setState(() {
+        _authenticated = true;
+        _pinError = null;
+      });
+      await _loadBaseline();
     } else {
+      if (!mounted) return;
+      setState(() => _pinError = 'PIN incorrecto');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('PIN incorrecto. Acceso denegado.'),
@@ -82,6 +144,40 @@ class _ManualCalibrationScreenState extends State<ManualCalibrationScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _showInitialPinDialog(String pin) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('PIN de operador generado'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Anote este PIN — no se vuelve a mostrar. '
+              'Servirá para acceder a Calibración Manual y a QC Loopback.',
+            ),
+            const SizedBox(height: 16),
+            SelectableText(
+              pin,
+              style: const TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 4,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Anotado'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadBaseline() async {
@@ -148,16 +244,17 @@ class _ManualCalibrationScreenState extends State<ManualCalibrationScreen> {
             controller: _pinController,
             obscureText: true,
             keyboardType: TextInputType.number,
-            maxLength: 4,
-            decoration: const InputDecoration(
+            maxLength: 6,
+            decoration: InputDecoration(
               labelText: 'PIN de Audiólogo',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
+              errorText: _pinError,
             ),
-            onSubmitted: (_) => _authenticate(),
+            onSubmitted: (_) => _verifyPin(),
           ),
           const SizedBox(height: 16),
           ElevatedButton(
-            onPressed: _authenticate,
+            onPressed: _verifyPin,
             child: const Text('Autenticar'),
           ),
         ],

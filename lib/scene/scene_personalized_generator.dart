@@ -1,70 +1,102 @@
-/// Smart Scene Engine — Fase 3.
+/// Smart Scene Engine — Fase 3 (refactor audiogram-driven-presets task 6.1).
 ///
-/// Generador personalizado: parte de las ganancias NAL-NL2 derivadas del
-/// audiograma del paciente y aplica los deltas por banda definidos en el
-/// `design.md` para cada `SceneClass`. Aplica también un clamp por banda
-/// usando la regla de headroom:
+/// Generador personalizado: parte de las ganancias [AudiogramDrivenBundle]
+/// — ya derivadas del audiograma del paciente vía [BundleBuilder] — y
+/// aplica los deltas por banda definidos en el `design.md` para cada
+/// `SceneClass`. Aplica también un clamp por banda usando el perfil MPO
+/// del bundle como techo:
 ///
-///   `maxSafeGain[i] = MPO_threshold_db_spl - input_db_spl - safety_margin`
+///   `maxSafeGain[i] = bundle.mpoProfileDbSpl[i] - input_db_spl - safety_margin`
 ///
-/// Donde `safety_margin = 3 dB` y `MPO_threshold_db_spl = 110 dB SPL` (tope
-/// FDA OTC 2022). Esto garantiza que la salida nunca excede el MPO del
-/// pipeline DSP aunque el EQ amplifique.
+/// Donde `safety_margin = 3 dB`. Esto garantiza que la salida nunca
+/// excede el MPO del paciente — calculado individualmente a partir de
+/// `UCL = 100 + 0.15 × HL` con la regla adulto/pediátrica — aunque el
+/// EQ amplifique. Reemplaza el literal hardcoded `mpoThresholdDbSpl =
+/// 110.0` que usaba la versión anterior (Req 7.7, 10.3, 10.4).
 ///
-/// Si no hay audiograma, lanza `ArgumentError`.
+/// Las bandas cuyo target gain excede el headroom por ≥ 0.1 dB se
+/// reportan en `SmartPreset.clampedBands` para que la UI pueda
+/// resaltarlas (Req 10.6).
 ///
-/// Validates: Requirements 3.2, 3.3, 3.5, 3.6, 3.7
+/// Validates: Requirements 7.1, 7.4, 7.7, 10.3, 10.4, 10.6
 
-import '../domain/entities/audiogram.dart';
-import '../domain/gain_prescriber.dart';
+import '../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
 import 'scene_snapshot.dart' show SceneClass, SceneSnapshot;
 import 'smart_preset.dart';
 
 class ScenePersonalizedPresetGenerator {
-  /// Tope MPO del pipeline (FDA OTC ≤ 110 dB SPL).
-  final double mpoThresholdDbSpl;
-
   /// Margen de seguridad para crest factor.
   final double safetyMarginDb;
 
-  /// Ganancia máxima permitida por banda (limita el techo absoluto).
+  /// Ganancia máxima permitida por banda (limita el techo absoluto
+  /// como red de seguridad después del clamp por banda; se conserva en
+  /// 50 dB por Req 10.5).
   final double absoluteMaxGainDb;
 
-  final GainPrescriber _prescriber;
+  /// Tolerancia para reportar una banda como clampada en
+  /// [SmartPreset.clampedBands]. Si `target_gain - clampedGain ≥`
+  /// este valor, la banda se considera clampada (Req 10.6).
+  final double clampReportThresholdDb;
 
   ScenePersonalizedPresetGenerator({
-    GainPrescriber? prescriber,
-    this.mpoThresholdDbSpl = 110.0,
     this.safetyMarginDb = 3.0,
     this.absoluteMaxGainDb = 50.0,
-  }) : _prescriber = prescriber ?? GainPrescriber();
+    this.clampReportThresholdDb = 0.1,
+  });
 
-  /// Genera un `SmartPreset` partiendo del audiograma y aplicando deltas
-  /// según la escena.
+  /// Genera un `SmartPreset` partiendo del [bundle] audiograma-derivado
+  /// y aplicando deltas según la escena.
+  ///
+  /// El [bundle] aporta:
+  /// - `gainsDb` per-band como base de la ecualización.
+  /// - `mpoProfileDbSpl[f]` per-band como techo de headroom (sustituye
+  ///   el literal hardcoded de 110 dB SPL — Req 7.7).
+  /// - `compressionRatios`, `compressionKneesDbSpl` se preservan (no
+  ///   se modifican aquí; el bloc los pasa al bridge tal cual).
+  ///
+  /// El [snapshot] aporta el `inputDbSpl` para calcular el headroom.
+  /// El [confidence] se propaga a [SmartPreset.confidence].
   SmartPreset generate({
-    required Audiogram audiogram,
+    required AudiogramDrivenBundle bundle,
     required SceneClass sceneClass,
     required SceneSnapshot snapshot,
     required double confidence,
   }) {
-    // 1) Base NAL-NL2 desde el audiograma. 12 valores en [0, 50] dB.
-    final base = _prescriber.prescribeFromAudiogram(audiogram);
+    // 1) Base = ganancias del bundle (ya prescritas a partir del audiograma).
+    final base = bundle.gainsDb;
 
     // 2) Delta por banda según la escena.
     final delta = _deltasFor(sceneClass);
 
-    // 3) Cap superior por banda usando headroom.
+    // 3) Headroom por banda usando el perfil MPO del bundle.
     final input = snapshot.inputDbSpl;
-    final maxSafe = (mpoThresholdDbSpl - input - safetyMarginDb)
-        .clamp(0.0, absoluteMaxGainDb);
 
-    final gains = <double>[];
-    for (var i = 0; i < base.length; i++) {
-      var g = base[i] + delta[i];
+    final gains = List<double>.filled(
+      AudiogramDrivenBundle.bandCount,
+      0.0,
+      growable: false,
+    );
+    final clamped = <int>[];
+
+    for (var i = 0; i < AudiogramDrivenBundle.bandCount; i++) {
+      final target = base[i] + delta[i];
+      final maxSafePerBand = (bundle.mpoProfileDbSpl[i] - input - safetyMarginDb)
+          .clamp(0.0, absoluteMaxGainDb)
+          .toDouble();
+
+      var g = target;
       if (g < 0.0) g = 0.0;
-      if (g > maxSafe) g = maxSafe;
+      if (g > maxSafePerBand) g = maxSafePerBand;
       if (g > absoluteMaxGainDb) g = absoluteMaxGainDb;
-      gains.add(g);
+
+      gains[i] = g;
+
+      // Reportar como clampada si el target real excedía el headroom
+      // por ≥ clampReportThresholdDb (Req 10.6). Sólo reportamos cuando
+      // hubo recorte efectivo (no cuando el target ya estaba dentro).
+      if (target - g >= clampReportThresholdDb) {
+        clamped.add(i);
+      }
     }
 
     final tuning = _tuningFor(sceneClass);
@@ -83,6 +115,7 @@ class ScenePersonalizedPresetGenerator {
       tnrEnabled: tuning.tnrEnabled,
       volumeDeltaDb: tuning.volumeDeltaDb,
       confidence: confidence,
+      clampedBands: List<int>.unmodifiable(clamped),
     );
   }
 

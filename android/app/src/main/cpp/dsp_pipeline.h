@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <atomic>
 #include <cmath>
+#include <limits>
 
 #include "noise_reduction.h"
 #include "equalizer.h"
@@ -120,6 +121,24 @@ public:
     /// @param offset Offset en dB (120 para mic real, 76 para WAV)
     void setSplOffset(float offset);
 
+    /// Actualiza el threshold del limitador MPO en dB SPL en runtime.
+    ///
+    /// Convierte el valor a amplitud lineal usando el offset SPL actual:
+    ///   linear = pow(10, (thresholdDbSpl - splOffset) / 20)
+    /// y aplica el resultado al MPO sin reiniciar el motor.
+    ///
+    /// El valor lineal se clampa al techo de seguridad digital (0.85 ≈ -1.4
+    /// dBFS) para preservar la protección anti-clipping. El valor en dB SPL
+    /// queda almacenado de forma atómica para ser re-derivado cuando cambie
+    /// el offset de calibración (ver setSplOffset).
+    ///
+    /// Thread-safe: lock-free (atómicos + setThresholdLinear atómico).
+    /// Propagación al MPO: 1 atomic store; efectivo en el siguiente bloque
+    /// (∼3–6 ms a 16/48 kHz, ≪ 50 ms p95 requerido por la spec).
+    ///
+    /// @param thresholdDbSpl Threshold en dB SPL (rango clínico [80, 132])
+    void setMpoThresholdDbSpl(float thresholdDbSpl);
+
     /// Obtiene el último nivel de entrada medido PRE-EQ (dB SPL).
     /// Actualizado cada bloque. Seguro para leer desde cualquier hilo.
     float getLastInputLevelDb() const;
@@ -186,6 +205,13 @@ private:
     std::atomic<float> volumeDb_{0.0f};       ///< Volumen maestro en dB
     std::atomic<float> volumeLinear_{1.0f};   ///< Factor lineal pre-calculado
     std::atomic<float> splOffset_{93.0f};     ///< Offset dBFS → dB SPL (93 para mic celular)
+    /// Threshold del MPO en dB SPL actualizado en runtime via
+    /// setMpoThresholdDbSpl(). Se conserva en dB SPL para poder re-derivar
+    /// el valor lineal del MPO cuando cambia splOffset_ (calibración del
+    /// micrófono). Default: NaN ⇒ usar el threshold lineal fijo configurado
+    /// en init() (0.85 ≈ -1.4 dBFS). Cuando es finito, manda y se aplica
+    /// como min(linear(threshold,offset), 0.85).
+    std::atomic<float> mpoThresholdDbSpl_{std::numeric_limits<float>::quiet_NaN()};
     std::atomic<bool> autoClassifyEnabled_{true}; ///< Clasificación automática habilitada
     std::atomic<bool> nrBypassed_{false};     ///< true: saltear NR Wiener (un denoiser externo lo reemplaza)
 

@@ -16,7 +16,12 @@ import '../widgets/mhl_mode_toggle.dart';
 import '../widgets/gain_comparison_widget.dart';
 import '../widgets/gain_detail_view.dart';
 import '../widgets/experience_months_picker.dart';
+import '../widgets/operating_mode_banner.dart';
+import '../widgets/clinical_info_chips.dart';
+import '../widgets/gain_scale_slider.dart';
+import '../widgets/manual_eq_overlay.dart';
 import '../widgets/safety_warning_widget.dart';
+import '../widgets/stale_preset_list.dart';
 import '../../domain/entities/prescription_mode.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
@@ -261,6 +266,40 @@ class _StatusBar extends StatelessWidget {
                       },
                     ),
                   ),
+                  // Botón de EQ manual (sliders por banda + reset) — hallazgo A-9.
+                  // Solo disponible mientras la amplificación está activa para que
+                  // exista un bundle vivo sobre el cual aplicar el delta.
+                  if (state is AmplificationActive)
+                    Builder(
+                      builder: (context) => IconButton(
+                        icon: const Icon(Icons.equalizer, color: Colors.white70, size: 21),
+                        tooltip: 'EQ manual',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                        onPressed: () {
+                          final bloc = context.read<AmplificationBloc>();
+                          showModalBottomSheet<void>(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: const Color(0xFF1a2332),
+                            shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(16),
+                              ),
+                            ),
+                            builder: (_) => BlocProvider.value(
+                              value: bloc,
+                              child: const SafeArea(
+                                top: false,
+                                child: SingleChildScrollView(
+                                  child: ManualEqOverlay(),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                   // Botón de configuración de audiograma (Req 4.1, 4.3)
                   Builder(
                     builder: (context) => IconButton(
@@ -405,6 +444,18 @@ class _ActiveView extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       child: Column(
         children: [
+          // Banner de Modo Amplificador (Req 13.10, 5.6)
+          const OperatingModeBanner(),
+          // Chips clínicos: LossType + PrescriptionMode (visibles en Modo
+          // Diagnóstico con bundle activo). El widget se auto-suscribe al
+          // AmplificationBloc con buildWhen filtrando por bundle, lossType
+          // y prescriptionMode (hallazgo A-9).
+          const ClinicalInfoChips(),
+          // Banner de presets personalizados obsoletos (audiograma cambió
+          // tras crear el preset). Permite regenerarlos in-situ. Si no hay
+          // presets stale, se renderiza como SizedBox.shrink (hallazgo A-9).
+          const StalePresetList(),
+          const SizedBox(height: 8),
           // Botón grande de desactivación (≥ 30% del área visible) — Req 5.1
           _ActivationButton(
             active: true,
@@ -471,6 +522,11 @@ class _ActiveView extends StatelessWidget {
           const SizedBox(height: 16),
           // Slider de volumen (-20 a +10 dB) — Req 5.3
           _VolumeSlider(volumeDb: state.volumeDb),
+          const SizedBox(height: 8),
+          // Slider de intensidad de amplificación (gainScale) — Req 13.5, 13.6, 13.11
+          // Visible sólo en Modo Amplificador (el widget se auto-oculta en
+          // Modo Diagnóstico vía BlocBuilder + operatingMode interno).
+          const GainScaleSlider(),
           const SizedBox(height: 16),
           // Medidor de nivel de entrada (estilo VU) — Req 5.4
           _InputLevelMeter(levelDb: state.inputLevelDb),

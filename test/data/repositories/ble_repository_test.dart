@@ -114,11 +114,15 @@ void main() {
 
       final serialized = command.serialize();
 
-      expect(serialized.length, equals(4 + 45));
+      // Header (4 bytes) + payload completo (60 bytes). El protocolo BLE
+      // permite payloads multi-byte (lo verifica el test de 300 bytes
+      // más abajo); el clamp por MTU es responsabilidad de la capa de
+      // transporte, no de la serialización.
+      expect(serialized.length, equals(4 + 60));
       expect(serialized[2], equals(0)); // payload_len high byte
-      expect(serialized[3], equals(45)); // payload_len low byte
+      expect(serialized[3], equals(60)); // payload_len low byte
       // Verificar que el payload se copió correctamente
-      for (int i = 0; i < 45; i++) {
+      for (int i = 0; i < 60; i++) {
         expect(serialized[4 + i], equals(i));
       }
     });
@@ -312,9 +316,39 @@ void main() {
     test('setEqGains lanza excepción cuando está desconectado', () async {
       final repo = BleRepository();
 
+      // 12 ganancias válidas (rango [0, 50] dB) para pasar la validación
+      // de protocolo y llegar a la verificación de conexión.
       expect(
-        () => repo.setEqGains([17, 20, 22, 25, 27, 30, 32, 37, 42]),
+        () => repo.setEqGains(
+          const [17, 20, 22, 25, 27, 30, 32, 37, 42, 30, 25, 20],
+        ),
         throwsA(isA<BleDisconnectedException>()),
+      );
+
+      repo.dispose();
+    });
+
+    test('setEqGains lanza ArgumentError cuando length != 12', () async {
+      final repo = BleRepository();
+
+      // 9 elementos: la longitud no coincide con las 12 bandas del firmware.
+      expect(
+        () => repo.setEqGains(const [17, 20, 22, 25, 27, 30, 32, 37, 42]),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      repo.dispose();
+    });
+
+    test('setEqGains lanza ArgumentError cuando una ganancia está fuera de [0, 50]', () async {
+      final repo = BleRepository();
+
+      // Banda 0 con valor 51 (fuera del rango [0, 50] dB).
+      expect(
+        () => repo.setEqGains(
+          const [51, 20, 22, 25, 27, 30, 32, 37, 42, 30, 25, 20],
+        ),
+        throwsA(isA<ArgumentError>()),
       );
 
       repo.dispose();
@@ -337,6 +371,55 @@ void main() {
       expect(
         () => repo.setProfile(1),
         throwsA(isA<BleDisconnectedException>()),
+      );
+
+      repo.dispose();
+    });
+
+    test('setMpoThreshold(80) pasa la validación de rango clínico [80, 132]', () async {
+      final repo = BleRepository();
+
+      // 80 está dentro del rango clínico documentado en
+      // AudiogramDrivenBundle.mpoMaxDbSpl y MpoDeriver.
+      // Como no hay conexión, sendCommand lanza BleDisconnectedException
+      // (no ArgumentError), lo que prueba que pasó la validación.
+      expect(
+        () => repo.setMpoThreshold(80),
+        throwsA(isA<BleDisconnectedException>()),
+      );
+
+      repo.dispose();
+    });
+
+    test('setMpoThreshold(132) pasa la validación de rango clínico [80, 132]', () async {
+      final repo = BleRepository();
+
+      // 132 es el límite superior clínico (AudiogramDrivenBundle.mpoMaxDbSpl).
+      expect(
+        () => repo.setMpoThreshold(132),
+        throwsA(isA<BleDisconnectedException>()),
+      );
+
+      repo.dispose();
+    });
+
+    test('setMpoThreshold(79) lanza ArgumentError (fuera del rango [80, 132])', () async {
+      final repo = BleRepository();
+
+      expect(
+        () => repo.setMpoThreshold(79),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      repo.dispose();
+    });
+
+    test('setMpoThreshold(133) lanza ArgumentError (fuera del rango [80, 132])', () async {
+      final repo = BleRepository();
+
+      expect(
+        () => repo.setMpoThreshold(133),
+        throwsA(isA<ArgumentError>()),
       );
 
       repo.dispose();

@@ -46,6 +46,13 @@ class SmartPreset {
   /// Confianza con la que se generó el preset, propagada del análisis.
   final double confidence;
 
+  /// Índices de banda (0..11) cuya ganancia objetivo excedió el techo
+  /// de headroom MPO por ≥ 0.1 dB y fue recortada por el clamp por banda.
+  /// Lista vacía si ninguna banda tocó el clamp. La UI puede usar este
+  /// metadata para resaltar al usuario que ciertas bandas están limitadas
+  /// por el MPO del paciente (Req 10.6).
+  final List<int> clampedBands;
+
   const SmartPreset({
     required this.name,
     required this.isPersonalized,
@@ -58,6 +65,7 @@ class SmartPreset {
     required this.tnrEnabled,
     required this.volumeDeltaDb,
     required this.confidence,
+    this.clampedBands = const <int>[],
   });
 
   SmartPreset copyWith({
@@ -72,6 +80,7 @@ class SmartPreset {
     bool? tnrEnabled,
     double? volumeDeltaDb,
     double? confidence,
+    List<int>? clampedBands,
   }) {
     return SmartPreset(
       name: name ?? this.name,
@@ -85,6 +94,7 @@ class SmartPreset {
       tnrEnabled: tnrEnabled ?? this.tnrEnabled,
       volumeDeltaDb: volumeDeltaDb ?? this.volumeDeltaDb,
       confidence: confidence ?? this.confidence,
+      clampedBands: clampedBands ?? this.clampedBands,
     );
   }
 
@@ -100,6 +110,7 @@ class SmartPreset {
         'tnrEnabled': tnrEnabled,
         'volumeDeltaDb': volumeDeltaDb,
         'confidence': confidence,
+        'clampedBands': clampedBands,
       };
 
   static SmartPreset fromJson(Map<dynamic, dynamic> json) {
@@ -108,6 +119,10 @@ class SmartPreset {
     final cls = (classIdx >= 0 && classIdx < SceneClass.values.length)
         ? SceneClass.values[classIdx]
         : SceneClass.unknown;
+    final rawClamped = json['clampedBands'];
+    final clamped = rawClamped is List
+        ? rawClamped.map((e) => (e as num).toInt()).toList(growable: false)
+        : const <int>[];
     return SmartPreset(
       name: json['name'] as String,
       isPersonalized: json['isPersonalized'] as bool,
@@ -120,6 +135,7 @@ class SmartPreset {
       tnrEnabled: json['tnrEnabled'] as bool,
       volumeDeltaDb: (json['volumeDeltaDb'] as num).toDouble(),
       confidence: (json['confidence'] as num).toDouble(),
+      clampedBands: clamped,
     );
   }
 }

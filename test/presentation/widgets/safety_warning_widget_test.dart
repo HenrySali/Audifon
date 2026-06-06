@@ -15,11 +15,23 @@ class MockAmplificationBloc
     extends MockBloc<AmplificationEvent, AmplificationState>
     implements AmplificationBloc {}
 
+/// Reloj manual para los tests del widget. `tester.pump(Duration)` solo
+/// avanza el reloj del test framework; el widget compara `DateTime.now()`
+/// real, así que sin un reloj mock las diferencias temporales del widget
+/// quedan en ~0 ms y el banner nunca aparece.
+class TestClock {
+  DateTime _now = DateTime(2024, 1, 1, 12, 0, 0);
+  DateTime now() => _now;
+  void advance(Duration d) => _now = _now.add(d);
+}
+
 void main() {
   late MockAmplificationBloc mockBloc;
+  late TestClock clock;
 
   setUp(() {
     mockBloc = MockAmplificationBloc();
+    clock = TestClock();
   });
 
   Widget buildTestWidget({double thresholdDbSpl = 85.0}) {
@@ -30,12 +42,29 @@ void main() {
           thresholdDbSpl: thresholdDbSpl,
           showAfter: const Duration(seconds: 5),
           hideAfter: const Duration(seconds: 2),
+          nowProvider: clock.now,
           child: const Scaffold(
             body: Center(child: Text('Main Content')),
           ),
         ),
       ),
     );
+  }
+
+  /// Avanza el reloj mock y bombea el frame del widget en bloques de
+  /// 500 ms (el período del Timer.periodic interno) hasta cubrir el
+  /// total deseado.
+  Future<void> advanceClockAndPump(
+    WidgetTester tester,
+    Duration total,
+  ) async {
+    const tick = Duration(milliseconds: 500);
+    var elapsed = Duration.zero;
+    while (elapsed < total) {
+      clock.advance(tick);
+      await tester.pump(tick);
+      elapsed += tick;
+    }
   }
 
   group('SafetyWarningWidget', () {
@@ -75,17 +104,8 @@ void main() {
 
     testWidgets('shows warning after 5 seconds above threshold',
         (tester) async {
-      // Start with level above threshold
-      when(() => mockBloc.state).thenReturn(const AmplificationActive(
-        inputLevelDb: 90.0,
-        activeProfile: 'Conversación',
-        volumeDb: 0.0,
-        headphonesConnected: true,
-      ));
-
-      await tester.pumpWidget(buildTestWidget());
-
-      // Emit state with high level to trigger the BlocListener
+      // Setup mock state and stream BEFORE pumpWidget so the
+      // BlocListener picks up the high-level event on the first build.
       whenListen(
         mockBloc,
         Stream.fromIterable([
@@ -107,11 +127,10 @@ void main() {
       await tester.pumpWidget(buildTestWidget());
       await tester.pump(); // Process the stream event
 
-      // Wait for the evaluation timer (500ms intervals) + 5 seconds
-      // The timer evaluates every 500ms, so after 5.5s it should trigger
-      for (int i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 500));
-      }
+      // Wait for the evaluation timer (500ms intervals) + 5 seconds.
+      // The widget compares wall-clock timestamps via nowProvider, so we
+      // also have to advance the test clock alongside the framework pump.
+      await advanceClockAndPump(tester, const Duration(seconds: 6));
 
       // Now the warning should be visible
       expect(
@@ -150,9 +169,7 @@ void main() {
       await tester.pump();
 
       // Wait for warning to appear
-      for (int i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 500));
-      }
+      await advanceClockAndPump(tester, const Duration(seconds: 6));
 
       // Verify dismiss button (close icon) exists
       expect(find.byIcon(Icons.close), findsOneWidget);
@@ -188,9 +205,7 @@ void main() {
       await tester.pump();
 
       // Wait for warning to appear
-      for (int i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 500));
-      }
+      await advanceClockAndPump(tester, const Duration(seconds: 6));
 
       // Tap dismiss button
       await tester.tap(find.byIcon(Icons.close));
@@ -234,9 +249,7 @@ void main() {
       await tester.pump();
 
       // Wait for warning to appear
-      for (int i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 500));
-      }
+      await advanceClockAndPump(tester, const Duration(seconds: 6));
 
       // Main content should still be visible even with warning showing
       expect(find.text('Main Content'), findsOneWidget);
@@ -277,9 +290,7 @@ void main() {
       await tester.pump();
 
       // Wait for warning to appear
-      for (int i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 500));
-      }
+      await advanceClockAndPump(tester, const Duration(seconds: 6));
 
       expect(
         find.text('⚠️ Nivel de salida alto — Considere reducir el volumen'),

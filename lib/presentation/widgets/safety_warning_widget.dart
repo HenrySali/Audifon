@@ -37,12 +37,17 @@ class SafetyWarningWidget extends StatefulWidget {
   /// Default: 2 segundos.
   final Duration hideAfter;
 
+  /// Proveedor de tiempo actual. Inyectable para tests.
+  /// Default: `DateTime.now` (reloj real del sistema).
+  final DateTime Function() nowProvider;
+
   const SafetyWarningWidget({
     super.key,
     required this.child,
     this.thresholdDbSpl = 85.0,
     this.showAfter = const Duration(seconds: 5),
     this.hideAfter = const Duration(seconds: 2),
+    this.nowProvider = DateTime.now,
   });
 
   @override
@@ -100,7 +105,7 @@ class _SafetyWarningWidgetState extends State<SafetyWarningWidget>
 
   /// Procesa una nueva lectura de nivel del BLoC.
   void _onLevelUpdate(double inputLevelDb) {
-    final now = DateTime.now();
+    final now = widget.nowProvider();
 
     if (inputLevelDb > widget.thresholdDbSpl) {
       // Nivel por encima del umbral.
@@ -120,7 +125,7 @@ class _SafetyWarningWidgetState extends State<SafetyWarningWidget>
   /// Evalúa si se debe mostrar u ocultar la advertencia basándose
   /// en la duración acumulada por encima/debajo del umbral.
   void _evaluateWarningState() {
-    final now = DateTime.now();
+    final now = widget.nowProvider();
 
     if (!_showWarning && !_dismissed && _aboveThresholdSince != null) {
       // Verificar si llevamos > 5 segundos por encima del umbral.
@@ -173,7 +178,7 @@ class _SafetyWarningWidgetState extends State<SafetyWarningWidget>
   /// Descarta la advertencia manualmente. Reaparece si la condición persiste.
   void _dismissWarning() {
     _dismissed = true;
-    _aboveThresholdSince = DateTime.now(); // Reset timer for reappearance
+    _aboveThresholdSince = widget.nowProvider(); // Reset timer for reappearance
     _hideWarningBanner();
   }
 

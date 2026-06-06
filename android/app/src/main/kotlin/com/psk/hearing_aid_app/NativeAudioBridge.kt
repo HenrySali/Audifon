@@ -201,6 +201,25 @@ class NativeAudioBridge {
     }
 
     /**
+     * Actualiza el threshold del MPO (Maximum Power Output) en dB SPL en
+     * runtime, sin reiniciar el motor de audio.
+     *
+     * El motor nativo convierte dB SPL → lineal usando el splOffset actual:
+     *   linear = pow(10, (thresholdDbSpl - splOffset) / 20)
+     * y lo aplica al [MpoLimiter] del [DspPipeline].
+     *
+     * Thread-safe (lock-free vía std::atomic dentro del pipeline).
+     * La validación de rango clínico [80, 132] dB SPL la hace el caller Dart.
+     *
+     * Implementa Requirement 3 de la spec `audiogram-driven-presets`.
+     *
+     * @param thresholdDbSpl Threshold en dB SPL (rango clínico [80, 132])
+     */
+    fun setMpoThresholdDbSpl(thresholdDbSpl: Float) {
+        nativeSetMpoThresholdDbSpl(thresholdDbSpl)
+    }
+
+    /**
      * Obtiene el último nivel de entrada medido PRE-EQ.
      * Puede llamarse desde cualquier hilo.
      *
@@ -275,6 +294,8 @@ class NativeAudioBridge {
     private external fun nativeSetAutoClassifyEnabled(enabled: Boolean)
 
     private external fun nativeSetSplOffset(offset: Float)
+
+    private external fun nativeSetMpoThresholdDbSpl(thresholdDbSpl: Float)
 
     private external fun nativeGetInputLevel(): Float
 

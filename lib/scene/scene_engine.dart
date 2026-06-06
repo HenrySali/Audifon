@@ -1,23 +1,33 @@
-/// Smart Scene Engine — Fase 3.
+/// Smart Scene Engine — Fase 3 (refactor audiogram-driven-presets task 6.2).
 ///
 /// Fachada para la UI:
 ///   - Carga / guarda el toggle "personalizar con audiograma" en Hive.
 ///   - Lanza una sesión de análisis (`analyze`) que polea el `SceneAnalyzer`
 ///     nativo durante ~2.5 s y resuelve la clase dominante.
-///   - `apply()` arma el `SmartPreset` (genérico o personalizado según
-///     toggle + audiograma) y lo despacha al `AmplificationBloc`.
+///   - Construye el [AudiogramDrivenBundle] desde el audiograma medido —
+///     o desde [Audiogram.defaultAudiogram] si no hay uno medido — y
+///     genera el [SmartPreset] sobre esa base. Si se está usando el
+///     audiograma default, expone el flag por la stream
+///     [usingDefaultAudiogramStream] para que la UI muestre el hint
+///     "Audiograma no medido…" (Req 7.8).
+///   - `apply()` despacha el preset al `AmplificationBloc`.
 ///
 /// Para no romper la app si Hive no está abierto (entornos de test) las
 /// operaciones de persistencia son tolerantes a fallos.
 ///
-/// Validates: Requirements 1.6, 4.1, 4.2, 4.3, 4.5, 5.1, 5.2
+/// Validates: Requirements 7.1, 7.2, 7.3, 7.5, 7.6, 7.8, 7.9
 
 import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 
+import '../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import '../domain/audiogram_driven_presets/bundle_builder.dart';
+import '../domain/audiogram_driven_presets/environment_profile_mapper.dart';
 import '../domain/entities/audiogram.dart';
+import '../domain/entities/environment_profile.dart';
+import '../domain/entities/prescription_mode.dart';
 import '../domain/entities/wdrc_params.dart';
 import '../presentation/bloc/amplification_bloc.dart';
 import '../presentation/bloc/amplification_event.dart';
@@ -41,6 +51,18 @@ class SceneAnalysisResult {
   final Map<SceneClass, int> distribution;
   final SmartPreset preset;
 
+  /// `true` cuando el bundle base se construyó usando
+  /// [Audiogram.defaultAudiogram] porque no había audiograma medido
+  /// disponible. La UI puede usarlo para mostrar el hint
+  /// "Audiograma no medido…" (Req 7.8).
+  final bool usedDefaultAudiogram;
+
+  /// Bundle audiograma-derivado usado como base del preset. Lo
+  /// exponemos para que la UI o herramientas de diagnóstico puedan
+  /// inspeccionar las ganancias / MPO / NR base sin tener que
+  /// reconstruirlo.
+  final AudiogramDrivenBundle bundle;
+
   const SceneAnalysisResult({
     required this.sceneClass,
     required this.confidence,
@@ -49,6 +71,8 @@ class SceneAnalysisResult {
     required this.sampleCount,
     required this.distribution,
     required this.preset,
+    required this.usedDefaultAudiogram,
+    required this.bundle,
   });
 }
 
@@ -74,16 +98,29 @@ class SceneEngine {
   final SceneGenericPresetGenerator _genericGenerator;
   final ScenePersonalizedPresetGenerator _personalizedGenerator;
   final SceneRecorder _recorder;
+  final BundleBuilder _bundleBuilder;
 
   bool _personalize = false;
   bool _settingsLoaded = false;
   bool _personalizeFromUser = false;
+
+  /// Stream que emite `true` cuando el último `analyze()` usó el
+  /// audiograma default y `false` cuando usó uno medido. La UI se
+  /// suscribe para mostrar / ocultar el hint "Audiograma no medido…"
+  /// (Req 7.8).
+  final StreamController<bool> _usingDefaultCtrl =
+      StreamController<bool>.broadcast();
+
+  /// Último valor emitido por [usingDefaultAudiogramStream]. La UI lo
+  /// consulta al montarse para no esperar al próximo `analyze()`.
+  bool _lastUsingDefault = false;
 
   SceneEngine({
     MethodChannel? channel,
     SceneGenericPresetGenerator? genericGenerator,
     ScenePersonalizedPresetGenerator? personalizedGenerator,
     SceneRecorder? recorder,
+    BundleBuilder? bundleBuilder,
     this.pollInterval = const Duration(milliseconds: 100),
     this.sessionTimeout = const Duration(seconds: 5),
     this.minSamples = 10,
@@ -93,11 +130,20 @@ class SceneEngine {
             genericGenerator ?? SceneGenericPresetGenerator(),
         _personalizedGenerator = personalizedGenerator ??
             ScenePersonalizedPresetGenerator(),
-        _recorder = recorder ?? SceneRecorder();
+        _recorder = recorder ?? SceneRecorder(),
+        _bundleBuilder = bundleBuilder ?? BundleBuilder();
 
   /// Acceso al recorder para que la UI pueda leer historial / actualizar
   /// feedback.
   SceneRecorder get recorder => _recorder;
+
+  /// Emite `true` cuando el último análisis usó el audiograma default,
+  /// `false` cuando usó uno medido. Stream broadcast: la UI puede
+  /// suscribirse en cualquier momento (Req 7.8).
+  Stream<bool> get usingDefaultAudiogramStream => _usingDefaultCtrl.stream;
+
+  /// Último valor emitido por [usingDefaultAudiogramStream].
+  bool get isUsingDefaultAudiogram => _lastUsingDefault;
 
   /// Lee el toggle persistido. Idempotente y silencioso en errores.
   /// Tras el primer `loadSettings`, `wasPersonalizeUserSet` indica si hay
@@ -147,15 +193,28 @@ class SceneEngine {
   /// `sessionTimeout`, requiere mínimo `minSamples` válidos, y resuelve la
   /// clase dominante.
   ///
-  /// Genera el `SmartPreset` apropiado:
-  ///   - Si el toggle está ON y se pasa `audiogram`, usa el generador
-  ///     personalizado (NAL-NL2 + deltas).
-  ///   - Si el toggle está OFF o no hay audiograma, usa el generador
-  ///     genérico (preset clínico predefinido + tabla de tuning).
+  /// Construye siempre un [AudiogramDrivenBundle] como base del preset
+  /// (Req 7.1, 7.2, 7.3):
+  /// - Si [audiogram] está presente, lo usa.
+  /// - Si es `null`, cae a [Audiogram.defaultAudiogram] y emite por
+  ///   [usingDefaultAudiogramStream] el flag `true` para que la UI
+  ///   muestre el hint (Req 7.8).
+  ///
+  /// El toggle `personalize_with_audiogram` ahora controla SOLO si los
+  /// deltas por escena se aplican encima del bundle (ON →
+  /// [ScenePersonalizedPresetGenerator]) o si el EQ se queda en la base
+  /// audiograma-derivada con sólo el tuning de escena (OFF →
+  /// [SceneGenericPresetGenerator]). En ambos casos el bundle base
+  /// viene del audiograma (Req 7.5, 7.6).
+  ///
+  /// El [profile] (opcional) determina el [PrescriptionMode] usado al
+  /// construir el bundle vía [EnvironmentProfileMapper.modeFor]. Si es
+  /// `null`, se usa [PrescriptionMode.quiet] como default seguro.
   ///
   /// Lanza `SceneEngineException` si no logra acumular suficientes muestras.
   Future<SceneAnalysisResult> analyze({
     Audiogram? audiogram,
+    EnvironmentProfile? profile,
     DateTime Function()? clock,
   }) async {
     final session = SceneSession(
@@ -182,16 +241,42 @@ class SceneEngine {
     }
 
     final result = session.resolve();
-    final usePersonalized = _personalize && audiogram != null;
-    final preset = usePersonalized
+
+    // Construir el bundle base SIEMPRE desde un audiograma (medido o
+    // default). El toggle `personalize` ya no decide si construimos el
+    // bundle, sólo decide si aplicamos los deltas por escena al EQ.
+    final usedDefault = audiogram == null;
+    final baseAudiogram = audiogram ?? Audiogram.defaultAudiogram();
+    final prescriptionMode = profile != null
+        ? EnvironmentProfileMapper.modeFor(profile)
+        : PrescriptionMode.quiet;
+
+    final bundle = _bundleBuilder.buildFromAudiogram(
+      baseAudiogram,
+      mode: prescriptionMode,
+      derivedAt: tickClock().toUtc(),
+    );
+
+    // Notificar a la UI sobre el origen del audiograma (Req 7.8).
+    if (usedDefault != _lastUsingDefault || !_usingDefaultEverEmitted) {
+      _lastUsingDefault = usedDefault;
+      _usingDefaultEverEmitted = true;
+      if (!_usingDefaultCtrl.isClosed) {
+        _usingDefaultCtrl.add(usedDefault);
+      }
+    }
+
+    final preset = _personalize
         ? _personalizedGenerator.generate(
-            audiogram: audiogram,
+            bundle: bundle,
             sceneClass: result.dominantClass,
             snapshot: result.lastSnapshot,
             confidence: result.averageConfidence,
           )
         : _genericGenerator.generate(
-            result.dominantClass,
+            bundle: bundle,
+            sceneClass: result.dominantClass,
+            snapshot: result.lastSnapshot,
             confidence: result.averageConfidence,
           );
 
@@ -199,10 +284,12 @@ class SceneEngine {
       sceneClass: result.dominantClass,
       confidence: result.averageConfidence,
       lastSnapshot: result.lastSnapshot,
-      wasPersonalized: usePersonalized,
+      wasPersonalized: _personalize,
       sampleCount: result.sampleCount,
       distribution: result.distribution,
       preset: preset,
+      usedDefaultAudiogram: usedDefault,
+      bundle: bundle,
     );
   }
 
@@ -269,6 +356,7 @@ class SceneEngine {
         'tnrEnabled': preset.tnrEnabled,
         'volumeDeltaDb': preset.volumeDeltaDb,
         'confidence': preset.confidence,
+        'clampedBands': preset.clampedBands,
         'savedAt': DateTime.now().toIso8601String(),
       });
       await bloc.settingsRepository.setLastNrLevel(preset.nrLevel);
@@ -291,9 +379,18 @@ class SceneEngine {
   SceneRecord? get lastRecord => _lastRecord;
   SceneRecord? _lastRecord;
 
+  /// Cierra el stream broadcast. Útil en tests para evitar leaks.
+  void dispose() {
+    if (!_usingDefaultCtrl.isClosed) {
+      _usingDefaultCtrl.close();
+    }
+  }
+
   // ────────────────────────────────────────────────────────────────────
   // Internos
   // ────────────────────────────────────────────────────────────────────
+
+  bool _usingDefaultEverEmitted = false;
 
   Future<SceneSnapshot?> _pollSnapshot() async {
     try {

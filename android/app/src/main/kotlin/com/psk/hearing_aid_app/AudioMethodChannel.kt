@@ -154,6 +154,7 @@ class AudioMethodChannel(
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
                 "updateAutoClassify" -> handleUpdateAutoClassify(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
+                "setMpoThresholdDbSpl" -> handleSetMpoThresholdDbSpl(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
                 "getDeviceInfo" -> handleGetDeviceInfo(result)
                 // Spectrum Analyzer
@@ -236,6 +237,13 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetDnnIsActive()
                     result.success(active)
                 }
+                // ─── Calibración de hardware (C-3, native-calibration-handlers) ─
+                // Implementación real de los 3 handlers con AudioRecord directo
+                // (no pasa por el pipeline DSP del proyecto). Persistencia +
+                // audit trail SHA-256 ocurren en el lado Dart.
+                "getInputLevel" -> handleGetInputLevel(call, result)
+                "calibrateMicrophone" -> handleCalibrateMicrophone(call, result)
+                "calibrateHeadphones" -> handleCalibrateHeadphones(call, result)
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
@@ -448,6 +456,43 @@ class AudioMethodChannel(
     }
 
     /**
+     * Actualiza el threshold del MPO en dB SPL en runtime sin reiniciar el motor.
+     *
+     * El motor nativo convierte dB SPL → lineal usando el splOffset actual:
+     *   linear = pow(10, (thresholdDbSpl - splOffset) / 20)
+     * y lo aplica al MpoLimiter del DspPipeline.
+     *
+     * Argumentos: { "thresholdDbSpl": Double } (rango clínico [80.0, 132.0])
+     *
+     * La validación clínica del rango se hace en el lado Dart (AudioBridgeImpl).
+     * Aquí solo se verifica la presencia y finitud del argumento.
+     *
+     * Implementa Requirement 3 de la spec `audiogram-driven-presets`.
+     */
+    private fun handleSetMpoThresholdDbSpl(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val thresholdDbSpl = call.argument<Double>("thresholdDbSpl")
+            ?: return result.error(
+                "INVALID_ARGS",
+                "Missing 'thresholdDbSpl' argument",
+                null,
+            )
+
+        if (thresholdDbSpl.isNaN() || thresholdDbSpl.isInfinite()) {
+            return result.error(
+                "INVALID_ARGS",
+                "thresholdDbSpl must be finite, got $thresholdDbSpl",
+                null,
+            )
+        }
+
+        nativeBridge.setMpoThresholdDbSpl(thresholdDbSpl.toFloat())
+        result.success(null)
+    }
+
+    /**
      * Devuelve información de diagnóstico del engine nativo.
      * Se muestra en la UI para debugging sin ADB.
      */
@@ -557,5 +602,364 @@ class AudioMethodChannel(
         currentState = state
         stateEventSink?.success(state)
         Log.d(TAG, "State emitted: $state")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Handlers de calibración nativa (spec: native-calibration-handlers)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Spec: native-calibration-handlers, Requirement 1.
+     *
+     * Lee 100 ms de audio del [AudioRecord] PRE-EQ (no pasa por el pipeline
+     * DSP del proyecto), calcula RMS dBFS, opcionalmente suma `micOffsetDb`
+     * recibido como argumento desde Dart para reportar dB SPL.
+     */
+    private fun handleGetInputLevel(call: MethodCall, result: MethodChannel.Result) {
+        Log.i(TAG, "getInputLevel: START")
+        val micOffsetDb = call.argument<Double>("micOffsetDb")
+        val capture = CalibrationAudioCapture.create(context)
+        if (capture == null) {
+            Log.e(TAG, "getInputLevel: AUDIO_RECORD_FAILED")
+            result.error(
+                "AUDIO_RECORD_FAILED",
+                "No se pudo abrir AudioRecord. Verificá permiso RECORD_AUDIO " +
+                    "y que el micrófono no esté ocupado por otra app.",
+                null,
+            )
+            return
+        }
+        try {
+            val dbfs = capture.readWindowRmsDbfs(durationMs = 100)
+            val response = mutableMapOf<String, Any?>(
+                "dbfs" to dbfs,
+                "durationMs" to 100,
+                "sampleRate" to CalibrationAudioCapture.SAMPLE_RATE_HZ,
+                "calibrated" to (micOffsetDb != null),
+                "micOffsetDb" to micOffsetDb,
+                "dbSpl" to micOffsetDb?.let { it + dbfs },
+            )
+            Log.i(
+                TAG,
+                "getInputLevel: END dbfs=$dbfs " +
+                    "calibrated=${micOffsetDb != null} dbSpl=${response["dbSpl"]}"
+            )
+            result.success(response)
+        } catch (e: Throwable) {
+            Log.e(TAG, "getInputLevel: AUDIO_RECORD_READ_FAILED", e)
+            result.error(
+                "AUDIO_RECORD_READ_FAILED",
+                e.message ?: "AudioRecord.read falló",
+                e.stackTraceToString(),
+            )
+        } finally {
+            capture.release()
+        }
+    }
+
+    /**
+     * Spec: native-calibration-handlers, Requirement 2.
+     *
+     * Captura 5 segundos (50 ventanas de 100 ms, descarta primeras 5),
+     * valida estabilidad (`std ≤ 1.0`) y rango (`avg ∈ [-40, -10]`),
+     * calcula `mic_offset_db = referenceSplLevel − avg_dbfs`.
+     */
+    private fun handleCalibrateMicrophone(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        Log.i(TAG, "calibrateMicrophone: START")
+        val refSpl = call.argument<Double>("referenceSplLevel") ?: 94.0
+        val calibratorModel = call.argument<String>("calibratorModel") ?: "unknown"
+        val operatorId = call.argument<String>("operatorId") ?: "unknown"
+        val expectedFreq = call.argument<Double>("expectedFreqHz") ?: 1000.0
+
+        val capture = CalibrationAudioCapture.create(context)
+        if (capture == null) {
+            Log.e(TAG, "calibrateMicrophone: AUDIO_RECORD_FAILED")
+            result.error(
+                "AUDIO_RECORD_FAILED",
+                "No se pudo abrir AudioRecord para calibración.",
+                null,
+            )
+            return
+        }
+        try {
+            Log.i(TAG, "calibrateMicrophone: AUDIO_RECORD_OPENED")
+            Log.i(TAG, "calibrateMicrophone: CAPTURE_BEGIN (50 windows × 100 ms)")
+            val windows = capture.readManyWindowsRmsDbfs(
+                durationMs = 100,
+                count = 50,
+                dropFirst = 5,
+            )
+            val rmsAvg = windows.average()
+            val rmsStd = windows.populationStandardDeviation()
+            Log.i(
+                TAG,
+                "calibrateMicrophone: CAPTURE_END rmsAvg=$rmsAvg rmsStd=$rmsStd " +
+                    "windows=${windows.size}"
+            )
+
+            if (rmsStd > 1.0) {
+                Log.e(
+                    TAG,
+                    "calibrateMicrophone: VALIDATION_FAIL UNSTABLE_SIGNAL " +
+                        "(rmsStd=$rmsStd > 1.0)",
+                )
+                result.error(
+                    "UNSTABLE_SIGNAL",
+                    "Señal inestable: desviación estándar de ${"%.3f".format(rmsStd)} " +
+                        "dB excede el límite de 1.0 dB. " +
+                        "Verificá que el calibrador esté firme contra el micrófono " +
+                        "y que no haya ruido ambiental excesivo.",
+                    null,
+                )
+                return
+            }
+            if (rmsAvg !in -40.0..-10.0) {
+                Log.e(
+                    TAG,
+                    "calibrateMicrophone: VALIDATION_FAIL LEVEL_OUT_OF_RANGE " +
+                        "(rmsAvg=$rmsAvg ∉ [-40, -10])",
+                )
+                result.error(
+                    "LEVEL_OUT_OF_RANGE",
+                    "Nivel fuera de rango: ${"%.2f".format(rmsAvg)} dBFS no está " +
+                        "en [-40, -10]. Verificá que el calibrador esté encendido " +
+                        "y produciendo el tono de referencia (1 kHz @ 94 dB SPL).",
+                    null,
+                )
+                return
+            }
+
+            val micOffset = refSpl - rmsAvg
+            val confidence = if (rmsStd < 0.5) 1.0 else 0.7
+            Log.i(
+                TAG,
+                "calibrateMicrophone: VALIDATION_PASS OFFSET_COMPUTED " +
+                    "($micOffset dB, confidence=$confidence)"
+            )
+
+            val response = mapOf<String, Any?>(
+                "splOffset" to micOffset,
+                "confidenceLevel" to confidence,
+                "method" to "external_ref",
+                "calibratedAtMs" to System.currentTimeMillis(),
+                "deviceModel" to Build.MODEL,
+                "rmsAvgDbfs" to rmsAvg,
+                "rmsStdDbfs" to rmsStd,
+                "referenceSplLevel" to refSpl,
+                "calibratorModel" to calibratorModel,
+                "operatorId" to operatorId,
+                "expectedFreqHz" to expectedFreq,
+                "windowsUsed" to windows.size,
+            )
+            Log.i(TAG, "calibrateMicrophone: END")
+            result.success(response)
+        } catch (e: Throwable) {
+            Log.e(TAG, "calibrateMicrophone: AUDIO_RECORD_READ_FAILED", e)
+            result.error(
+                "AUDIO_RECORD_READ_FAILED",
+                e.message ?: "AudioRecord.read falló durante calibración",
+                e.stackTraceToString(),
+            )
+        } finally {
+            capture.release()
+        }
+    }
+
+    /**
+     * Spec: native-calibration-handlers, Requirement 3.
+     *
+     * Reproduce 12 tonos puros a -20 dBFS por el auricular (vía AudioTrack)
+     * y captura simultáneamente con AudioRecord; calcula tabla de offsets
+     * por banda. Requiere `mic_offset_db` previamente computado y pasado
+     * como argumento desde Dart.
+     */
+    private fun handleCalibrateHeadphones(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        Log.i(TAG, "calibrateHeadphones: START")
+        val headphoneId = call.argument<String>("headphoneId")
+            ?: return result.error(
+                "INVALID_ARGS",
+                "Falta argumento 'headphoneId'.",
+                null,
+            )
+        val headphoneName = call.argument<String>("headphoneName") ?: headphoneId
+        val couplerModel = call.argument<String>("couplerModel") ?: "HA-2"
+        val operatorId = call.argument<String>("operatorId") ?: "unknown"
+        val micOffsetDb = call.argument<Double>("micOffsetDb")
+        if (micOffsetDb == null) {
+            Log.e(TAG, "calibrateHeadphones: MIC_NOT_CALIBRATED")
+            result.error(
+                "MIC_NOT_CALIBRATED",
+                "El micrófono no está calibrado. Calibrá el micrófono " +
+                    "primero antes de calibrar el auricular.",
+                null,
+            )
+            return
+        }
+        val toneLevelDbfs = call.argument<Double>("toneLevelDbfs") ?: -20.0
+        val toneDurationMs = call.argument<Int>("toneDurationMs") ?: 1500
+        val silenceMs = call.argument<Int>("silenceMs") ?: 500
+
+        val frequencies = listOf(
+            250, 500, 750, 1000, 1500, 2000,
+            2500, 3000, 3500, 4000, 6000, 8000,
+        )
+
+        val capture = CalibrationAudioCapture.create(context)
+        if (capture == null) {
+            Log.e(TAG, "calibrateHeadphones: AUDIO_RECORD_FAILED")
+            result.error(
+                "AUDIO_RECORD_FAILED",
+                "No se pudo abrir AudioRecord para calibración hp.",
+                null,
+            )
+            return
+        }
+        Log.i(TAG, "calibrateHeadphones: AUDIO_RECORD_OPENED")
+        val emitter = CalibrationToneEmitter()
+        Log.i(TAG, "calibrateHeadphones: AUDIO_TRACK_OPENED")
+
+        try {
+            val targetDbspl = toneLevelDbfs + micOffsetDb
+            val splDbsplList = ArrayList<Double>(frequencies.size)
+            val hpOffsetList = ArrayList<Double>(frequencies.size)
+
+            for ((index, freq) in frequencies.withIndex()) {
+                Log.i(
+                    TAG,
+                    "calibrateHeadphones: TONE_BEGIN freq=$freq " +
+                        "expectedDbfs=$toneLevelDbfs"
+                )
+                // Lanzar tono en thread paralelo y capturar simultáneamente.
+                val playerThread = Thread {
+                    emitter.playTone(
+                        freqHz = freq.toDouble(),
+                        levelDbfs = toneLevelDbfs,
+                        durationMs = toneDurationMs,
+                    )
+                }
+                playerThread.start()
+                // Descartar 200 ms iniciales (estabilización del DAC).
+                Thread.sleep(200)
+                // Capturar 1300 ms restantes.
+                val measureMs = toneDurationMs - 200
+                val rmsDbfs = capture.readWindowRmsDbfs(durationMs = measureMs)
+                playerThread.join()
+                if (rmsDbfs.isNaN() || rmsDbfs.isInfinite()) {
+                    capture.release()
+                    Log.e(
+                        TAG,
+                        "calibrateHeadphones: BAND_OUT_OF_RANGE freq=$freq " +
+                            "rmsDbfs=$rmsDbfs (NaN/Inf)"
+                    )
+                    result.error(
+                        "BAND_OUT_OF_RANGE",
+                        "Banda $freq Hz produjo medición inválida (NaN/Inf). " +
+                            "Verificá la conexión del auricular.",
+                        null,
+                    )
+                    return
+                }
+                val splDbspl = rmsDbfs + micOffsetDb
+                val hpOffset = splDbspl - targetDbspl
+                Log.i(
+                    TAG,
+                    "calibrateHeadphones: TONE_END freq=$freq " +
+                        "rmsDbfs=$rmsDbfs spl=$splDbspl offset=$hpOffset"
+                )
+                if (hpOffset !in -30.0..30.0) {
+                    Log.e(
+                        TAG,
+                        "calibrateHeadphones: BAND_OUT_OF_RANGE freq=$freq " +
+                            "hpOffset=$hpOffset"
+                    )
+                    val msg = if (hpOffset < -30.0) {
+                        "Banda $freq Hz fuera de rango (offset=${"%.2f".format(hpOffset)} dB). " +
+                            "El auricular podría estar desconectado o el acoplador " +
+                            "mal puesto."
+                    } else {
+                        "Banda $freq Hz fuera de rango (offset=${"%.2f".format(hpOffset)} dB). " +
+                            "Posible feedback del altavoz del celular hacia su " +
+                            "propio micrófono — conectá el auricular."
+                    }
+                    result.error("BAND_OUT_OF_RANGE", msg, null)
+                    return
+                }
+
+                splDbsplList.add(splDbspl)
+                hpOffsetList.add(hpOffset)
+
+                // Pausa entre tonos.
+                if (index < frequencies.size - 1) {
+                    Thread.sleep(silenceMs.toLong())
+                }
+            }
+
+            // Validación de discontinuidad entre bandas adyacentes.
+            for (i in 0 until hpOffsetList.size - 1) {
+                val diff = kotlin.math.abs(hpOffsetList[i + 1] - hpOffsetList[i])
+                if (diff > 15.0) {
+                    Log.e(
+                        TAG,
+                        "calibrateHeadphones: BAND_DISCONTINUITY entre " +
+                            "${frequencies[i]}-${frequencies[i + 1]} Hz (diff=$diff dB)"
+                    )
+                    result.error(
+                        "BAND_DISCONTINUITY",
+                        "Discontinuidad entre bandas ${frequencies[i]} Hz " +
+                            "(offset=${"%.2f".format(hpOffsetList[i])} dB) y " +
+                            "${frequencies[i + 1]} Hz (offset=${"%.2f".format(hpOffsetList[i + 1])} dB). " +
+                            "Diferencia de ${"%.2f".format(diff)} dB excede 15 dB. " +
+                            "El acoplador probablemente está mal puesto.",
+                        null,
+                    )
+                    return
+                }
+            }
+
+            val isBluetooth = headphoneId.matches(
+                Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", RegexOption.IGNORE_CASE),
+            )
+
+            val frequencyResponse = mutableMapOf<String, Double>()
+            val compensation = mutableMapOf<String, Double>()
+            for ((idx, freq) in frequencies.withIndex()) {
+                frequencyResponse[freq.toString()] = splDbsplList[idx]
+                compensation[freq.toString()] = -hpOffsetList[idx]
+            }
+
+            val response = mapOf<String, Any?>(
+                "frequencyResponse" to frequencyResponse,
+                "compensation" to compensation,
+                "headphoneId" to headphoneId,
+                "headphoneName" to headphoneName,
+                "calibratedAtMs" to System.currentTimeMillis(),
+                "isBluetooth" to isBluetooth,
+                "couplerModel" to couplerModel,
+                "operatorId" to operatorId,
+                "deviceModel" to Build.MODEL,
+                "micOffsetDb" to micOffsetDb,
+                "targetDbspl" to targetDbspl,
+                "frequenciesHz" to frequencies,
+                "splDbspl" to splDbsplList,
+                "hpOffsetDb" to hpOffsetList,
+            )
+            Log.i(TAG, "calibrateHeadphones: END (12 bandas medidas con éxito)")
+            result.success(response)
+        } catch (e: Throwable) {
+            Log.e(TAG, "calibrateHeadphones: NATIVE_ERROR", e)
+            result.error(
+                "NATIVE_ERROR",
+                e.message ?: "Error en calibración de auriculares",
+                e.stackTraceToString(),
+            )
+        } finally {
+            capture.release()
+        }
     }
 }

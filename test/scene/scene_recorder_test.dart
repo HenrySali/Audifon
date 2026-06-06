@@ -10,12 +10,34 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/operating_mode.dart';
+import 'package:hearing_aid_app/domain/entities/loss_type.dart';
+import 'package:hearing_aid_app/domain/entities/prescription_mode.dart';
 import 'package:hearing_aid_app/scene/scene_engine.dart';
 import 'package:hearing_aid_app/scene/scene_recorder.dart';
 import 'package:hearing_aid_app/scene/scene_snapshot.dart';
 import 'package:hearing_aid_app/scene/smart_preset.dart';
 
 import 'scene_decision_maker_test.dart' show makeSnap;
+
+AudiogramDrivenBundle _fakeBundle() {
+  return AudiogramDrivenBundle(
+    gainsDb: List<double>.filled(12, 5.0),
+    compressionRatios: List<double>.filled(12, 1.5),
+    compressionKneesDbSpl: List<double>.filled(12, 50.0),
+    mpoProfileDbSpl: List<double>.filled(12, 110.0),
+    nrLevel: 1,
+    wdrcAttackMs: 5.0,
+    wdrcReleaseMs: 100.0,
+    expansionKneeDbSpl: 35.0,
+    lossType: LossType.flat,
+    prescriptionMode: PrescriptionMode.quiet,
+    mode: OperatingMode.diagnostic,
+    gainScale: 1.0,
+    derivedAt: DateTime.utc(2026, 1, 1),
+  );
+}
 
 SceneAnalysisResult _fakeResult(SceneClass cls) {
   return SceneAnalysisResult(
@@ -26,6 +48,8 @@ SceneAnalysisResult _fakeResult(SceneClass cls) {
     sampleCount: 12,
     distribution: <SceneClass, int>{cls: 12},
     preset: _fakePreset(cls),
+    usedDefaultAudiogram: false,
+    bundle: _fakeBundle(),
   );
 }
 

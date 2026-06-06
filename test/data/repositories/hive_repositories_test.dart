@@ -117,7 +117,8 @@ void main() {
         compressionKnee: 50,
       );
 
-      await profileRepo.saveCustomProfile(custom);
+      // ignore: deprecated_member_use_from_same_package
+      await profileRepo.saveLegacyCustomProfile(custom);
 
       final retrieved = await profileRepo.getProfileByName('Mi Perfil');
       expect(retrieved, isNotNull);
@@ -137,7 +138,8 @@ void main() {
         compressionKnee: 52,
       );
 
-      await profileRepo.saveCustomProfile(custom);
+      // ignore: deprecated_member_use_from_same_package
+      await profileRepo.saveLegacyCustomProfile(custom);
       final profiles = await profileRepo.getAllProfiles();
       expect(profiles.length, 4); // 3 predefined + 1 custom
     });
@@ -157,7 +159,8 @@ void main() {
         compressionKnee: 55,
       );
 
-      await profileRepo.saveCustomProfile(custom);
+      // ignore: deprecated_member_use_from_same_package
+      await profileRepo.saveLegacyCustomProfile(custom);
       await profileRepo.deleteCustomProfile('ToDelete');
 
       final retrieved = await profileRepo.getProfileByName('ToDelete');

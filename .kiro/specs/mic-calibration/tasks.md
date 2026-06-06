@@ -3,7 +3,7 @@
 ## Overview
 
 Lista ejecutable de tareas para implementar el spec
-`microphone-and-biological-calibration-extension`. Cada tarea debe poder
+`mic-calibration`. Cada tarea debe poder
 completarse en menos de 2 horas de trabajo concentrado. La numeración refleja
 el orden recomendado de ejecución; las dependencias se documentan en el
 Task Dependency Graph.

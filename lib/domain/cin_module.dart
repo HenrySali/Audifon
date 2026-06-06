@@ -90,11 +90,20 @@ abstract class CinModule {
     List<double> coreGains,
     List<double> coreCompressionRatios,
   ) {
-    assert(coreGains.length == 12, 'Se requieren exactamente 12 ganancias.');
-    assert(
-      coreCompressionRatios.length == 12,
-      'Se requieren exactamente 12 ratios de compresión.',
-    );
+    if (coreGains.length != 12) {
+      throw ArgumentError.value(
+        coreGains.length,
+        'coreGains.length',
+        'CIN requiere exactamente 12 ganancias, recibido ${coreGains.length}',
+      );
+    }
+    if (coreCompressionRatios.length != 12) {
+      throw ArgumentError.value(
+        coreCompressionRatios.length,
+        'coreCompressionRatios.length',
+        'CIN requiere exactamente 12 ratios de compresión, recibido ${coreCompressionRatios.length}',
+      );
+    }
 
     final modifiedGains = List<double>.from(coreGains);
 

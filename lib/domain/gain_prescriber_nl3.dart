@@ -42,13 +42,26 @@ class GainPrescriberNL3 {
   /// Prescriptor NL2 usado para la base de cálculo (composición).
   final GainPrescriber _nl2Prescriber;
 
+  /// Reloj inyectable usado como fallback cuando el caller no provee
+  /// `timestamp` explícito en `prescribeFromAudiogram` /
+  /// `prescribeWithCompensation`. Default: [DateTime.now].
+  ///
+  /// Permite tests deterministas (fixed clock) y mantiene la pureza del
+  /// módulo cuando el llamador inyecta un reloj fake. Hallazgo M-8.
+  final DateTime Function() _clock;
+
   /// Crea una instancia del prescriptor NL3-inspired.
   ///
   /// [nl2Prescriber] Instancia opcional de [GainPrescriber] para
   /// obtener la prescripción base NAL-NL2. Si no se provee, se crea
   /// una instancia nueva internamente.
-  GainPrescriberNL3({GainPrescriber? nl2Prescriber})
-      : _nl2Prescriber = nl2Prescriber ?? GainPrescriber();
+  /// [clock] Función opcional que retorna la hora actual. Default:
+  /// [DateTime.now]. Inyectable para tests deterministas.
+  GainPrescriberNL3({
+    GainPrescriber? nl2Prescriber,
+    DateTime Function()? clock,
+  })  : _nl2Prescriber = nl2Prescriber ?? GainPrescriber(),
+        _clock = clock ?? DateTime.now;
 
   /// Prescribe ganancias NL3 con compensación de auricular aplicada.
   ///
@@ -77,12 +90,14 @@ class GainPrescriberNL3 {
     Map<int, double> compensation, {
     PatientProfile? profile,
     PrescriptionMode mode = PrescriptionMode.quiet,
+    DateTime? timestamp,
   }) {
     // Obtener prescripción NL3 completa (sin compensación de auricular).
     final result = prescribeFromAudiogram(
       audiogram,
       profile: profile,
       mode: mode,
+      timestamp: timestamp,
     );
 
     // Aplicar compensación de auricular a las ganancias prescritas.
@@ -160,6 +175,7 @@ class GainPrescriberNL3 {
     Audiogram audiogram, {
     PatientProfile? profile,
     PrescriptionMode mode = PrescriptionMode.quiet,
+    DateTime? timestamp,
   }) {
     // Validar audiograma: rechazar vacío o incompleto.
     _validateAudiogram(audiogram);
@@ -187,7 +203,7 @@ class GainPrescriberNL3 {
         cinActive: false,
         wdrcOverrides: null,
         ptaWarning: mhlResult.ptaWarning,
-        timestamp: DateTime.now(),
+        timestamp: timestamp ?? _clock(),
       );
     }
 
@@ -231,7 +247,7 @@ class GainPrescriberNL3 {
       cinActive: cinActive,
       wdrcOverrides: wdrcOverrides,
       ptaWarning: ptaWarning,
-      timestamp: DateTime.now(),
+      timestamp: timestamp ?? _clock(),
     );
   }
 

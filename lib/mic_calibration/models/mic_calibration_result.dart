@@ -13,7 +13,7 @@
 /// el `schemaVersion` y ofrecer una ruta de migración en el store.
 ///
 /// Validates: Requirements R1, R3, R4 (de
-/// `microphone-and-biological-calibration-extension/requirements.md`).
+/// `mic-calibration/requirements.md`).
 
 import 'dart:convert';
 
