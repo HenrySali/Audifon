@@ -55,6 +55,10 @@ dependency_overrides:
   # does NOT affect Android behavior, only ensures the kernel snapshot
   # compiles when the foundation plugin is present in the deps tree.
   path_provider_foundation: 2.4.1
+  # path_provider 2.1.5 requires Dart ^3.4.0 / Flutter >=3.22.0,
+  # but CI uses Flutter 3.19.6 (Dart 3.3.4). 2.1.4 is the last release
+  # compatible with Dart ^3.2.0 / Flutter >=3.16.0.
+  path_provider: 2.1.4
 
 flutter:
   uses-material-design: true
