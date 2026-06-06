@@ -22,24 +22,9 @@ dependencies:
   # Calibración del micrófono: SHA-256 del payload persistido en
   # `mic_calibration_box` para audit trail (ANMAT 2318/02 — Decreto 4725/05).
   crypto: ^3.0.3
-  # pdf 3.12.0 requiere vector_math ^2.2.0, pero integration_test
-  # (Flutter SDK 3.19.6) pinea a vector_math 2.1.4. 3.11.3 es la
-  # ultima version compatible con vector_math 2.1.x.
-  pdf: ^3.11.3
-  path_provider: ^2.1.5
-  # BLE: comunicación con el firmware del audífono. Se invoca desde
-  # `lib/data/repositories/ble_repository.dart` para enviar comandos
-  # (gains, volume, profile, MPO, NR, FB) y leer status/batería.
-  flutter_blue_plus: ^1.32.12
 
 dev_dependencies:
   flutter_test:
-    sdk: flutter
-  # Tests E2E sobre flujos completos (BLE ↔ DSP ↔ UI). Requerido por
-  # `integration_test/e2e_integration_test.dart` para que Flutter
-  # registre el binding `IntegrationTestWidgetsFlutterBinding` antes de
-  # ejecutar los `testWidgets` del suite e2e.
-  integration_test:
     sdk: flutter
   flutter_lints: ^3.0.0
   build_runner: ^2.4.6
@@ -58,10 +43,6 @@ dependency_overrides:
   # does NOT affect Android behavior, only ensures the kernel snapshot
   # compiles when the foundation plugin is present in the deps tree.
   path_provider_foundation: 2.4.1
-  # path_provider 2.1.5 requires Dart ^3.4.0 / Flutter >=3.22.0,
-  # but CI uses Flutter 3.19.6 (Dart 3.3.4). 2.1.4 is the last release
-  # compatible with Dart ^3.2.0 / Flutter >=3.16.0.
-  path_provider: 2.1.4
 
 flutter:
   uses-material-design: true
