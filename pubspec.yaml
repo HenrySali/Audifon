@@ -22,7 +22,10 @@ dependencies:
   # Calibración del micrófono: SHA-256 del payload persistido en
   # `mic_calibration_box` para audit trail (ANMAT 2318/02 — Decreto 4725/05).
   crypto: ^3.0.3
-  pdf: ^3.12.0
+  # pdf 3.12.0 requiere vector_math ^2.2.0, pero integration_test
+  # (Flutter SDK 3.19.6) pinea a vector_math 2.1.4. 3.11.3 es la
+  # ultima version compatible con vector_math 2.1.x.
+  pdf: ^3.11.3
   path_provider: ^2.1.5
   # BLE: comunicación con el firmware del audífono. Se invoca desde
   # `lib/data/repositories/ble_repository.dart` para enviar comandos
