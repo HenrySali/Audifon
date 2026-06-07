@@ -238,10 +238,10 @@ class _DarkInfoChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.10),
+          color: color.withOpacity(0.10),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: color.withValues(alpha: 0.35),
+            color: color.withOpacity(0.35),
             width: 1,
           ),
         ),
