@@ -1,19 +1,23 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
 // Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3, R4.6).
 // Carga de credenciales de firma desde android/key.properties (gitignored).
 // Si el archivo no existe, signingConfigs.release queda sin valores y el
 // build de release falla — por diseño, para no firmar con la debug key
 // silenciosamente. En CI el workflow build-apk.yml valida los secrets,
 // decodifica la keystore y genera key.properties antes del build.
+//
+// Nota: este bloque DEBE ir DESPUES del plugins {} block. Gradle 8.7
+// exige que plugins {} sea lo primero del archivo (solo permitido
+// buildscript {} / pluginManagement {} antes).
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('key.properties')
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-}
-
-plugins {
-    id "com.android.application"
-    id "kotlin-android"
-    id "dev.flutter.flutter-gradle-plugin"
 }
 
 android {
