@@ -142,9 +142,12 @@ class RemoteConfigService {
   // Constantes públicas (referenciadas también desde `RemoteConfig.fromJson`)
   // -------------------------------------------------------------------------
 
-  /// URL pública del backend Oír Pro. Hoy HTTP plano por puerto directo
-  /// (R5.9 / R5.10 — TLS opcional, se endurece después).
-  static const String endpoint = 'http://149.50.137.2:8060/api/check';
+  /// URL pública del backend Oír Pro. Sirve el endpoint vía nginx detrás
+  /// del dominio público de SmartTemp (mismo VPS, puerto 8060 interno
+  /// reverse proxy desde 443 SSL). Sin TLS los celulares de algunas
+  /// operadoras bloquean cleartext, así que vamos directo a HTTPS.
+  static const String endpoint =
+      'https://appsmarttemp.xn--diseosyefectos-tnb.com/oirpro/api/check';
 
   /// Timeout duro del POST (R6.2). Si el server se cuelga, el `fetch()`
   /// resuelve con cache / defaults dentro de este margen.
