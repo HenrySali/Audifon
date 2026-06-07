@@ -58,8 +58,17 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.debug
-            minifyEnabled = false
-            shrinkResources = false
+            // Fase 2 spec oir-pro-rebrand-harden-and-remote-config:
+            //   - minifyEnabled  → R8 renombra clases Java/Kotlin a a,b,c
+            //                       y elimina codigo no usado.
+            //   - shrinkResources → recorta recursos (drawables, strings)
+            //                       no referenciados.
+            // Reglas de preservacion criticas (JNI, Oboe, BLE, Hive, etc.)
+            // estan en proguard-rules.pro. Romper alguna regla rompe el
+            // DSP en runtime sin warning, asi que cualquier cambio en R8
+            // requiere smoke test exhaustivo.
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
