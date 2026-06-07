@@ -22,6 +22,11 @@ dependencies:
   # Calibración del micrófono: SHA-256 del payload persistido en
   # `mic_calibration_box` para audit trail (ANMAT 2318/02 — Decreto 4725/05).
   crypto: ^3.0.3
+  # Biometría al abrir (Fase 3 spec oir-pro-rebrand-harden-and-remote-config):
+  # huella dactilar / face unlock con fallback a PIN local. Requiere
+  # MainActivity extendiendo FlutterFragmentActivity y permisos
+  # USE_BIOMETRIC / USE_FINGERPRINT en el manifest.
+  local_auth: ^2.3.0
 
 dev_dependencies:
   flutter_test:

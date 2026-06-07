@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'data/bridges/audio_bridge_impl.dart';
 import 'data/hive_initializer.dart';
+import 'data/services/remote_config_service.dart';
 import 'domain/entities/audiogram.dart';
 import 'domain/gain_prescriber.dart';
 import 'presentation/bloc/amplification_bloc.dart';
@@ -10,6 +11,9 @@ import 'presentation/screens/main_screen.dart';
 import 'presentation/screens/permissions_screen.dart';
 import 'presentation/services/permission_service.dart';
 import 'presentation/utils/device_checker.dart';
+import 'presentation/widgets/remote_config_gate.dart';
+import 'security/biometric_gate.dart';
+import 'security/security_settings_repository.dart';
 
 /// Punto de entrada de la aplicación PSK Mobile Hearing Aid.
 ///
@@ -42,12 +46,28 @@ void main() async {
   final deviceChecker = DeviceCheckerImpl();
   final permissionService = PermissionService(deviceChecker: deviceChecker);
 
+  // Fase 3 spec oir-pro-rebrand-harden-and-remote-config: gate de
+  // biometría / PIN antes de mostrar la UI principal. Abrimos el box de
+  // seguridad acá para que `BiometricGate` pueda leer el estado en frio.
+  await SecuritySettingsRepository.instance.init();
+
+  // Fase 5b spec oir-pro-rebrand-harden-and-remote-config: cliente del
+  // backend remoto (kill switch + notificación de update). Abrir la box
+  // Hive ahora para que `RemoteConfigService.fetch()` no tenga que
+  // bloquear esperando IO al inicializar — el fetch en si dispara
+  // después de la biometría (R6.2).
+  await RemoteConfigService.instance.init();
+
   runApp(
-    HearingAidApp(
-      repositories: repositories,
-      audioBridge: audioBridge,
-      gainPrescriber: gainPrescriber,
-      permissionService: permissionService,
+    BiometricGate(
+      child: RemoteConfigGate(
+        child: HearingAidApp(
+          repositories: repositories,
+          audioBridge: audioBridge,
+          gainPrescriber: gainPrescriber,
+          permissionService: permissionService,
+        ),
+      ),
     ),
   );
 }

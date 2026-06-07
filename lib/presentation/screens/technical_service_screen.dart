@@ -3,7 +3,9 @@ import 'diagnostic/calibration_step.dart';
 import 'calibration_spectrum_screen.dart';
 import '../../biological_calibration/screens/biological_calibration_screen.dart';
 import '../../audiometry/screens/audiometry_screen.dart';
+import '../../data/services/remote_config_service.dart';
 import '../../feedback_checklist/screens/feedback_export_screen.dart';
+import '../../security/security_settings_repository.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -15,7 +17,6 @@ import '../../feedback_checklist/screens/feedback_export_screen.dart';
 /// Acceso: desde el menú principal (icono de servicio).
 class TechnicalServiceScreen extends StatelessWidget {
   const TechnicalServiceScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -167,6 +168,12 @@ class TechnicalServiceScreen extends StatelessWidget {
             buttonText: 'Ver Info',
             onTap: () => _showSystemInfo(context),
           ),
+
+          // Sección: Seguridad (Fase 3 spec oir-pro-rebrand-harden-and-remote-config).
+          // Toggle "Pedir biometría al abrir" — default ON. Apagarlo solo
+          // tiene sentido para demos puntuales (R3.4).
+          const SizedBox(height: 16),
+          const _SecuritySection(),
         ],
       ),
     );
@@ -313,6 +320,139 @@ class _InfoRow extends StatelessWidget {
           Expanded(
             child: Text(value,
                 style: const TextStyle(color: Colors.white, fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Sección "Seguridad" en Servicio Técnico.
+///
+/// Spec: oir-pro-rebrand-harden-and-remote-config — Fase 3 (R3.4).
+///
+/// Muestra el toggle "Pedir biometría al abrir" leyendo / persistiendo
+/// vía `SecuritySettingsRepository`. Default ON. Apagarlo solo tiene
+/// sentido durante demos / ventas.
+class _SecuritySection extends StatefulWidget {
+  const _SecuritySection();
+
+  @override
+  State<_SecuritySection> createState() => _SecuritySectionState();
+}
+
+class _SecuritySectionState extends State<_SecuritySection> {
+  bool? _required;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitial();
+  }
+
+  Future<void> _loadInitial() async {
+    try {
+      final v =
+          await SecuritySettingsRepository.instance.isBiometricRequired();
+      if (!mounted) return;
+      setState(() {
+        _required = v;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _onChanged(bool v) async {
+    setState(() => _required = v);
+    await SecuritySettingsRepository.instance.setBiometricRequired(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.cyan.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.security, color: Color(0xFF00e5ff), size: 22),
+              SizedBox(width: 10),
+              Text(
+                'Seguridad',
+                style: TextStyle(
+                  color: Color(0xFF00e5ff),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF00e5ff),
+                ),
+              ),
+            )
+          else
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              activeColor: const Color(0xFF00e5ff),
+              inactiveThumbColor: Colors.white60,
+              title: const Text(
+                'Pedir biometría al abrir',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+              subtitle: const Text(
+                'Desactivá esto solo durante demos o ventas.',
+                style: TextStyle(color: Colors.white54, fontSize: 11),
+              ),
+              value: _required ?? true,
+              onChanged: _onChanged,
+            ),
+          // Fase 5b spec oir-pro-rebrand-harden-and-remote-config (R6.4):
+          // botón para limpiar el cache del backend remoto. Útil cuando
+          // el técnico cambia algo en el admin web y querés forzar la
+          // app a re-fetchearlo en el próximo arranque sin esperar el
+          // TTL de 7 días.
+          //
+          // TODO: spec oir-pro-patient-mode usará el techCode cacheado
+          // (`RemoteConfigService.instance.getCachedConfig()?.techCode`)
+          // para validar la entrada al Modo Servicio Técnico. Hoy la app
+          // del técnico no pide código — todas las pantallas técnicas
+          // están detrás de la biometría / PIN, no de un tech code.
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: () async {
+              await RemoteConfigService.instance.clearCache();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Cache remoto reseteado')),
+                );
+              }
+            },
+            icon: const Icon(Icons.refresh, color: Color(0xFF00e5ff)),
+            label: const Text(
+              'Resetear cache remoto',
+              style: TextStyle(color: Color(0xFF00e5ff)),
+            ),
           ),
         ],
       ),

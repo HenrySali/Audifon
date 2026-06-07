@@ -1,7 +1,7 @@
 package com.psk.hearing_aid_app
 
 import android.util.Log
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 
 /**
@@ -14,8 +14,14 @@ import io.flutter.embedding.engine.FlutterEngine
  * - MethodChannel 'com.psk.hearing_aid/audio': comandos de control
  * - EventChannel 'com.psk.hearing_aid/level': nivel de entrada (~10 Hz)
  * - EventChannel 'com.psk.hearing_aid/state': estado del engine
+ *
+ * Nota Fase 3 (spec oir-pro-rebrand-harden-and-remote-config):
+ * extiende FlutterFragmentActivity (no FlutterActivity) porque local_auth
+ * monta su diálogo nativo de huella sobre la BiometricPrompt API que
+ * requiere un FragmentActivity de AndroidX. Sin esto, la primera llamada
+ * a authenticate() crashea con ClassCastException.
  */
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
