@@ -1,3 +1,15 @@
+// Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3, R4.6).
+// Carga de credenciales de firma desde android/key.properties (gitignored).
+// Si el archivo no existe, signingConfigs.release queda sin valores y el
+// build de release falla — por diseño, para no firmar con la debug key
+// silenciosamente. En CI el workflow build-apk.yml valida los secrets,
+// decodifica la keystore y genera key.properties antes del build.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 plugins {
     id "com.android.application"
     id "kotlin-android"
@@ -55,9 +67,29 @@ android {
         }
     }
 
+    // Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3).
+    // signingConfigs.release lee de key.properties (cargado arriba).
+    // Si el archivo no existe (storeFile == null), las propiedades quedan
+    // vacías y el build de release falla con error explícito al intentar
+    // firmar — eso es lo que queremos: nunca caer a debug key en silencio.
+    signingConfigs {
+        release {
+            if (keystoreProperties.getProperty('storeFile') != null) {
+                storeFile     file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias      keystoreProperties['keyAlias']
+                keyPassword   keystoreProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.debug
+            // Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3, R4.6).
+            // Si key.properties existe, firma con la keystore release.
+            // Si no, falla (build.gradle solo configura, el workflow CI
+            // valida que el archivo exista y aborta si no).
+            signingConfig = signingConfigs.release
             // Fase 2 spec oir-pro-rebrand-harden-and-remote-config:
             //   - minifyEnabled  → R8 renombra clases Java/Kotlin a a,b,c
             //                       y elimina codigo no usado.
