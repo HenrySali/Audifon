@@ -14,7 +14,17 @@
 ///   │                                  • 16000 → bypass del resampler interno
 ///   │                                  • 48000 → polyphase 3:1 (down/up)
 ///   │                                  • otros → resampling lineal genérico
+///   ├─ notifyVoiceActive(bool)      — feedback del VAD para modular intensity
+///   │                                  con cap asimétrico (Paso 1, no amplifica)
+///   ├─ setVoiceCap(float)           — cap aplicado a intensity con voz (default 0.7)
 ///   └─ initialize(AAssetManager)    — carga modelo desde assets (lazy)
+///
+/// MODULACIÓN VAD (spec dnn-voice-level-recovery, Paso 1):
+///   El cap de intensity con voz activa NO viola el invariante "el DNN solo
+///   atenúa". Bajar `intensity` aumenta el peso del dry (señal original) en
+///   la mezcla `dry*(1 - dnnAmount) + wet*dnnAmount`; nunca amplifica nada.
+///   El slider del usuario sigue siendo verdad ante la API: el cap es
+///   interno y se expone vía `getEffectiveIntensity()` para telemetría.
 ///
 /// ENTRADAS (signal wires):
 ///   └─ Audio In (float* buffer, int blockSize) — float [-1,+1] @ inputSampleRate
@@ -117,6 +127,20 @@ static constexpr int kDnnCrossfadeSamples = 800;
 /// es 10× más rápida y los drops bajo carga real se reducen.
 static constexpr int kDnnRingCapacity = 1024;
 
+/// Cap por defecto aplicado a `intensity` cuando el VAD detecta voz activa.
+/// Valor en [0,1]. 0.7 = mezcla 30% dry + 70% wet con voz, recuperando
+/// energía de voz que el modelo atenúa, sin romper el invariante "DNN solo
+/// atenúa" (la mezcla solo cambia el peso entre dry y wet).
+/// Spec: dnn-voice-level-recovery (Paso 1).
+static constexpr float kDefaultVoiceCap = 0.7f;
+
+/// Constantes de la rampa asimétrica entre `intensity` del usuario y el cap.
+/// Attack rápido (40 ms) cuando aparece voz; release lento (300 ms) cuando
+/// desaparece. Estilo WDRC asimétrico para evitar fluctuación audible.
+/// Spec: dnn-voice-level-recovery (Paso 1).
+static constexpr float kVoiceCapAttackMs  = 40.0f;
+static constexpr float kVoiceCapReleaseMs = 300.0f;
+
 /// Wrapper C++ del denoiser GTCRN. Sigue el patrón de SubVI LabVIEW
 /// (process / setX / reset / isX) para integrarse al DspPipeline.
 ///
@@ -185,6 +209,29 @@ public:
     /// Thread-safe: lock-free.
     void setIntensity(float intensity);
 
+    /// Notifica el estado del VAD del bloque actual al denoiser.
+    ///
+    /// Cuando `active == true`, la `intensity` efectiva interna se modula
+    /// hacia `kDefaultVoiceCap` (configurable vía `setVoiceCap`) con rampa
+    /// asimétrica `kVoiceCapAttackMs` / `kVoiceCapReleaseMs`. Cuando
+    /// `active == false`, la `intensity` efectiva vuelve al valor del
+    /// usuario (set vía `setIntensity`).
+    ///
+    /// El cap NO viola el invariante "el DNN solo atenúa": al reducir
+    /// `intensity` se mezcla más dry (señal original), nunca se amplifica.
+    ///
+    /// Lock-free, thread-safe. Llamar desde el audio callback después
+    /// del `SceneAnalyzer::process()` que produce el flag.
+    /// Spec: dnn-voice-level-recovery R1.1, R1.2.
+    void notifyVoiceActive(bool active);
+
+    /// Configura el cap aplicado a `intensity` cuando hay voz activa.
+    /// Default `kDefaultVoiceCap = 0.7f`. Valores fuera de [0,1] se clampean.
+    /// Setear `1.0f` desactiva la modulación (cap nunca aplica).
+    /// Lock-free, thread-safe.
+    /// Spec: dnn-voice-level-recovery R1.1, R5.3.
+    void setVoiceCap(float cap);
+
     /// Resetea estado interno (ring buffers, model caches).
     /// SAFE: el worker thread maneja el reset internamente vía flag atómico.
     /// Llamar cuando hay un cambio brusco de contenido (skip, seek).
@@ -205,6 +252,19 @@ public:
     /// @return intensidad actual (0..1).
     float getIntensity() const {
         return intensity_.load(std::memory_order_acquire);
+    }
+
+    /// @return `intensity` efectiva post-VAD-cap (valor realmente aplicado
+    /// en la mezcla dry/wet). Distinto de `getIntensity()` cuando el VAD
+    /// está activo y `userIntensity > voiceCap`.
+    /// Útil para telemetría / diagnóstico (ver R2.1 del spec).
+    float getEffectiveIntensity() const {
+        return effectiveIntensityAtomic_.load(std::memory_order_acquire);
+    }
+
+    /// @return cap actual aplicado a `intensity` cuando el VAD detecta voz.
+    float getVoiceCap() const {
+        return voiceCap_.load(std::memory_order_acquire);
     }
 
     /// @return total de hops (kDnnHopSize = 128 samples) procesados con DNN.
@@ -244,6 +304,33 @@ private:
     /// Step por sample del crossfade (1/kDnnCrossfadeSamples).
     static constexpr float kCrossfadeStep =
         1.0f / static_cast<float>(kDnnCrossfadeSamples);
+
+    /// Estado del VAD del último bloque procesado por el SceneAnalyzer.
+    /// Lo escribe el caller vía `notifyVoiceActive`; lo lee el audio thread
+    /// dentro de `process()` para calcular el target del cap.
+    /// Spec: dnn-voice-level-recovery (Paso 1).
+    std::atomic<bool>  voiceActive_{false};
+
+    /// Cap aplicado a `intensity` cuando `voiceActive_` es true.
+    /// Default `kDefaultVoiceCap`. Setter `setVoiceCap`.
+    std::atomic<float> voiceCap_{kDefaultVoiceCap};
+
+    /// `intensity` efectiva tras aplicar la rampa asimétrica.
+    /// Sólo escrito desde el audio thread (process). Espejado al atomic
+    /// `effectiveIntensityAtomic_` para `getEffectiveIntensity()`.
+    /// Spec: dnn-voice-level-recovery (Paso 1).
+    float effectiveIntensity_ = 1.0f;
+
+    /// Espejo atómico de `effectiveIntensity_` para getters externos.
+    std::atomic<float> effectiveIntensityAtomic_{1.0f};
+
+    /// Pasos por sample de la rampa asimétrica del cap. Recalculados en
+    /// `setInputSampleRate` (la mezcla corre a `inputSampleRate`, no a
+    /// 16 kHz). Default a 0 hasta que `setInputSampleRate` se llame por
+    /// primera vez; mientras tanto el cap aplica como step instantáneo
+    /// (degeneración benigna).
+    float stepAttackPerSample_  = 0.0f;
+    float stepReleasePerSample_ = 0.0f;
 };
 
 }  // namespace dnn_denoiser

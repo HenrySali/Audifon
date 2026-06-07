@@ -1163,6 +1163,20 @@ DnnDenoiser::~DnnDenoiser() = default;
 void DnnDenoiser::setInputSampleRate(int sampleRateHz) {
     if (!impl_) return;
     impl_->applyInputSampleRate(sampleRateHz);
+
+    // Spec dnn-voice-level-recovery (Paso 1, Tarea 2):
+    // Recalcular pasos por sample de la rampa asimétrica del cap.
+    // El loop de mezcla corre a `inputSampleRate` (no a 16 kHz), así que
+    // el step depende de la rate efectiva. Attack más corto que release
+    // para reducir rápido el wet cuando aparece voz, y restaurar lento
+    // al volver a no-voz (estilo WDRC asimétrico).
+    if (sampleRateHz > 0) {
+        const float samplesPerMs   = static_cast<float>(sampleRateHz) / 1000.0f;
+        const float attackSamples  = kVoiceCapAttackMs  * samplesPerMs;
+        const float releaseSamples = kVoiceCapReleaseMs * samplesPerMs;
+        stepAttackPerSample_  = (attackSamples  > 0.0f) ? (1.0f / attackSamples)  : 1.0f;
+        stepReleasePerSample_ = (releaseSamples > 0.0f) ? (1.0f / releaseSamples) : 1.0f;
+    }
 }
 
 bool DnnDenoiser::initialize(AAssetManager* assetMgr, const char* assetPath) {
@@ -1318,8 +1332,27 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
         return;
     }
 
-    // ── Etapa 5: mezcla normal dry ↔ wet con intensity y crossfade ────
-    const float intensityVal = intensity_.load(std::memory_order_acquire);
+    // ── Etapa 5: mezcla normal dry ↔ wet con intensity, crossfade y VAD cap ────
+    //
+    // Spec dnn-voice-level-recovery (Paso 1):
+    //   - userIntensity      : valor del slider del usuario (R1.4, transparente).
+    //   - voiceActive        : feedback del VAD del bloque anterior, vía
+    //                          notifyVoiceActive (R1.1, R1.2).
+    //   - target             : userIntensity capeado a voiceCap_ si hay voz.
+    //   - effectiveIntensity_: rampa asimétrica per-sample hacia target.
+    //
+    // La modulación NO viola el invariante "DNN solo atenúa": bajar
+    // effectiveIntensity_ aumenta el peso del dry; nunca amplifica (R1.7).
+    const float userIntensity = intensity_.load(std::memory_order_acquire);
+    const bool  vadActive     = voiceActive_.load(std::memory_order_acquire);
+    const float voiceCap      = voiceCap_.load(std::memory_order_acquire);
+    const float target        = vadActive ? std::min(userIntensity, voiceCap)
+                                          : userIntensity;
+    // Pasos defensivos: si setInputSampleRate aún no corrió, los pasos son 0
+    // y la rampa degenera en step instantáneo (effectiveIntensity_ salta a target).
+    const float stepAttack  = stepAttackPerSample_;
+    const float stepRelease = stepReleasePerSample_;
+
     for (int i = 0; i < blockSize; ++i) {
         // Avanzar crossfade un sample.
         if (crossfadeGain_ < crossfadeTarget_) {
@@ -1330,8 +1363,26 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
                                       crossfadeGain_ - kCrossfadeStep);
         }
 
-        // Mezcla: amount of DNN = crossfadeGain_ * intensity.
-        const float dnnAmount = crossfadeGain_ * intensityVal;
+        // Rampa asimétrica del effectiveIntensity_ hacia target (R1.3, R1.5).
+        // Bajar = attack rápido; subir = release lento.
+        if (effectiveIntensity_ > target) {
+            if (stepAttack <= 0.0f) {
+                effectiveIntensity_ = target;
+            } else {
+                effectiveIntensity_ -= stepAttack;
+                if (effectiveIntensity_ < target) effectiveIntensity_ = target;
+            }
+        } else if (effectiveIntensity_ < target) {
+            if (stepRelease <= 0.0f) {
+                effectiveIntensity_ = target;
+            } else {
+                effectiveIntensity_ += stepRelease;
+                if (effectiveIntensity_ > target) effectiveIntensity_ = target;
+            }
+        }
+
+        // Mezcla: amount of DNN = crossfadeGain_ * effectiveIntensity_.
+        const float dnnAmount = crossfadeGain_ * effectiveIntensity_;
         const float drySample = (gotDry > i) ? dry[i] : buffer[i];
         const float mixed     = drySample * (1.0f - dnnAmount)
                               + impl_->wetNativeRate[i] * dnnAmount;
@@ -1339,6 +1390,10 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
         // Clamp ±1.0 por seguridad.
         buffer[i] = std::max(-1.0f, std::min(1.0f, mixed));
     }
+
+    // Espejar el effective al atomic para getEffectiveIntensity() (R2.1).
+    effectiveIntensityAtomic_.store(effectiveIntensity_,
+                                    std::memory_order_release);
 
     // Espejar contadores al wrapper público.
     processedFrames_.store(impl_->processedFramesLocal.load(std::memory_order_relaxed),
@@ -1360,6 +1415,19 @@ void DnnDenoiser::setIntensity(float intensity) {
     if (intensity < 0.0f) intensity = 0.0f;
     if (intensity > 1.0f) intensity = 1.0f;
     intensity_.store(intensity, std::memory_order_release);
+}
+
+void DnnDenoiser::notifyVoiceActive(bool active) {
+    // Escritura lock-free; el audio thread la consume en `process()` para
+    // calcular el target del cap. La rampa propiamente dicha se cablea en
+    // la Tarea 2 del spec dnn-voice-level-recovery.
+    voiceActive_.store(active, std::memory_order_release);
+}
+
+void DnnDenoiser::setVoiceCap(float cap) {
+    if (cap < 0.0f) cap = 0.0f;
+    if (cap > 1.0f) cap = 1.0f;
+    voiceCap_.store(cap, std::memory_order_release);
 }
 
 void DnnDenoiser::reset() {
