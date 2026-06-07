@@ -87,3 +87,14 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
+
+# ---------------------------------------------------------------------
+# Play Core split install — solo se usa si la app tuviera deferred
+# components, que no es el caso. R8 ve las referencias en
+# `io.flutter.embedding.engine.deferredcomponents` y se queja porque
+# las clases `com.google.android.play.core.*` no estan en el classpath.
+# Como no usamos esa funcionalidad, le decimos a R8 que ignore esas
+# referencias.
+# ---------------------------------------------------------------------
+-dontwarn com.google.android.play.core.**
+-keep class com.google.android.play.core.** { *; }
