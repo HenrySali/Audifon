@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'diagnostic/calibration_step.dart';
+import 'bundle_export_screen.dart';
 import 'calibration_spectrum_screen.dart';
 import '../../biological_calibration/screens/biological_calibration_screen.dart';
 import '../../audiometry/screens/audiometry_screen.dart';
@@ -135,6 +136,29 @@ class TechnicalServiceScreen extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => const AudiometryScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Exportar configuración del paciente
+          // Spec oir-pro-patient-mode — Fase 2 (R4.1, R4.4): genera el
+          // bundle .oirpro.json firmado con la configuración actual
+          // (audiograma + presets + WDRC + MPO + MHL) y dispara el
+          // share sheet de Android para enviarlo al paciente por
+          // WhatsApp / email / Bluetooth.
+          _ServiceCard(
+            icon: Icons.send_to_mobile,
+            iconColor: Colors.greenAccent,
+            title: 'Exportar configuración del paciente',
+            description:
+                'Genera un archivo .oirpro.json firmado con la configuración '
+                'actual (audiograma, presets, DSP). Lo enviás al paciente por '
+                'WhatsApp / email para que lo importe en su app.',
+            buttonText: 'Generar bundle',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const BundleExportScreen(),
               ),
             ),
           ),

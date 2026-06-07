@@ -65,6 +65,37 @@ class Audiogram extends Equatable {
       .toList()
     ..sort((a, b) => a.frequencyHz.compareTo(b.frequencyHz));
 
+  /// Serializa a Map JSON-compatible.
+  ///
+  /// Formato: `{ "thresholds": { "<freq>": <hl>, ... } }` — claves de
+  /// frecuencia como String para preservar round-trip por JSON estándar.
+  /// Coincide con el shape persistido por `AudiogramRepositoryImpl` y
+  /// `CustomPresetRecord._audiogramToJson` (spec oir-pro-patient-mode,
+  /// Fase 2 — bundle exporter).
+  Map<String, dynamic> toJson() {
+    final t = <String, double>{};
+    for (final entry in thresholds.entries) {
+      t[entry.key.toString()] = entry.value;
+    }
+    return {'thresholds': t};
+  }
+
+  /// Deserializa desde Map. Acepta claves String o int en `thresholds`.
+  static Audiogram fromJson(Map<String, dynamic> json) {
+    final raw = json['thresholds'];
+    if (raw is! Map) {
+      throw const FormatException(
+        'Audiogram.fromJson: campo "thresholds" ausente o no Map.',
+      );
+    }
+    final t = <int, double>{};
+    raw.forEach((key, value) {
+      final freq = key is int ? key : int.parse(key.toString());
+      t[freq] = (value as num).toDouble();
+    });
+    return Audiogram(thresholds: t);
+  }
+
   @override
   List<Object?> get props => [thresholds];
 }

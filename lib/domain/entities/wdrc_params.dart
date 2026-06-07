@@ -42,6 +42,38 @@ class WdrcParams extends Equatable {
     this.releaseMs = 100.0,
   });
 
+  /// Serializa a Map JSON-compatible.
+  ///
+  /// Spec oir-pro-patient-mode (Fase 2 — bundle exporter): el bundle
+  /// `.oirpro.json` incluye los parámetros del compresor del paciente
+  /// para reproducir la misma curva en la APK paciente.
+  Map<String, dynamic> toJson() => {
+        'expansionKnee': expansionKnee,
+        'expansionRatio': expansionRatio,
+        'compressionKnee': compressionKnee,
+        'compressionRatio': compressionRatio,
+        'attackMs': attackMs,
+        'releaseMs': releaseMs,
+      };
+
+  /// Deserializa desde Map. Tolerante a campos faltantes (cae a defaults).
+  static WdrcParams fromJson(Map<String, dynamic> json) {
+    double pick(String key, double fallback) {
+      final v = json[key];
+      if (v is num) return v.toDouble();
+      return fallback;
+    }
+
+    return WdrcParams(
+      expansionKnee: pick('expansionKnee', 35.0),
+      expansionRatio: pick('expansionRatio', 2.0),
+      compressionKnee: pick('compressionKnee', 55.0),
+      compressionRatio: pick('compressionRatio', 2.0),
+      attackMs: pick('attackMs', 5.0),
+      releaseMs: pick('releaseMs', 100.0),
+    );
+  }
+
   @override
   List<Object?> get props => [
         expansionKnee,

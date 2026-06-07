@@ -27,6 +27,13 @@ dependencies:
   # MainActivity extendiendo FlutterFragmentActivity y permisos
   # USE_BIOMETRIC / USE_FINGERPRINT en el manifest.
   local_auth: ^2.3.0
+  # Spec oir-pro-patient-mode — Fase 2 (BundleExporter):
+  # `share_plus` dispara el share sheet de Android para enviar el
+  # `.oirpro.json` por WhatsApp / email / Bluetooth. `path_provider`
+  # resuelve `Downloads/` (con fallback a tmp) para guardar el archivo
+  # antes de compartir.
+  share_plus: ^10.0.0
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:

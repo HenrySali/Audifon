@@ -56,6 +56,17 @@ jobs:
             exit 1
           fi
 
+      # Spec oir-pro-patient-mode — Fase 1 (R3.2, R3.3).
+      # Sin HMAC_SECRET el `BundleExporter` falla en runtime con
+      # `StateError`. Validamos antes de buildear para que el error
+      # sea visible en CI y no en la APK ya distribuida.
+      - name: Validate HMAC_SECRET
+        run: |
+          if [ -z "${{ secrets.HMAC_SECRET }}" ]; then
+            echo "::error::Falta el secret HMAC_SECRET. Sin él, BundleExporter falla en runtime."
+            exit 1
+          fi
+
       # Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3).
       # Decodifica el base64 del secret a android/app/oirpro-release.jks.
       # Esa misma ruta es la que referencia key.properties (storeFile=oirpro-release.jks),
@@ -84,7 +95,7 @@ jobs:
           EOF
 
       - name: Build APK
-        run: flutter build apk --release --obfuscate --split-debug-info=build/debug-info
+        run: flutter build apk --release --obfuscate --split-debug-info=build/debug-info --dart-define=HMAC_SECRET=${{ secrets.HMAC_SECRET }}
 
       - name: Rename APK to oir-pro.apk
         run: |
