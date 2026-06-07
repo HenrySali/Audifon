@@ -410,7 +410,15 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     std::memcpy(outPtr, inPtr, numFrames * sizeof(float));
 
     // ─── Diagnostic: check if input has actual audio data ────────────────
-    // Log once every ~2 seconds to avoid flooding logcat
+    // Log once every ~2 seconds to avoid floodear logcat.
+    // Spec dnn-voice-level-recovery R2.1, R2.2, R2.3:
+    //   - userIntensity      : valor del slider (intensity_ del usuario).
+    //   - effectiveIntensity : valor post-VAD-cap (lo que efectivamente se
+    //                          aplica en la mezcla dry/wet).
+    //   - vadActive          : flag del SceneAnalyzer del último bloque
+    //                          (mismo getter que el cableo de notifyVoiceActive).
+    // Reusamos el mismo `diagCounter` y la misma cadencia (~2 s) para no
+    // floodear logcat ni introducir un contador nuevo.
     static int diagCounter = 0;
     if (++diagCounter >= callbacksPerLevelReport_ * 20) {
         diagCounter = 0;
@@ -419,8 +427,13 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
             float absVal = std::fabs(inPtr[i]);
             if (absVal > maxSample) maxSample = absVal;
         }
-        LOGI("Input diag: numFrames=%d, maxSample=%.6f, inputPtr=%p",
-             numFrames, maxSample, inputData);
+        const float userIntensity      = dnnDenoiser_.getIntensity();
+        const float effectiveIntensity = dnnDenoiser_.getEffectiveIntensity();
+        const bool  vadActive          = sceneAnalyzer_.getVad().isVoiceActive();
+        LOGI("Input diag: numFrames=%d, maxSample=%.6f, "
+             "DNN[user=%.2f, eff=%.2f, vad=%d]",
+             numFrames, maxSample,
+             userIntensity, effectiveIntensity, vadActive ? 1 : 0);
     }
 
     // ─── DNN Denoiser (GTCRN) — REEMPLAZA al NR Wiener cuando enabled ────
@@ -437,6 +450,21 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
     sceneAnalyzer_.process(inPtr, numFrames);
+
+    // ─── Cablear voice_active al DNN denoiser para el cap del Paso 1 ────
+    // Spec dnn-voice-level-recovery R1.1, R1.2, R5.2:
+    //
+    // El SceneAnalyzer corre AHORA, sobre el input crudo del bloque actual,
+    // pero `dnnDenoiser_.process()` del callback corriente ya consumió el
+    // valor de `voice_active` del bloque ANTERIOR (lectura atomic en
+    // `process()`).
+    //
+    // Por lo tanto, el flag que estamos guardando acá lo va a leer el
+    // PRÓXIMO callback (latencia de 1 bloque ≈ 5 ms a 16 kHz), lo cual
+    // es despreciable frente a la rampa asimétrica del cap (40 ms attack,
+    // 300 ms release). Esto evita reordenar el callback para correr el
+    // VAD antes del DNN.
+    dnnDenoiser_.notifyVoiceActive(sceneAnalyzer_.getVad().isVoiceActive());
 
     // ─── Calibration Spectrum Validator (Fase 2, read-only on input) ─────
     // Sólo procesa si el técnico activó una secuencia de validación.
