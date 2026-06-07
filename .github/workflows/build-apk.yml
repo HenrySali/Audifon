@@ -35,20 +35,30 @@ jobs:
         run: flutter pub get
       
       - name: Build APK
-        run: flutter build apk --release
-      
+        run: flutter build apk --release --obfuscate --split-debug-info=build/debug-info
+
+      - name: Rename APK to oir-pro.apk
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/oir-pro.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: psk-hearing-aid-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: oir-pro-apk
+          path: build/app/outputs/flutter-apk/oir-pro.apk
+
+      - name: Upload obfuscation symbols artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oir-pro-debug-symbols
+          path: build/debug-info
 
       - name: Create Release with APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: PSK Hearing Aid v${{ github.run_number }}
-          files: build/app/outputs/flutter-apk/app-release.apk
+          name: Oír Pro v${{ github.run_number }}
+          files: build/app/outputs/flutter-apk/oir-pro.apk
           body: |
-            APK generada automáticamente.
-            Descargá `app-release.apk` directo al celular e instalá.
+            Oír Pro — APK de Servicio Técnico generada automáticamente.
+            Bajá `oir-pro.apk` al celular e instalá.

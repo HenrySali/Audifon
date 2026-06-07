@@ -14,7 +14,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
     <application
-        android:label="PSK Hearing Aid"
+        android:label="Oír Pro"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:name="${applicationName}"
