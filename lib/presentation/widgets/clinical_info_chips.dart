@@ -54,31 +54,11 @@ class ClinicalInfoChips extends StatelessWidget {
         final isDiagnostic =
             state.operatingMode == OperatingMode.diagnostic;
 
-        // Sin bundle o en Modo Amplificador: chip "Sin perfil activo".
+        // En Modo Amplificador (usuario común) o sin bundle activo:
+        // ocultar completamente. La info clínica solo es relevante para
+        // el técnico audiólogo en Modo Diagnóstico (Req 12.3, 12.4).
         if (bundle == null || !isDiagnostic) {
-          return Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                Tooltip(
-                  message: 'No hay audiograma medido aplicado. '
-                      'Realizá una audiometría para activar el perfil.',
-                  child: Chip(
-                    avatar: Icon(
-                      Icons.info_outline,
-                      size: 18,
-                      semanticLabel: 'Información',
-                      color: Colors.grey.shade600,
-                    ),
-                    label: const Text('Sin perfil activo'),
-                    backgroundColor: Colors.grey.shade200,
-                  ),
-                ),
-              ],
-            ),
-          );
+          return const SizedBox.shrink();
         }
 
         // Modo Diagnóstico con bundle activo: LossType + PrescriptionMode.
@@ -94,46 +74,25 @@ class ClinicalInfoChips extends StatelessWidget {
             spacing: 8,
             runSpacing: 4,
             children: [
-              Tooltip(
-                message: lossTooltip,
-                child: Chip(
-                  avatar: Icon(
-                    _lossTypeIcon(bundle.lossType),
-                    size: 18,
-                    semanticLabel: lossTooltip,
-                  ),
-                  label: Text(lossLabel),
-                  backgroundColor: Colors.blue.shade50,
-                ),
+              _DarkInfoChip(
+                icon: _lossTypeIcon(bundle.lossType),
+                label: lossLabel,
+                tooltip: lossTooltip,
               ),
-              Tooltip(
-                message: modeTooltip,
-                child: Chip(
-                  avatar: Icon(
-                    _prescriptionModeIcon(bundle.prescriptionMode),
-                    size: 18,
-                    semanticLabel: modeTooltip,
-                  ),
-                  label: Text(modeLabel),
-                  backgroundColor: Colors.teal.shade50,
-                ),
+              _DarkInfoChip(
+                icon: _prescriptionModeIcon(bundle.prescriptionMode),
+                label: modeLabel,
+                tooltip: modeTooltip,
               ),
               if (isMigrated)
-                Tooltip(
-                  message:
+                _DarkInfoChip(
+                  icon: Icons.upgrade,
+                  label: 'Migrado',
+                  tooltip:
                       'Este preset fue migrado desde un schema anterior. '
                       'El bundle se recomputó con el audiograma original.',
-                  child: Chip(
-                    avatar: Icon(
-                      Icons.upgrade,
-                      size: 18,
-                      color: Colors.orange.shade700,
-                      semanticLabel: 'Preset migrado',
-                    ),
-                    label: const Text('Migrado'),
-                    backgroundColor: Colors.orange.shade50,
-                    side: BorderSide(color: Colors.orange.shade200),
-                  ),
+                  // Tinte ámbar suave para diferenciar del cyan principal.
+                  accentColor: const Color(0xFFFFB74D),
                 ),
             ],
           ),
@@ -242,5 +201,67 @@ class ClinicalInfoChips extends StatelessWidget {
       case PrescriptionMode.mhl:
         return Icons.tune;
     }
+  }
+}
+
+// =============================================================================
+// _DarkInfoChip — Chip estilizado para el tema oscuro de la app.
+// =============================================================================
+
+/// Chip compacto consistente con el tema oscuro azul marino del proyecto.
+///
+/// Reemplaza el `Chip` de Material default (fondo blanco, look "google docs")
+/// por un contenedor con fondo cyan translúcido, borde tenue y texto cyan.
+/// El estilo armoniza con los chips "Conversación", "Smart-NL3" y los selectores
+/// de experiencia con audífonos en la pantalla principal.
+///
+/// Si se pasa `accentColor`, el chip usa ese color en vez del cyan default
+/// (útil para diferenciar chips secundarios como "Migrado" en ámbar).
+class _DarkInfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final Color? accentColor;
+
+  const _DarkInfoChip({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    this.accentColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = accentColor ?? Colors.cyanAccent.shade100;
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: color.withValues(alpha: 0.35),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: color, semanticLabel: tooltip),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
