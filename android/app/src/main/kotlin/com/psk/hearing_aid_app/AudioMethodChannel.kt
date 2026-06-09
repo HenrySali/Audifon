@@ -237,6 +237,10 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetDnnIsActive()
                     result.success(active)
                 }
+                // Diagnostic Recording (DSP Verification)
+                "startDiagnosticRecording" -> handleStartDiagnosticRecording(call, result)
+                "stopDiagnosticRecording" -> handleStopDiagnosticRecording(result)
+                "getDiagnosticRecordingProgress" -> handleGetDiagnosticRecordingProgress(result)
                 // ─── Calibración de hardware (C-3, native-calibration-handlers) ─
                 // Implementación real de los 3 handlers con AudioRecord directo
                 // (no pasa por el pipeline DSP del proyecto). Persistencia +
@@ -602,6 +606,46 @@ class AudioMethodChannel(
         currentState = state
         stateEventSink?.success(state)
         Log.d(TAG, "State emitted: $state")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Handlers de Diagnostic Recording (DSP Verification)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Inicia grabación de diagnóstico DSP.
+     * Construye la ruta usando getExternalFilesDir + filename recibido de Flutter.
+     * Argumentos: { "filePath": String }
+     */
+    private fun handleStartDiagnosticRecording(call: MethodCall, result: MethodChannel.Result) {
+        val filePath = call.argument<String>("filePath")
+            ?: return result.error("INVALID_ARGS", "Missing 'filePath' argument", null)
+
+        // Construct full path using app-specific external storage
+        val dir = context.getExternalFilesDir(null)
+            ?: return result.error("STORAGE_ERROR", "External storage not available", null)
+
+        val fullPath = "${dir.absolutePath}/$filePath"
+
+        val ok = nativeBridge.nativeStartDiagnosticRecording(fullPath)
+        result.success(ok)
+    }
+
+    /**
+     * Detiene la grabación de diagnóstico.
+     * @return 0=success, 1=discarded, -1=error
+     */
+    private fun handleStopDiagnosticRecording(result: MethodChannel.Result) {
+        val status = nativeBridge.nativeStopDiagnosticRecording()
+        result.success(status)
+    }
+
+    /**
+     * Obtiene el progreso de la grabación de diagnóstico en milisegundos.
+     */
+    private fun handleGetDiagnosticRecordingProgress(result: MethodChannel.Result) {
+        val progress = nativeBridge.nativeGetDiagnosticRecordingProgress()
+        result.success(progress)
     }
 
     // ─────────────────────────────────────────────────────────────────────

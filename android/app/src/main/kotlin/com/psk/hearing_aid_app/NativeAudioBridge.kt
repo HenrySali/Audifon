@@ -367,6 +367,28 @@ class NativeAudioBridge {
      */
     external fun nativeGetToneSnapshot(): ByteArray
 
+    // ─── Diagnostic Recording (DSP Verification) ───────────────────────────
+
+    /**
+     * Inicia grabación de diagnóstico DSP al path indicado.
+     * Captura pre-DSP (canal izq) y post-DSP (canal der) en WAV estéreo 60s.
+     * @param filePath Ruta absoluta del archivo WAV de salida
+     * @return true si la grabación inició correctamente
+     */
+    external fun nativeStartDiagnosticRecording(filePath: String): Boolean
+
+    /**
+     * Detiene la grabación de diagnóstico. Si no completó 60s, descarta el archivo.
+     * @return 0=success (completado), 1=discarded (parada temprana), -1=error
+     */
+    external fun nativeStopDiagnosticRecording(): Int
+
+    /**
+     * Obtiene el tiempo transcurrido de grabación en milisegundos.
+     * @return ms transcurridos, o -1 si no hay grabación activa
+     */
+    external fun nativeGetDiagnosticRecordingProgress(): Long
+
     // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
 
     /**
