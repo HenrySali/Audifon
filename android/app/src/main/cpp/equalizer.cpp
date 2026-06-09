@@ -8,9 +8,11 @@
 /// Las ganancias se actualizan atómicamente desde el hilo de UI;
 /// los coeficientes se recalculan en el hilo de audio al inicio de cada bloque.
 ///
-/// NOTA: Los cambios de preset EQ se manejan con reinicio rápido del engine
-/// desde Dart (stop+start ~50ms). Esto garantiza que los filtros siempre
-/// arrancan con estado limpio, eliminando transitorios por completo.
+/// Crossfade: Al recibir nuevas ganancias via setGains(), se inicia una rampa
+/// lineal de kCrossfadeLength muestras (256 @ 16kHz = 16ms) que interpola
+/// suavemente entre las ganancias anteriores y las nuevas. Los coeficientes
+/// biquad se recalculan por-bloque durante la rampa. Esto elimina clicks/pops
+/// al cambiar presets EQ (Requisito 2.5).
 
 #include "equalizer.h"
 
@@ -26,10 +28,13 @@ Equalizer::Equalizer() {
     for (int i = 0; i < kEqBandCount; ++i) {
         gains_[i].store(0.0f, std::memory_order_relaxed);
         appliedGains_[i] = 0.0f;
+        targetGains_[i] = 0.0f;
+        currentGains_[i] = 0.0f;
         states_[i].reset();
         // Coeficientes por defecto: pass-through (b0=1, resto=0)
         coeffs_[i] = BiquadCoeffs{};
     }
+    crossfadeRemaining_ = 0;
     gainsChanged_.store(false, std::memory_order_relaxed);
 }
 
@@ -40,12 +45,15 @@ Equalizer::Equalizer() {
 void Equalizer::init(int sampleRate) {
     sampleRate_ = sampleRate;
 
-    // Resetear estados de filtro
+    // Resetear estados de filtro y crossfade
     for (int i = 0; i < kEqBandCount; ++i) {
         states_[i].reset();
         appliedGains_[i] = 0.0f;
+        targetGains_[i] = 0.0f;
+        currentGains_[i] = 0.0f;
         coeffs_[i] = BiquadCoeffs{};
     }
+    crossfadeRemaining_ = 0;
 
     // Forzar recálculo de coeficientes en el próximo process()
     gainsChanged_.store(true, std::memory_order_release);
@@ -63,7 +71,7 @@ void Equalizer::setGains(const float gains[kEqBandCount]) {
         if (g > 50.0f) g = 50.0f;
         gains_[i].store(g, std::memory_order_relaxed);
     }
-    // Señalar que hay cambio pendiente
+    // Señalar que hay cambio pendiente — inicia crossfade en el hilo de audio
     gainsChanged_.store(true, std::memory_order_release);
 }
 
@@ -141,12 +149,44 @@ BiquadCoeffs Equalizer::computePeakingCoeffs(float frequencyHz, float gainDb, fl
 
 void Equalizer::updateCoefficients() {
     for (int i = 0; i < kEqBandCount; ++i) {
-        const float newGain = gains_[i].load(std::memory_order_relaxed);
+        // Usar currentGains_ (que ya están interpolados durante crossfade)
+        const float newGain = currentGains_[i];
 
         // Solo recalcular si la ganancia cambió significativamente
         if (std::fabs(newGain - appliedGains_[i]) > 0.01f) {
             coeffs_[i] = computePeakingCoeffs(kEqFrequencies[i], newGain, kEqQFactors[i]);
             appliedGains_[i] = newGain;
+        }
+    }
+}
+
+// ============================================================================
+// Avance del crossfade (llamado desde hilo de audio, por-bloque)
+// ============================================================================
+
+void Equalizer::advanceCrossfade(int blockSize) {
+    if (crossfadeRemaining_ <= 0) return;
+
+    // Calcular el paso de interpolación para este bloque.
+    // Avanzamos blockSize muestras de las crossfadeRemaining_ restantes.
+    const int samplesToAdvance = (blockSize < crossfadeRemaining_) ? blockSize : crossfadeRemaining_;
+
+    // Factor de interpolación: proporción del bloque respecto al remanente
+    // t = 1.0 significa llegar completamente al target en este bloque
+    const float t = static_cast<float>(samplesToAdvance) / static_cast<float>(crossfadeRemaining_);
+
+    for (int i = 0; i < kEqBandCount; ++i) {
+        // Interpolación lineal: current += (target - current) * t
+        currentGains_[i] += (targetGains_[i] - currentGains_[i]) * t;
+    }
+
+    crossfadeRemaining_ -= samplesToAdvance;
+
+    // Si terminamos la rampa, snap a los valores target exactos
+    if (crossfadeRemaining_ <= 0) {
+        crossfadeRemaining_ = 0;
+        for (int i = 0; i < kEqBandCount; ++i) {
+            currentGains_[i] = targetGains_[i];
         }
     }
 }
@@ -181,10 +221,21 @@ float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
 void Equalizer::process(float* buffer, int blockSize) {
     if (buffer == nullptr || blockSize <= 0) return;
 
-    // Verificar si hay cambio de ganancias pendiente
+    // Verificar si hay cambio de ganancias pendiente — inicia crossfade
     if (gainsChanged_.load(std::memory_order_acquire)) {
-        updateCoefficients();
+        // Leer las nuevas ganancias objetivo
+        for (int i = 0; i < kEqBandCount; ++i) {
+            targetGains_[i] = gains_[i].load(std::memory_order_relaxed);
+        }
+        // Iniciar rampa de crossfade
+        crossfadeRemaining_ = kCrossfadeLength;
         gainsChanged_.store(false, std::memory_order_release);
+    }
+
+    // Si estamos en crossfade, interpolar ganancias y recalcular coeficientes
+    if (crossfadeRemaining_ > 0) {
+        advanceCrossfade(blockSize);
+        updateCoefficients();
     }
 
     // Aplicar cada banda en serie con per-band limiter

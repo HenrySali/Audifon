@@ -9,7 +9,8 @@
 /// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa sin cambio.
 /// - MPO es la última etapa — red de seguridad absoluta sample-by-sample.
 /// - MPO threshold: 110 dB SPL (FDA 21 CFR 800.30 OTC limit: 111 dB SPL).
-/// - Offset calibración: 93 dB para mic celular Android con AGC.
+/// - Offset calibración: 120 dB en producción (Kotlin callers override el
+///   default struct). Ambas apps (paciente + técnico) arrancan con 120f.
 /// - Actualizaciones de parámetros son thread-safe (atómicas, lock-free).
 
 #ifndef HEARING_AID_DSP_PIPELINE_H
@@ -35,7 +36,8 @@ struct AudioConfig {
     int channels = 1;                  ///< mono
     int bitsPerSample = 16;            ///< PCM16
     float mpoThresholdDbSpl = 110.0f;  ///< dB SPL — threshold del MPO (FDA OTC: 111 dB SPL)
-    float splOffset = 93.0f;           ///< Offset dBFS → dB SPL (93 para mic celular con AGC)
+    float splOffset = 93.0f;           ///< Offset dBFS → dB SPL (default struct; callers override:
+                                       ///<   120 for mic realtime, 76 for WAV playback)
 };
 
 /// Parámetros del WDRC (Wide Dynamic Range Compression)

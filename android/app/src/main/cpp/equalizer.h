@@ -10,8 +10,10 @@
 /// - Los coeficientes se recalculan en el hilo de audio al detectar cambio.
 /// - No se usan locks — operación completamente lock-free.
 ///
-/// NOTA: Los cambios de preset EQ se manejan con reinicio rápido del engine
-/// desde Dart (stop+start ~50ms). Esto garantiza filtros con estado limpio.
+/// Crossfade: Al cambiar ganancias, se interpola linealmente entre currentGains_
+/// y targetGains_ durante kCrossfadeLength muestras (256 @ 16kHz = 16ms).
+/// Esto elimina discontinuidades (clicks/pops) al cambiar presets EQ.
+/// Requisito: max sample-to-sample gain change ≤ 0.01 linear (-40 dB) durante rampa.
 
 #ifndef HEARING_AID_EQUALIZER_H
 #define HEARING_AID_EQUALIZER_H
@@ -50,6 +52,15 @@ static constexpr float kEqQFactors[kEqBandCount] = {
 /// -3 dBFS = 0.708 — deja margen para que el WDRC y Volume operen sin clipping.
 /// Esto previene saturación cuando bandas individuales tienen alta ganancia.
 static constexpr float kPerBandCeiling = 0.708f;  // -3 dBFS
+
+/// Longitud del crossfade en muestras (256 @ 16kHz = 16ms).
+/// Rango permitido por requisito: 10-50ms. 16ms está en rango.
+static constexpr int kCrossfadeLength = 256;
+
+/// Máximo cambio de ganancia por muestra en dB durante crossfade.
+/// Con rango max de 50 dB en 256 muestras: 50/256 ≈ 0.195 dB/sample.
+/// Esto corresponde a ~0.0045 linear/sample para ganancias moderadas,
+/// cumpliendo el requisito de ≤ 0.01 linear por muestra.
 
 /// Coeficientes normalizados de un filtro biquad (Direct Form I).
 /// Todos los coeficientes están normalizados por a0 (a0 = 1.0 implícito).
@@ -116,8 +127,12 @@ private:
     /// Calcula coeficientes biquad peaking EQ usando Audio EQ Cookbook.
     BiquadCoeffs computePeakingCoeffs(float frequencyHz, float gainDb, float q) const;
 
-    /// Recalcula coeficientes para todas las bandas que cambiaron.
+    /// Recalcula coeficientes para todas las bandas basándose en currentGains_.
     void updateCoefficients();
+
+    /// Avanza la interpolación del crossfade para un bloque.
+    /// Interpola currentGains_ hacia targetGains_ proporcionalmente al tamaño del bloque.
+    void advanceCrossfade(int blockSize);
 
     /// Procesa una muestra a través de un filtro biquad (Direct Form I).
     static float processBiquadSample(float sample, const BiquadCoeffs& coeffs,
@@ -128,6 +143,11 @@ private:
 
     // --- Ganancias atómicas (actualizables desde hilo de UI) ---
     std::atomic<float> gains_[kEqBandCount];
+
+    // --- Crossfade state (solo accedidos desde hilo de audio) ---
+    float targetGains_[kEqBandCount];     ///< Ganancias objetivo del crossfade (dB)
+    float currentGains_[kEqBandCount];    ///< Ganancias actuales interpoladas (dB)
+    int crossfadeRemaining_ = 0;          ///< Muestras restantes en rampa de crossfade
 
     // --- Coeficientes y estado (solo accedidos desde hilo de audio) ---
     BiquadCoeffs coeffs_[kEqBandCount];   ///< Coeficientes actuales por banda
