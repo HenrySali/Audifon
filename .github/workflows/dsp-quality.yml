@@ -73,7 +73,7 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run quality_eval (passthrough mode — TODO: reemplazar por --dnn-cli)
+      - name: "Run quality_eval (passthrough mode - TODO: reemplazar por --dnn-cli)"
         if: steps.fixtures.outputs.available == 'true'
         working-directory: tools/quality_eval
         run: |
@@ -97,7 +97,7 @@ jobs:
       - name: Notify if fixtures missing
         if: steps.fixtures.outputs.available != 'true'
         run: |
-          echo "## DSP Quality Eval — fixtures pendientes" >> "$GITHUB_STEP_SUMMARY"
+          echo "## DSP Quality Eval - fixtures pendientes" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Para que este workflow valide PESQ+STOI, agregar fixtures en:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
