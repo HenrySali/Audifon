@@ -1,16 +1,18 @@
 /// @file dsp_pipeline.cpp
 /// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
 ///
-/// Pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+/// Pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ (forma espectral) → WDRC (amplifica+comprime) → Volume → MPO
 ///                       ↓
 ///              Environment Classifier
 ///              (actualiza NR + WDRC directamente al target)
 ///
 /// Reglas de oro:
-/// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa.
-/// - Medir nivel PRE-EQ para decisiones de WDRC.
+/// - EQ aplica deltas por banda (forma espectral, ±10 dB).
+/// - WDRC aplica la ganancia prescrita broadband CON compresión dinámica.
+///   Ahora SÍ amplifica (gainFactor > 1.0) — como un audífono real.
+/// - Volume es ajuste fino del usuario.
 /// - MPO es la última etapa — red de seguridad absoluta (110 dB SPL, FDA OTC).
-/// - Silencio debe producir silencio (expansión activa).
+/// - Silencio debe producir silencio (expansión activa en WDRC).
 /// - HPF @ 100 Hz removes rumble while preserving male voice F0 (~120 Hz).
 /// - Offset calibración: 93 dB para mic celular Android con AGC.
 ///
@@ -216,10 +218,12 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
-    // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
-    // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
-    // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
-    // dispare compresión innecesaria.
+    // ─── 5. WDRC — amplifica con compresión dinámica ──────────────────
+    // El WDRC aplica la ganancia prescrita (NAL-NL2 broadband) con
+    // compresión: ganancia completa para señales medias, reducida para
+    // fuertes, y expansión para ruido de fondo.
+    // Usa el nivel PRE-EQ para evitar que los deltas del EQ afecten
+    // la decisión de región.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
     // Métrica: nivel post-WDRC
@@ -279,7 +283,47 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void DspPipeline::setEqGains(const float gains[12]) {
-    eq_.setGains(gains);
+    // Calcular la ganancia prescrita promedio (broadband) para el WDRC.
+    float sum = 0.0f;
+    for (int i = 0; i < 12; ++i) {
+        sum += gains[i];
+    }
+    float avgGainDb = sum / 12.0f;
+
+    // El WDRC aplica la ganancia base broadband (con compresión dinámica).
+    wdrc_.setPrescribedGainDb(avgGainDb);
+
+    // El EQ aplica solo los DELTAS por banda (diferencia vs promedio).
+    // Esto da la forma espectral sin amplificar de más.
+    float deltaGains[12];
+    for (int i = 0; i < 12; ++i) {
+        deltaGains[i] = gains[i] - avgGainDb;
+        // Clamp deltas a rango razonable [-10, +10] dB
+        if (deltaGains[i] < -10.0f) deltaGains[i] = -10.0f;
+        if (deltaGains[i] > 10.0f) deltaGains[i] = 10.0f;
+        // El EQ espera valores >= 0, así que shift al rango positivo
+        // Pero peaking filters soportan tanto boost como cut, y nuestro
+        // EQ usa peaking coeffs que manejan valores > 0 como boost.
+        // Para deltas negativos necesitamos un approach diferente.
+        // Solución: pasar delta + offset, donde offset = max(|negatives|)
+    }
+
+    // Approach simplificado: pasar los deltas como están si el EQ
+    // soporta valores negativos (peaking filter puede cut).
+    // Verificar: nuestro EQ clampea a [0, 50], así que no soporta negativos.
+    // Entonces: mover el rango — el delta más bajo se vuelve 0, el resto sube.
+    float minDelta = 0.0f;
+    for (int i = 0; i < 12; ++i) {
+        if (deltaGains[i] < minDelta) minDelta = deltaGains[i];
+    }
+    float eqGains[12];
+    for (int i = 0; i < 12; ++i) {
+        eqGains[i] = deltaGains[i] - minDelta;  // Ahora todo >= 0
+    }
+    // Ajustar: la ganancia que quitamos del EQ la sumamos al WDRC
+    wdrc_.setPrescribedGainDb(avgGainDb + minDelta);
+
+    eq_.setGains(eqGains);
 }
 
 void DspPipeline::setVolume(float volumeDb) {
