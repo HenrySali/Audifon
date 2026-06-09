@@ -11,9 +11,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../bundle_export/bundle_exporter.dart';
+import '../../domain/audiogram_driven_presets/bundle_builder.dart';
 import '../../domain/audiogram_driven_presets/custom_preset_record.dart';
+import '../../domain/audiogram_driven_presets/style_applicator.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/eq_preset.dart';
+import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_state.dart';
@@ -59,19 +62,19 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
   }
 
   /// Lee los presets disponibles para mostrarlos en el dropdown:
-  /// - Predefinidos de `EqPreset.allPresets` (Normal, Mild, etc.).
+  /// - Estilos audiogram-driven (Normal, Voice Clarity, etc.)
+  /// - "Sin amplificación" (bypass)
   /// - Custom presets persistidos (lista del `ProfileRepository`).
   /// - Fallback al `activeEqPreset` del estado si todo falla.
   Future<void> _loadPresetOptions() async {
     final bloc = context.read<AmplificationBloc>();
     final names = <String>{};
 
-    // 1. Presets predefinidos (la lista deprecada se mantiene como
-    //    fuente de regresión, según docstring del entity).
-    // ignore: deprecated_member_use_from_same_package
-    for (final p in EqPreset.allPresets) {
-      names.add(p.name);
+    // 1. Estilos audiogram-driven (mismos que se exportan).
+    for (final s in StyleApplicator.supportedStyles) {
+      names.add(s);
     }
+    names.add('Sin amplificación');
 
     // 2. Presets personalizados persistidos en el repo.
     try {
@@ -158,22 +161,64 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
     }
   }
 
-  /// Junta los presets predefinidos + custom del repo en una lista
-  /// `EqPreset` lista para serializar.
+  /// Junta los presets audiogram-driven (con ganancias NAL-NL2 reales)
+  /// + un preset "Sin amplificación" plano + custom del repo.
+  ///
+  /// El paciente ve ambos tipos en el selector y elige según preferencia:
+  /// - Presets con nombre de estilo (Normal, Voice Clarity, etc.):
+  ///   ganancias prescritas por NAL-NL2 + delta del estilo.
+  /// - "Sin amplificación": bypass (ganancias 0 en todas las bandas).
   Future<List<EqPreset>> _collectPresets(AmplificationBloc bloc) async {
     final byName = <String, EqPreset>{};
-    // ignore: deprecated_member_use_from_same_package
-    for (final p in EqPreset.allPresets) {
-      byName[p.name] = p;
+
+    // 1. Generar presets audiogram-driven con ganancias reales.
+    final audiogram = await bloc.audiogramRepository.getAudiogram() ??
+        Audiogram.defaultAudiogram();
+    try {
+      final builder = BundleBuilder();
+      final baseBundle = builder.buildFromAudiogram(
+        audiogram,
+        mode: PrescriptionMode.quiet,
+        derivedAt: DateTime.now().toUtc(),
+      );
+      final applicator = StyleApplicator();
+      for (final styleName in StyleApplicator.supportedStyles) {
+        final styled = applicator.applyStyle(baseBundle, styleName);
+        final gains = styled.gainsDb.toList();
+        double avg(List<double> xs, double fb) =>
+            xs.isEmpty ? fb : xs.reduce((a, b) => a + b) / xs.length;
+        byName[styleName] = EqPreset(
+          name: styleName,
+          description: 'Audiograma-driven ($styleName)',
+          gains: gains,
+          compressionRatio: avg(styled.compressionRatios, 2.0),
+          compressionKnee: avg(styled.compressionKneesDbSpl, 55.0),
+          expansionKnee: styled.expansionKneeDbSpl,
+        );
+      }
+    } catch (e) {
+      // Si falla la generación audiogram-driven, caer a los legacy.
+      // ignore: deprecated_member_use_from_same_package
+      for (final p in EqPreset.allPresets) {
+        byName[p.name] = p;
+      }
     }
+
+    // 2. Siempre incluir un preset "Sin amplificación" (plano, ganancias 0)
+    //    para que el paciente pueda comparar con/sin prescripción.
+    byName['Sin amplificación'] = const EqPreset(
+      name: 'Sin amplificación',
+      description: 'Bypass — sin ganancia prescrita (solo reducción de ruido)',
+      gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      compressionRatio: 1.2,
+      compressionKnee: 60.0,
+    );
+
+    // 3. Custom presets del repo (ya tienen ganancias audiogram-driven).
     try {
       final customs = await bloc.profileRepository.getCustomPresets();
       for (final CustomPresetRecord c in customs) {
-        // Reconstruir un EqPreset a partir del bundle del custom preset.
-        // Las ganancias finales del bundle son la fuente de verdad.
         final gains = c.bundle.gainsDb.toList();
-        // Promedios para los scalars: el bundle tiene arrays por banda;
-        // para serializar como `EqPreset` colapsamos a un valor único.
         double avg(List<double> xs, double fallback) =>
             xs.isEmpty ? fallback : xs.reduce((a, b) => a + b) / xs.length;
         byName[c.name] = EqPreset(
@@ -186,7 +231,7 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
         );
       }
     } catch (_) {
-      // Si la lectura falla seguimos solo con los predefinidos.
+      // Si la lectura falla seguimos con los que ya tenemos.
     }
     return byName.values.toList();
   }
