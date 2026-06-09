@@ -181,9 +181,8 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
         mode: PrescriptionMode.quiet,
         derivedAt: DateTime.now().toUtc(),
       );
-      final applicator = StyleApplicator();
       for (final styleName in StyleApplicator.supportedStyles) {
-        final styled = applicator.applyStyle(baseBundle, styleName);
+        final styled = StyleApplicator.applyStyle(baseBundle, styleName);
         final gains = styled.gainsDb.toList();
         double avg(List<double> xs, double fb) =>
             xs.isEmpty ? fb : xs.reduce((a, b) => a + b) / xs.length;
