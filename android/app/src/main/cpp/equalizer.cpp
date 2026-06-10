@@ -198,15 +198,7 @@ void Equalizer::process(float* buffer, int blockSize) {
         BiquadState& state = states_[band];
 
         for (int i = 0; i < blockSize; ++i) {
-            float sample = processBiquadSample(buffer[i], coeffs, state);
-
-            // Per-band limiter
-            const float absSample = std::fabs(sample);
-            if (absSample > kPerBandCeiling) {
-                sample *= kPerBandCeiling / absSample;
-            }
-
-            buffer[i] = sample;
+            buffer[i] = processBiquadSample(buffer[i], coeffs, state);
         }
     }
 }
