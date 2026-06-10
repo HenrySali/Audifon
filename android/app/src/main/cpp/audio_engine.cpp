@@ -512,10 +512,8 @@ double AudioEngine::getDiagnosticRecordingProgress() const {
     if (diagnosticRecorder_.getState() != DiagRecorderState::RECORDING) {
         return -1.0;
     }
-    int64_t written = diagnosticRecorder_.getSamplesWritten();
-    int64_t total = config_.sampleRate * 60; // 60 seconds
-    if (total <= 0) return 0.0;
-    return static_cast<double>(written) / static_cast<double>(total);
+    // Retornar milisegundos transcurridos (Dart espera int ms)
+    return static_cast<double>(diagnosticRecorder_.getElapsedMs());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
