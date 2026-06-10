@@ -475,6 +475,10 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         std::memset(outPtr + numFrames, 0, (numOutputFrames - numFrames) * sizeof(float));
     }
 
+    // ─── Diagnostic Recorder: feed pre/post DSP ─────────────────────────
+    diagnosticRecorder_.feedPreDsp(inPtr, numFrames);
+    diagnosticRecorder_.feedPostDsp(outPtr, numFrames);
+
     // ─── Level accumulation and callback emission (~100ms) ───────────────
     callbackCounter_++;
     if (callbackCounter_ >= callbacksPerLevelReport_) {
@@ -486,6 +490,32 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     return oboe::DataCallbackResult::Continue;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Diagnostic Recorder
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool AudioEngine::startDiagnosticRecording(const std::string& filePath) {
+    DiagRecorderConfig cfg;
+    cfg.sampleRate = config_.sampleRate;
+    cfg.durationSeconds = 60;
+    return diagnosticRecorder_.start(filePath);
+}
+
+bool AudioEngine::stopDiagnosticRecording() {
+    diagnosticRecorder_.stop();
+    return diagnosticRecorder_.getState() == DiagRecorderState::COMPLETED;
+}
+
+double AudioEngine::getDiagnosticRecordingProgress() const {
+    if (diagnosticRecorder_.getState() != DiagRecorderState::RECORDING) {
+        return -1.0;
+    }
+    int64_t written = diagnosticRecorder_.getSamplesWritten();
+    int64_t total = config_.sampleRate * 60; // 60 seconds
+    if (total <= 0) return 0.0;
+    return static_cast<double>(written) / static_cast<double>(total);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

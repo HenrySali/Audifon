@@ -11,6 +11,7 @@
 
 #include <oboe/Oboe.h>
 #include "dsp_pipeline.h"
+#include "diagnostic_recorder.h"
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
@@ -119,6 +120,11 @@ public:
     int getRecordedSnapshotCount() const { return pipeline_.getSpectrumAnalyzer().getRecordedCount(); }
     int getRecordedDataSize() const { return pipeline_.getSpectrumAnalyzer().getRecordedSize(); }
 
+    // ─── Diagnostic Recorder (dual-channel pre/post DSP) ────────────────
+    bool startDiagnosticRecording(const std::string& filePath);
+    bool stopDiagnosticRecording();
+    double getDiagnosticRecordingProgress() const;
+
     // ─── Callback de nivel para UI ──────────────────────────────────────
     using LevelCallback = std::function<void(float levelDbSpl)>;
     void setLevelCallback(LevelCallback cb);
@@ -150,6 +156,9 @@ private:
 
     // ─── Pipeline DSP ───────────────────────────────────────────────────
     DspPipeline pipeline_;
+
+    // ─── Diagnostic Recorder ─────────────────────────────────────────────
+    DiagnosticRecorder diagnosticRecorder_;
 
     // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
     smart_scene::SceneAnalyzer sceneAnalyzer_;

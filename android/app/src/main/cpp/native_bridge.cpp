@@ -25,6 +25,8 @@
 #include "audio_engine.h"
 #include "calibration_spectrum/tone_types.h"
 
+#include <string>
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Logging
 // ─────────────────────────────────────────────────────────────────────────────
@@ -825,6 +827,63 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDnnIsActive(
         return JNI_FALSE;
     }
     return g_engine->getDnnIsActive() ? JNI_TRUE : JNI_FALSE;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Diagnostic Recorder JNI Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Inicia grabación diagnóstica dual-channel.
+/// @param filePath Ruta absoluta del archivo WAV de salida.
+/// @return true si la grabación inició correctamente.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStartDiagnosticRecording(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jstring filePath) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (path == nullptr) return JNI_FALSE;
+
+    bool ok = g_engine->startDiagnosticRecording(std::string(path));
+    env->ReleaseStringUTFChars(filePath, path);
+
+    LOGI("nativeStartDiagnosticRecording: %s → %s", path, ok ? "OK" : "FAILED");
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Detiene la grabación diagnóstica.
+/// @return true si se completó correctamente.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStopDiagnosticRecording(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+
+    bool ok = g_engine->stopDiagnosticRecording();
+    LOGI("nativeStopDiagnosticRecording: %s", ok ? "COMPLETED" : "STOPPED");
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Obtiene el progreso de la grabación diagnóstica.
+/// @return Progreso [0.0, 1.0], o -1.0 si no hay grabación activa.
+JNIEXPORT jdouble JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDiagnosticRecordingProgress(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return -1.0;
+    }
+
+    return g_engine->getDiagnosticRecordingProgress();
 }
 
 } // extern "C"
