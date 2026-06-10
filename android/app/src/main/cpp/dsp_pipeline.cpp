@@ -1,38 +1,24 @@
 /// @file dsp_pipeline.cpp
 /// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
 ///
-/// Pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ (forma espectral) → WDRC (amplifica+comprime) → Volume → MPO
+/// Pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
 ///                       ↓
 ///              Environment Classifier
 ///              (actualiza NR + WDRC directamente al target)
 ///
 /// Reglas de oro:
-/// - EQ aplica deltas por banda (forma espectral, ±10 dB).
-/// - WDRC aplica la ganancia prescrita broadband CON compresión dinámica.
-///   Ahora SÍ amplifica (gainFactor > 1.0) — como un audífono real.
-/// - Volume es ajuste fino del usuario.
+/// - Solo EQ y Volume amplifican. Todo lo demás atenúa o pasa.
+/// - Medir nivel PRE-EQ para decisiones de WDRC.
 /// - MPO es la última etapa — red de seguridad absoluta (110 dB SPL, FDA OTC).
-/// - Silencio debe producir silencio (expansión activa en WDRC).
+/// - Silencio debe producir silencio (expansión activa).
 /// - HPF @ 100 Hz removes rumble while preserving male voice F0 (~120 Hz).
-/// - Offset calibración: 120 dB en producción (callers siempre overriden
-///   el default struct de 93). Ambas apps (paciente + técnico) usan 120 dB
-///   para mic realtime, garantizando parity en las decisiones WDRC.
-///
-/// Gain Parity Verification (Task 3.6, Junio 2026):
-///   - splOffset_: PARITY ✓ — ambas apps inician con 120f (default Kotlin)
-///   - prescribedGainDb: PARITY ✓ — misma función setEqGains() en ambas
-///   - WDRC params: PARITY ✓ — paciente usa bundle.wdrc.* (exportado por técnico)
-///   - Zero-gain fix (3.1): Paciente re-deriva gains con tabla NAL-NL2
-///     (misma tabla e interpolación que GainPrescriber del técnico)
-///     produciendo prescribedGainDb equivalente al técnico (±2 dB target met)
+/// - Offset calibración: 93 dB para mic celular Android con AGC.
 ///
 /// Cambios validados con literatura académica (Mayo 2026):
 /// - MPO 110 dB SPL: FDA 21 CFR 800.30, consenso profesional OTC
 /// - HPF 100 Hz: preserva F0 masculina, elimina rumble
 /// - Sin adaptive EQ scaling: causaba doble atenuación (audioXpress OTC paper)
-/// - Headroom guard: pre-MPO soft limiter reduces gain proportionally when
-///   combined gain exceeds -4.5 dBFS ceiling, preventing audible distortion
-///   from brick-wall MPO clipping on high-gain presets.
+/// - Sin headroom guard: redundante con MPO correcto (Hearing Review MPO paper)
 /// - NR transiciones directas: NR tiene suavizado interno, gradualidad redundante
 /// - Clasificador activo: Keidser 2017 muestra ventaja SRT del automático
 
@@ -41,10 +27,6 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
-#include <android/log.h>
-
-#define DSP_LOG_TAG "DspPipeline"
-#define DSP_LOGW(...) __android_log_print(ANDROID_LOG_WARN, DSP_LOG_TAG, __VA_ARGS__)
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -234,12 +216,10 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
-    // ─── 5. WDRC — amplifica con compresión dinámica ──────────────────
-    // El WDRC aplica la ganancia prescrita (NAL-NL2 broadband) con
-    // compresión: ganancia completa para señales medias, reducida para
-    // fuertes, y expansión para ruido de fondo.
-    // Usa el nivel PRE-EQ para evitar que los deltas del EQ afecten
-    // la decisión de región.
+    // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
+    // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
+    // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
+    // dispare compresión innecesaria.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
     // Métrica: nivel post-WDRC
@@ -299,98 +279,7 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void DspPipeline::setEqGains(const float gains[12]) {
-    // Calcular la ganancia prescrita promedio (broadband) para el WDRC.
-    float sum = 0.0f;
-    for (int i = 0; i < 12; ++i) {
-        sum += gains[i];
-    }
-    float avgGainDb = sum / 12.0f;
-
-    if (avgGainDb < 1.0f) {
-        DSP_LOGW("setEqGains: avgGainDb=%.1f dB (< 1.0). "
-                 "Pipeline will apply near-zero amplification. "
-                 "Caller should verify gains are intentional.", avgGainDb);
-    }
-
-    // ─── Headroom-aware gain splitting (pre-MPO soft limiter) ───────────
-    // Calculate the maximum EQ delta to estimate worst-case peak output.
-    // If combined gain (WDRC broadband + max EQ delta + volume) exceeds the
-    // headroom ceiling, reduce prescribedGainDb proportionally. This prevents
-    // the MPO brick-wall limiter from clipping abruptly on high-gain presets.
-    //
-    // Headroom ceiling derivation:
-    // - MPO clips at 0.85 linear (-1.4 dBFS)
-    // - EQ per-band ceiling at 0.708 linear (-3.0 dBFS)
-    // - Combined safe output: 0.85 × 0.708 = 0.6018 linear (-4.5 dBFS)
-    // - For typical moderate input (~0.003 linear = -50 dBFS at 50 dB SPL):
-    //   max safe total gain = -4.5 - (-50) = 45.5 dB
-    // - We use 45.0 dB as the gain budget ceiling (conservative).
-    //
-    // This ensures low/moderate gain presets (total < 45 dB) pass unchanged
-    // while high-gain presets (Moderate+, 50+ dB total) get smoothly reduced.
-    static constexpr float kHeadroomCeilingDb = 45.0f;
-
-    // Compute max delta (the highest per-band deviation above the average)
-    float maxDelta = 0.0f;
-    for (int i = 0; i < 12; ++i) {
-        float delta = gains[i] - avgGainDb;
-        if (delta > maxDelta) maxDelta = delta;
-    }
-
-    // Current volume in dB (read atomically from UI thread)
-    float currentVolumeDb = volumeDb_.load(std::memory_order_relaxed);
-
-    // Total estimated gain at peak band
-    float totalGainDb = avgGainDb + maxDelta + currentVolumeDb;
-
-    // Compute prescribedGainDb with headroom guard
-    float prescribedGainDb = avgGainDb;
-    if (totalGainDb > kHeadroomCeilingDb) {
-        // Reduce prescribed gain by the amount of overshoot.
-        // This smoothly attenuates rather than hard-clipping at MPO.
-        float overshootDb = totalGainDb - kHeadroomCeilingDb;
-        prescribedGainDb = avgGainDb - overshootDb;
-
-        // Don't reduce below zero — MPO remains as final safety net
-        if (prescribedGainDb < 0.0f) {
-            prescribedGainDb = 0.0f;
-        }
-
-        DSP_LOGW("Headroom guard: totalGain=%.1f dB > ceiling=%.1f dB, "
-                 "reducing prescribedGainDb from %.1f to %.1f (overshoot=%.1f dB)",
-                 totalGainDb, kHeadroomCeilingDb,
-                 avgGainDb, prescribedGainDb, overshootDb);
-    }
-
-    // El WDRC aplica la ganancia base broadband (con compresión dinámica).
-    wdrc_.setPrescribedGainDb(prescribedGainDb);
-
-    // El EQ aplica solo los DELTAS por banda (diferencia vs promedio).
-    // Esto da la forma espectral sin amplificar de más.
-    float deltaGains[12];
-    for (int i = 0; i < 12; ++i) {
-        deltaGains[i] = gains[i] - avgGainDb;
-        // Clamp deltas a rango razonable [-10, +10] dB
-        if (deltaGains[i] < -10.0f) deltaGains[i] = -10.0f;
-        if (deltaGains[i] > 10.0f) deltaGains[i] = 10.0f;
-    }
-
-    // Approach simplificado: pasar los deltas como están si el EQ
-    // soporta valores negativos (peaking filter puede cut).
-    // Verificar: nuestro EQ clampea a [0, 50], así que no soporta negativos.
-    // Entonces: mover el rango — el delta más bajo se vuelve 0, el resto sube.
-    float minDelta = 0.0f;
-    for (int i = 0; i < 12; ++i) {
-        if (deltaGains[i] < minDelta) minDelta = deltaGains[i];
-    }
-    float eqGains[12];
-    for (int i = 0; i < 12; ++i) {
-        eqGains[i] = deltaGains[i] - minDelta;  // Ahora todo >= 0
-    }
-    // Ajustar: la ganancia que quitamos del EQ la sumamos al WDRC
-    wdrc_.setPrescribedGainDb(prescribedGainDb + minDelta);
-
-    eq_.setGains(eqGains);
+    eq_.setGains(gains);
 }
 
 void DspPipeline::setVolume(float volumeDb) {
