@@ -509,7 +509,12 @@ bool AudioEngine::stopDiagnosticRecording() {
 }
 
 double AudioEngine::getDiagnosticRecordingProgress() const {
-    if (diagnosticRecorder_.getState() != DiagRecorderState::RECORDING) {
+    auto state = diagnosticRecorder_.getState();
+    if (state == DiagRecorderState::COMPLETED || state == DiagRecorderState::FINALIZING) {
+        // Recording finished — return full duration so Dart triggers completion
+        return 60000.0;
+    }
+    if (state != DiagRecorderState::RECORDING) {
         return -1.0;
     }
     // Retornar milisegundos transcurridos (Dart espera int ms)
