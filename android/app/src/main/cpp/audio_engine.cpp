@@ -376,30 +376,6 @@ void AudioEngine::setDnnIntensity(float intensity) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Diagnostic Recording (DSP Verification)
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool AudioEngine::startDiagnosticRecording(const std::string& filePath) {
-    if (!running_.load(std::memory_order_acquire)) {
-        LOGW("startDiagnosticRecording: engine not running");
-        return false;
-    }
-    return diagRecorder_.start(filePath);
-}
-
-void AudioEngine::stopDiagnosticRecording() {
-    diagRecorder_.stop();
-}
-
-int64_t AudioEngine::getDiagnosticRecordingProgress() const {
-    return diagRecorder_.getElapsedMs();
-}
-
-DiagRecorderState AudioEngine::getDiagnosticRecordingState() const {
-    return diagRecorder_.getState();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Oboe FullDuplexStream Callback
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -432,13 +408,6 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     const float* inPtr = static_cast<const float*>(inputData);
     float* outPtr = static_cast<float*>(outputData);
     std::memcpy(outPtr, inPtr, numFrames * sizeof(float));
-
-    // ─── Diagnostic Recorder: capture PRE-DSP signal (raw mic input) ─────
-    // feedPreDsp does float→int16 conversion + push to lock-free ring buffer.
-    // No blocking, no allocation — zero additional latency by design.
-    if (diagRecorder_.getState() == DiagRecorderState::RECORDING) {
-        diagRecorder_.feedPreDsp(inPtr, numFrames);
-    }
 
     // ─── Diagnostic: check if input has actual audio data ────────────────
     // Log once every ~2 seconds to avoid floodear logcat.
@@ -478,13 +447,6 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
 
     // ─── DSP processing in-place on output buffer ────────────────────────
     pipeline_.processBlock(outPtr, numFrames);
-
-    // ─── Diagnostic Recorder: capture POST-DSP signal (processed output) ─
-    // feedPostDsp does float→int16 conversion + interleave with pre-DSP +
-    // push to lock-free ring buffer. Zero additional latency by design.
-    if (diagRecorder_.getState() == DiagRecorderState::RECORDING) {
-        diagRecorder_.feedPostDsp(outPtr, numFrames);
-    }
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
     sceneAnalyzer_.process(inPtr, numFrames);

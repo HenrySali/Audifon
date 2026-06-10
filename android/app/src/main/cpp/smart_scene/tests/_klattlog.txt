@@ -1,0 +1,58 @@
+test_klatt_pipeline.cpp
+klatt_voice.cpp
+spectral_features.cpp
+noise_profile.cpp
+vad_detector.cpp
+scene_analyzer.cpp
+Generando c¢digo...
+
+========== Ejecutando tests Klatt ==========
+
+========================================
+  Test del SceneAnalyzer real con voz Klatt
+========================================
+
+    [diag f= 50] inSPL=66.0 score=0.497 voice=0 | LRT=7.53 midSnr=8.8 ltsd=11.7 pitch=0.22 | flat=0.004 tilt=-6.75 zcr=0.0196 pdens=0.82 stat=0.82
+    [diag f=150] inSPL=64.7 score=0.454 voice=1 | LRT=2.22 midSnr=6.2 ltsd=11.3 pitch=0.20 | flat=0.004 tilt=-5.99 zcr=0.0510 pdens=0.75 stat=0.83
+    [diag f=300] inSPL=64.8 score=0.481 voice=1 | LRT=8.63 midSnr=10.0 ltsd=11.0 pitch=0.17 | flat=0.007 tilt=-4.96 zcr=0.0667 pdens=0.57 stat=0.84
+    [diag f=500] inSPL=64.9 score=0.529 voice=1 | LRT=7.08 midSnr=7.5 ltsd=11.8 pitch=0.16 | flat=0.005 tilt=-5.22 zcr=0.0549 pdens=0.62 stat=0.84
+=== T1 voz continua /a/ 65 dB SPL 3s ===
+    Frames totales      : 600
+    Frames voice_active : 548 (91.3 %)
+    Primer voice frame  : 52
+    Ultimo voice frame  : 599
+    Esperado            : [70 %, 100 %]
+    Resultado           : PASS
+=== T2 voz bajita /e/ 50 dB SPL 2s ===
+    Frames totales      : 400
+    Frames voice_active : 352 (88.0 %)
+    Primer voice frame  : 48
+    Ultimo voice frame  : 399
+    Esperado            : [50 %, 100 %]
+    Resultado           : PASS
+=== T3 frase 4 vocales 4s 60 dB SPL ===
+    Frames totales      : 800
+    Frames voice_active : 733 (91.6 %)
+    Primer voice frame  : 67
+    Ultimo voice frame  : 799
+    Esperado            : [70 %, 100 %]
+    Resultado           : PASS
+=== T4 silencio 1s ===
+    Frames totales      : 200
+    Frames voice_active : 0 (0.0 %)
+    Primer voice frame  : -1
+    Ultimo voice frame  : -1
+    Esperado            : [0 %, 0 %]
+    Resultado           : PASS
+=== T5 respiracion 2s ===
+    Frames totales      : 400
+    Frames voice_active : 0 (0.0 %)
+    Primer voice frame  : -1
+    Ultimo voice frame  : -1
+    Esperado            : [0 %, 10 %]
+    Resultado           : PASS
+
+========================================
+  RESULTADO GLOBAL: TODOS PASARON
+========================================
+

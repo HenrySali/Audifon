@@ -60,8 +60,6 @@ add_library(
     calibration_spectrum/tone_analyzer.cpp
     # DNN Denoiser (GTCRN vía OnnxRuntime) — reemplazo del NR Wiener cuando enabled
     dnn_denoiser/dnn_denoiser.cpp
-    # Grabador de diagnóstico DSP (captura dual-channel pre/post DSP)
-    diagnostic_recorder.cpp
 )
 
 # Enlazar con Oboe, librerías del sistema Android, y OnnxRuntime

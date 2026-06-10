@@ -14,7 +14,6 @@
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
-#include "diagnostic_recorder.h"
 
 // Forward decl from <android/asset_manager.h>
 struct AAssetManager;
@@ -120,23 +119,6 @@ public:
     int getRecordedSnapshotCount() const { return pipeline_.getSpectrumAnalyzer().getRecordedCount(); }
     int getRecordedDataSize() const { return pipeline_.getSpectrumAnalyzer().getRecordedSize(); }
 
-    // ─── Diagnostic Recording (DSP Verification) ────────────────────────
-    /// Inicia grabación de diagnóstico DSP al path indicado.
-    /// Captura pre-DSP (canal izq) y post-DSP (canal der) en WAV estéreo.
-    /// @param filePath Ruta absoluta para el archivo WAV de salida.
-    /// @return true si la grabación inició correctamente.
-    bool startDiagnosticRecording(const std::string& filePath);
-
-    /// Detiene la grabación de diagnóstico. Si no se completaron 60s, descarta.
-    void stopDiagnosticRecording();
-
-    /// Obtiene el tiempo transcurrido de grabación en milisegundos.
-    /// @return ms transcurridos, o -1 si no hay grabación activa.
-    int64_t getDiagnosticRecordingProgress() const;
-
-    /// Obtiene el estado actual del grabador de diagnóstico.
-    DiagRecorderState getDiagnosticRecordingState() const;
-
     // ─── Callback de nivel para UI ──────────────────────────────────────
     using LevelCallback = std::function<void(float levelDbSpl)>;
     void setLevelCallback(LevelCallback cb);
@@ -182,11 +164,6 @@ private:
     /// del DspPipeline. Por default desactivado para arrancar igual que hoy.
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
-
-    // ─── Diagnostic Recorder (DSP Verification) ─────────────────────────
-    /// Captura simultánea pre/post DSP en WAV estéreo para verificación
-    /// de función de transferencia. Ring buffer SPSC + hilo escritor dedicado.
-    DiagnosticRecorder diagRecorder_;
 
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;

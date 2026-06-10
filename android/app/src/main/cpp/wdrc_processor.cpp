@@ -1,41 +1,34 @@
 /// @file wdrc_processor.cpp
-/// @brief WDRC con ganancia prescrita integrada (modelo audífono real).
+/// @brief Implementación completa del WDRC con modelo de 3 regiones.
 ///
-/// Arquitectura basada en:
-/// - UC San Diego Open Speech Platform (NIH R01-DC015436)
-/// - openMHA (HoerTech, University of Oldenburg)
-/// - NAL-NL2 (Keidser et al., 2011)
-/// - Starkey Compression Handbook (4th ed.)
-/// - PMC4168964: "Linear gain of 30 dB is applied below the compression
-///   threshold of 40 dB SPL. Above this input level, a compression ratio
-///   of 2:1 is applied."
-///
-/// Modelo I/O de 3 regiones con GANANCIA PRESCRITA:
+/// Modelo I/O de 3 regiones (estándar clínico):
 ///
 ///   Región 1 — Expansión (input < expansionKnee):
-///     gain = prescribedGain - reductionDb
-///     Efecto: atenúa ruido de fondo, pero aún amplifica si es habla suave
+///     reductionDb = (expansionKnee - input) × (1 - 1/ER)
+///     gainFactor = 10^(-reductionDb / 20)
+///     Efecto: atenúa ruido de fondo progresivamente
 ///
 ///   Región 2 — Lineal (expansionKnee ≤ input ≤ compressionKnee):
-///     gain = prescribedGain (completo)
-///     Efecto: amplificación prescrita por NAL-NL2, sin modificación
+///     gainFactor = 1.0
+///     Efecto: pasa sin modificación (ganancia completa del EQ)
 ///
 ///   Región 3 — Compresión (input > compressionKnee):
-///     gain = prescribedGain - reductionDb
-///     Efecto: reduce ganancia progresivamente para sonidos fuertes
+///     reductionDb = (input - compressionKnee) × (1 - 1/CR)
+///     gainFactor = 10^(-reductionDb / 20)
+///     Efecto: protege de sonidos fuertes
 ///
-/// Diferencia crítica vs implementación anterior:
-///   ANTES: gainFactor ∈ [0.0, 1.0] → NUNCA amplificaba
-///   AHORA: gainFactor puede ser > 1.0 → amplifica según prescripción
+/// Envelope detector (suavizado de ganancia muestra-por-muestra):
+///   - Si targetGain < smoothedGain: attack (rápido, protege de picos)
+///   - Si targetGain > smoothedGain: release (lento, evita pumping)
+///
+/// Coeficientes:
+///   attackCoeff = 1 - exp(-1 / (attackMs × sampleRate / 1000))
+///   releaseCoeff = 1 - exp(-1 / (releaseMs × sampleRate / 1000))
 
 #include "wdrc_processor.h"
 
 #include <algorithm>
 #include <cmath>
-
-// Ganancia máxima permitida para protección (50 dB = factor 316×).
-// Esto es un safety clamp — la ganancia real debería ser mucho menor.
-static constexpr float kMaxGainFactor = 316.0f;  // +50 dB
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constructor / Inicialización
@@ -64,25 +57,31 @@ void WdrcProcessor::process(float* buffer, int blockSize, float inputLevelDb) {
         return;
     }
 
-    // 1. Calcular el factor de ganancia objetivo basado en el nivel PRE-EQ
-    //    y la ganancia prescrita actual.
+    // 1. Calcular el factor de ganancia objetivo basado en el nivel PRE-EQ.
+    //    La DECISIÓN de región usa el nivel del bloque completo (PRE-EQ).
     float targetGain = computeGainFactor(inputLevelDb);
 
-    // 2. Leer coeficientes actuales (pueden cambiar entre bloques).
+    // 2. Leer coeficientes actuales (pueden cambiar entre bloques si el
+    //    usuario actualiza attackMs/releaseMs desde el hilo de UI).
     float attack = attackCoeff_;
     float release = releaseCoeff_;
 
     // 3. Aplicar ganancia suavizada muestra-por-muestra.
+    //    El envelope detector suaviza la transición entre el gain actual
+    //    (smoothedGain_) y el gain objetivo (targetGain) para evitar
+    //    discontinuidades audibles entre bloques.
     for (int i = 0; i < blockSize; ++i) {
         // Suavizado asimétrico: attack rápido, release lento
         if (targetGain < smoothedGain_) {
+            // Ganancia bajando → attack (rápido, protege de picos)
             smoothedGain_ += attack * (targetGain - smoothedGain_);
         } else {
+            // Ganancia subiendo → release (lento, evita pumping)
             smoothedGain_ += release * (targetGain - smoothedGain_);
         }
 
-        // Clamp a [0.0, kMaxGainFactor] — ahora SÍ puede amplificar
-        smoothedGain_ = std::max(0.0f, std::min(kMaxGainFactor, smoothedGain_));
+        // Clamp gainFactor a [0.0, 1.0] — WDRC nunca amplifica
+        smoothedGain_ = std::max(0.0f, std::min(1.0f, smoothedGain_));
 
         // Aplicar ganancia a la muestra
         buffer[i] *= smoothedGain_;
@@ -90,7 +89,7 @@ void WdrcProcessor::process(float* buffer, int blockSize, float inputLevelDb) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cálculo de ganancia por región CON ganancia prescrita
+// Cálculo de ganancia por región (sin suavizado)
 // ─────────────────────────────────────────────────────────────────────────────
 
 float WdrcProcessor::computeGainFactor(float inputLevelDb) const {
@@ -99,47 +98,37 @@ float WdrcProcessor::computeGainFactor(float inputLevelDb) const {
     float expRatio = params_.expansionRatio.load(std::memory_order_relaxed);
     float compKnee = params_.compressionKnee.load(std::memory_order_relaxed);
     float compRatio = params_.compressionRatio.load(std::memory_order_relaxed);
-    float prescribedGainDb = prescribedGainDb_.load(std::memory_order_relaxed);
 
-    // Protección contra ratios inválidos
+    // Protección contra ratios inválidos (evitar división por cero)
     if (expRatio < 1.0f) expRatio = 1.0f;
     if (compRatio < 1.0f) compRatio = 1.0f;
 
-    // Clamp ganancia prescrita a rango seguro [0, 50] dB
-    prescribedGainDb = std::max(0.0f, std::min(50.0f, prescribedGainDb));
-
-    float effectiveGainDb = prescribedGainDb;
-
     if (inputLevelDb < expKnee) {
         // ─── Región 1: EXPANSIÓN ─────────────────────────────────────
-        // Reduce la ganancia prescrita para señales por debajo del knee
-        // de expansión. Esto atenúa ruido de fondo.
-        // Cuanto más lejos del knee, más se reduce la ganancia.
+        // Atenúa señales por debajo del knee de expansión.
+        // Cuanto más lejos del knee, más atenuación.
+        // Con ER=2:1, cada dB debajo del knee produce 0.5 dB de reducción.
         float belowKnee = expKnee - inputLevelDb;
         float reductionDb = belowKnee * (1.0f - 1.0f / expRatio);
-        effectiveGainDb = prescribedGainDb - reductionDb;
-        // Si la reducción supera la ganancia prescrita, atenuar por debajo
-        // de unity (suprimir ruido de fondo)
-        if (effectiveGainDb < -20.0f) effectiveGainDb = -20.0f;
+        float gainFactor = std::pow(10.0f, -reductionDb / 20.0f);
+        // Clamp a [0.0, 1.0]
+        return std::max(0.0f, std::min(1.0f, gainFactor));
 
     } else if (inputLevelDb > compKnee) {
         // ─── Región 3: COMPRESIÓN ────────────────────────────────────
-        // Reduce la ganancia prescrita para señales fuertes.
-        // Protege el oído de sonidos excesivos.
+        // Atenúa señales por encima del knee de compresión.
+        // Cuanto más lejos del knee, más atenuación.
+        // Con CR=2:1, cada dB encima del knee produce 0.5 dB de reducción.
         float aboveKnee = inputLevelDb - compKnee;
         float reductionDb = aboveKnee * (1.0f - 1.0f / compRatio);
-        effectiveGainDb = prescribedGainDb - reductionDb;
-        // Mínimo 0 dB (unity) — nunca atenuar señales fuertes por debajo
-        // del original, solo reducir la amplificación.
-        if (effectiveGainDb < 0.0f) effectiveGainDb = 0.0f;
+        float gainFactor = std::pow(10.0f, -reductionDb / 20.0f);
+        // Clamp a [0.0, 1.0]
+        return std::max(0.0f, std::min(1.0f, gainFactor));
     }
-    // Región 2 (lineal): effectiveGainDb = prescribedGainDb (sin cambio)
 
-    // Convertir dB a factor lineal
-    float gainFactor = std::pow(10.0f, effectiveGainDb / 20.0f);
-
-    // Safety clamp
-    return std::max(0.0f, std::min(kMaxGainFactor, gainFactor));
+    // ─── Región 2: LINEAL ────────────────────────────────────────────
+    // Entre los dos knees: ganancia unitaria (sin modificación).
+    return 1.0f;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,13 +161,8 @@ void WdrcProcessor::setReleaseMs(float ms) {
     updateCoefficients();
 }
 
-void WdrcProcessor::setPrescribedGainDb(float gainDb) {
-    prescribedGainDb_.store(std::max(0.0f, std::min(50.0f, gainDb)),
-                            std::memory_order_relaxed);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Headroom Guard (post-processing peak protection)
+// Headroom Guard (post-EQ peak protection)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void WdrcProcessor::applyHeadroomGuard(float* buffer, int blockSize) {
@@ -186,6 +170,7 @@ void WdrcProcessor::applyHeadroomGuard(float* buffer, int blockSize) {
         return;
     }
 
+    // Scan for peak amplitude in the buffer
     float peak = 0.0f;
     for (int i = 0; i < blockSize; ++i) {
         float absVal = std::abs(buffer[i]);
@@ -194,6 +179,7 @@ void WdrcProcessor::applyHeadroomGuard(float* buffer, int blockSize) {
         }
     }
 
+    // If peak exceeds ceiling, scale entire block to fit
     static constexpr float kCeiling = 0.95f;
     if (peak > kCeiling) {
         float scale = kCeiling / peak;
@@ -211,9 +197,13 @@ void WdrcProcessor::updateCoefficients() {
     float attackMs = params_.attackMs.load(std::memory_order_relaxed);
     float releaseMs = params_.releaseMs.load(std::memory_order_relaxed);
 
+    // Protección contra valores inválidos
     if (attackMs <= 0.0f) attackMs = 5.0f;
     if (releaseMs <= 0.0f) releaseMs = 100.0f;
 
+    // Fórmula: coeff = 1 - exp(-1 / (timeMs * sampleRate / 1000))
+    // Esto produce un filtro de primer orden con constante de tiempo = timeMs.
+    // Después de ~3× timeMs, la señal alcanza ~95% del valor objetivo.
     float attackSamples = attackMs * static_cast<float>(sampleRate_) / 1000.0f;
     float releaseSamples = releaseMs * static_cast<float>(sampleRate_) / 1000.0f;
 
