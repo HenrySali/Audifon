@@ -306,6 +306,12 @@ void DspPipeline::setEqGains(const float gains[12]) {
     }
     float avgGainDb = sum / 12.0f;
 
+    if (avgGainDb < 1.0f) {
+        DSP_LOGW("setEqGains: avgGainDb=%.1f dB (< 1.0). "
+                 "Pipeline will apply near-zero amplification. "
+                 "Caller should verify gains are intentional.", avgGainDb);
+    }
+
     // ─── Headroom-aware gain splitting (pre-MPO soft limiter) ───────────
     // Calculate the maximum EQ delta to estimate worst-case peak output.
     // If combined gain (WDRC broadband + max EQ delta + volume) exceeds the

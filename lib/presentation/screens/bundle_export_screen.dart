@@ -196,10 +196,19 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
         );
       }
     } catch (e) {
-      // Si falla la generación audiogram-driven, caer a los legacy.
+      debugPrint('[BundleExport] audiogram-driven failed ($e), using NAL-NL2 fallback');
+      final fallbackGains = _deriveMinimalGains(audiogram);
       // ignore: deprecated_member_use_from_same_package
       for (final p in EqPreset.allPresets) {
-        byName[p.name] = p;
+        final gains = p.gains.every((g) => g == 0.0) ? fallbackGains : p.gains;
+        byName[p.name] = EqPreset(
+          name: p.name,
+          description: p.description,
+          gains: gains,
+          compressionRatio: p.compressionRatio,
+          compressionKnee: p.compressionKnee,
+          expansionKnee: p.expansionKnee,
+        );
       }
     }
 
@@ -233,6 +242,18 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
       // Si la lectura falla seguimos con los que ya tenemos.
     }
     return byName.values.toList();
+  }
+
+  /// Deriva ganancias mínimas NAL-NL2 desde el audiograma para fallback.
+  /// Usa half-gain rule simplificada cuando no tenemos el BundleBuilder.
+  List<double> _deriveMinimalGains(Audiogram audiogram) {
+    const bandFreqs = [250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000];
+    final thresholds = audiogram.toMap(); // {freq: dBHL}
+    return bandFreqs.map((freq) {
+      final hl = thresholds[freq] ?? thresholds.values.reduce((a, b) => a + b) / thresholds.length;
+      // NAL-NL2 simplified: gain ≈ 0.46 * HL - 9 (for 65 dB input), clamped [0, 50]
+      return (0.46 * hl - 9.0).clamp(0.0, 50.0);
+    }).toList();
   }
 
   /// Resuelve los `WdrcParams` actuales a partir del bundle activo en
