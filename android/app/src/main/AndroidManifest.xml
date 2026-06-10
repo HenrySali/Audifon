@@ -48,6 +48,7 @@
         <service
             android:name=".AudioForegroundService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="microphone" />
 
         <meta-data

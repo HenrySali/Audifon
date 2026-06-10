@@ -159,6 +159,17 @@ class AudioForegroundService : Service() {
         super.onDestroy()
     }
 
+    /**
+     * Llamado cuando el usuario desliza la app de recientes.
+     * NO detenemos el servicio — el audio debe seguir vivo.
+     * El servicio solo se detiene con ACTION_STOP explícito ("Apagar").
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "onTaskRemoved — keeping audio alive (service continues)")
+        // No llamar a stopSelf(). El servicio sigue corriendo con la
+        // notificación y el proceso se mantiene vivo → g_engine sigue activo.
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Notificación persistente
     // ─────────────────────────────────────────────────────────────────────
