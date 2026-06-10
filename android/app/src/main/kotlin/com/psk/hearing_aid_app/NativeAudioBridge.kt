@@ -369,6 +369,29 @@ class NativeAudioBridge {
 
     // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
 
+    // ─── Diagnostic Recorder (grabación dual-channel pre/post DSP) ──────
+
+    /**
+     * Inicia grabación diagnóstica dual-channel (pre-DSP + post-DSP).
+     * @param filePath Ruta absoluta del archivo WAV de salida.
+     * @return true si la grabación inició correctamente.
+     */
+    external fun nativeStartDiagnosticRecording(filePath: String): Boolean
+
+    /**
+     * Detiene la grabación diagnóstica.
+     * @return true si se detuvo correctamente.
+     */
+    external fun nativeStopDiagnosticRecording(): Boolean
+
+    /**
+     * Obtiene el progreso de la grabación diagnóstica.
+     * @return Progreso como fracción [0.0, 1.0], o -1 si no hay grabación activa.
+     */
+    external fun nativeGetDiagnosticRecordingProgress(): Double
+
+    // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
+
     /**
      * Inicializa el modelo DNN GTCRN desde assets. Llamar UNA VEZ al startup,
      * después de `nativeStart()`. Idempotente.
