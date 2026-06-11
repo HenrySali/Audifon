@@ -188,7 +188,7 @@ class _AnalyzerScreenState extends State<AnalyzerScreen>
   Widget build(BuildContext context) {
     return PopScope(
       canPop: _state != AnalyzerScreenState.analyzing,
-      onPopInvokedWithResult: (didPop, _) {
+      onPopInvoked: (didPop) {
         if (!didPop) return;
         _runner.cancel();
         _result = null;
