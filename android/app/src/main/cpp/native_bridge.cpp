@@ -507,8 +507,18 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetCurrentSpectrum(
 /// Retorna métricas de todas las etapas del pipeline DSP como float array.
 /// Orden: [inputLevel, postNrLevel, postEqLevel, postWdrcLevel, postVolumeLevel,
 ///         outputLevel, peakSample, clipCount, wdrcGainFactor, wdrcRegion,
-///         eqMaxGain, environmentClass]
-/// Total: 12 floats.
+///         eqMaxGain, environmentClass, preDnnLevelDb, wdrcUsesExternalLevel]
+/// Total: 14 floats.
+///
+/// Los dos últimos campos (preDnnLevelDb, wdrcUsesExternalLevel) se agregaron
+/// en la spec dsp-chain-optimization (task 4.4) para que el JSON de
+/// diagnóstico pueda registrar el origen del nivel WDRC y verificar el ratio
+/// efectivo de compresión (Property 8 del design).
+///
+///   - preDnnLevelDb: nivel pre-DNN en dB SPL pasado al WDRC (-1.0f si no
+///     hay nivel externo y se midió localmente).
+///   - wdrcUsesExternalLevel: 1.0f si el último processBlock usó nivel
+///     externo (pre-DNN), 0.0f si midió RMS localmente.
 JNIEXPORT jfloatArray JNICALL
 Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
         JNIEnv* env,
@@ -520,9 +530,9 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
 
     auto m = g_engine->getStageMetrics();
 
-    jfloatArray result = env->NewFloatArray(12);
+    jfloatArray result = env->NewFloatArray(14);
     if (result != nullptr) {
-        float data[12] = {
+        float data[14] = {
             m.inputLevel,
             m.postNrLevel,
             m.postEqLevel,
@@ -535,8 +545,10 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
             static_cast<float>(m.wdrcRegion),
             m.eqMaxGain,
             static_cast<float>(m.environmentClass),
+            m.preDnnLevelDb,
+            m.wdrcUsesExternalLevel ? 1.0f : 0.0f,
         };
-        env->SetFloatArrayRegion(result, 0, 12, data);
+        env->SetFloatArrayRegion(result, 0, 14, data);
     }
     return result;
 }

@@ -107,7 +107,7 @@ void DspPipeline::init(const AudioConfig& config) {
 // Procesamiento principal
 // ─────────────────────────────────────────────────────────────────────────────
 
-void DspPipeline::processBlock(float* buffer, int blockSize) {
+void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevelDb) {
     if (buffer == nullptr || blockSize <= 0) {
         return;
     }
@@ -149,11 +149,29 @@ void DspPipeline::processBlock(float* buffer, int blockSize) {
     // Métrica: nivel post-NR
     lastPostNrLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
-    // ─── 2. Medir nivel PRE-EQ (para WDRC y Environment Classifier) ─────
-    // Este nivel refleja la señal REAL de entrada, sin amplificación del EQ.
-    // El WDRC usa este valor para decidir en qué región operar.
-    float inputLevelDb = measureRmsDb(buffer, blockSize);
+    // ─── 2. Determinar nivel para WDRC y Environment Classifier ─────────
+    // Si el AudioEngine pasó un nivel externo válido (medido pre-DNN, antes
+    // de la atenuación de la red neuronal), lo usamos directamente. Esto
+    // evita que el WDRC opere sobre la señal ya atenuada por la DNN
+    // (sub-compresión / región de expansión espuria).
+    //
+    // Sentinel -1.0f (default del .h) o NaN/Inf → fallback a medición
+    // local con measureRmsDb(buffer, blockSize), preservando exactamente
+    // el comportamiento previo a esta optimización (retrocompatibilidad
+    // bit-exacta para callers existentes — incluida la app del paciente
+    // que clona este código).
+    //
+    // Validates Property 4 (design.md): fallback to local measurement.
+    float inputLevelDb;
+    bool usesExternalLevel = false;
+    if (externalLevelDb >= 0.0f && std::isfinite(externalLevelDb)) {
+        inputLevelDb = externalLevelDb;
+        usesExternalLevel = true;
+    } else {
+        inputLevelDb = measureRmsDb(buffer, blockSize);
+    }
     lastInputLevelDb_.store(inputLevelDb, std::memory_order_relaxed);
+    wdrcUsesExternalLevel_.store(usesExternalLevel, std::memory_order_relaxed);
 
     // ─── 3. Environment Classifier (actualiza NR + WDRC en transición) ──
     if (autoClassifyEnabled_.load(std::memory_order_relaxed)) {
@@ -371,6 +389,12 @@ DspPipeline::StageMetrics DspPipeline::getStageMetrics() const {
     m.wdrcRegion = lastWdrcRegion_.load(std::memory_order_relaxed);
     m.eqMaxGain = eq_.getMaxGain();
     m.environmentClass = envClassifier_.getCurrentClass();
+    // Diagnóstico: origen del nivel WDRC (Property 8 del design).
+    // Cuando wdrcUsesExternalLevel_ es true, lastInputLevelDb_ contiene el
+    // nivel pre-DNN pasado por el AudioEngine; lo exponemos como
+    // preDnnLevelDb. Si fue medición local, dejamos el sentinel -1.0f.
+    m.wdrcUsesExternalLevel = wdrcUsesExternalLevel_.load(std::memory_order_relaxed);
+    m.preDnnLevelDb = m.wdrcUsesExternalLevel ? m.inputLevel : -1.0f;
     return m;
 }
 

@@ -174,6 +174,17 @@ private:
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
 
+    // ─── Pre-DNN Level + Headroom Stage (DSP chain optimization) ────────
+    /// Nivel pre-DNN del último bloque (dB SPL). Medido en onBothStreamsReady
+    /// antes de invocar la DNN y pasado a DspPipeline::processBlock para que
+    /// el WDRC use el nivel real de entrada en lugar del nivel post-DNN.
+    /// Expuesto al DiagnosticRecorder para verificación del compression ratio.
+    float lastPreDnnLevelDb_ = 0.0f;
+    /// Flag por-bloque: indica si el Headroom_Stage atenuó el bloque actual
+    /// antes de la DNN. Si true, post-DNN se restaura el nivel multiplicando
+    /// por kHeadroomRestoreLinear. NO es estado persistente entre bloques.
+    bool  headroomApplied_ = false;
+
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;
 
@@ -195,6 +206,16 @@ private:
     static constexpr int kMaxReconnectAttempts = 3;
     static constexpr int kReconnectDelayMs = 500;
     static constexpr float kLevelReportIntervalMs = 100.0f;
+
+    // Headroom Stage thresholds (DSP chain optimization, Requirement 2)
+    /// Peak threshold lineal equivalente a -3 dBFS: pow(10, -3/20) ≈ 0.7079.
+    /// Si el peak |sample| del bloque supera este valor, se atenúa pre-DNN.
+    static constexpr float kHeadroomThresholdLinear = 0.7079f;
+    /// Atenuación pre-DNN: multiplicador lineal para -6 dB.
+    static constexpr float kHeadroomAttenLinear     = 0.5f;
+    /// Restauración post-DNN: multiplicador lineal para +6 dB.
+    /// kHeadroomAttenLinear * kHeadroomRestoreLinear == 1.0 (round-trip 0 dB).
+    static constexpr float kHeadroomRestoreLinear   = 2.0f;
 };
 
 #endif // HEARING_AID_AUDIO_ENGINE_H

@@ -72,9 +72,24 @@ public:
 
     /// Procesa un bloque de audio float32 [-1.0, +1.0] in-place.
     /// Orden: NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+    ///
+    /// Si se proporciona @p externalLevelDb ≥ 0 (y finito), el WDRC usa ese
+    /// valor como nivel de entrada en lugar de medir el RMS local del buffer.
+    /// Esto permite al AudioEngine pasar el nivel medido ANTES de la DNN
+    /// (pre-DNN) para que el WDRC tome decisiones sobre la señal real de
+    /// entrada y no sobre la señal ya atenuada por la red neuronal.
+    ///
+    /// El valor sentinel -1.0f (default) indica "no hay nivel externo;
+    /// medir localmente desde el buffer", preservando retrocompatibilidad
+    /// con callers existentes (incluida la app del paciente que clona este
+    /// código nativo).
+    ///
     /// @param buffer Puntero al buffer de audio (modificado in-place)
     /// @param blockSize Número de muestras en el buffer (típicamente 64)
-    void processBlock(float* buffer, int blockSize);
+    /// @param externalLevelDb Nivel pre-DNN en dB SPL ≥ 0 para que lo use el
+    ///        WDRC, o -1.0f (default) para medir localmente. Valores NaN/Inf
+    ///        se tratan como sentinel y disparan medición local.
+    void processBlock(float* buffer, int blockSize, float externalLevelDb = -1.0f);
 
     // --- Métodos de actualización de parámetros (thread-safe, lock-free) ---
 
@@ -157,6 +172,13 @@ public:
         int wdrcRegion;  // 0=expansion, 1=linear, 2=compression
         float eqMaxGain;
         int environmentClass;
+        /// Nivel pre-DNN en dB SPL pasado por el AudioEngine al último
+        /// processBlock. -1.0f indica "no disponible" (medición local).
+        /// Permite verificar Property 8 del design (compression ratio).
+        float preDnnLevelDb = -1.0f;
+        /// true si el último processBlock usó el nivel externo (pre-DNN);
+        /// false si midió RMS localmente desde el buffer post-DNN.
+        bool wdrcUsesExternalLevel = false;
     };
     StageMetrics getStageMetrics() const;
 
@@ -217,6 +239,11 @@ private:
 
     // --- Estado de salida (legible desde cualquier hilo) ---
     std::atomic<float> lastInputLevelDb_{0.0f}; ///< Último nivel PRE-EQ medido
+    /// true si el último processBlock usó el nivel externo (pre-DNN) pasado
+    /// por el AudioEngine; false si midió el RMS localmente desde el buffer.
+    /// Tracking diagnóstico para verificar el origen del nivel WDRC en
+    /// grabaciones diagnósticas y validar Property 2/8 del design document.
+    std::atomic<bool> wdrcUsesExternalLevel_{false};
 
     // --- Métricas por etapa del pipeline (para diagnóstico DSP) ---
     std::atomic<float> lastPostNrLevelDb_{0.0f};     ///< Nivel post-NR

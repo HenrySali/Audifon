@@ -291,7 +291,9 @@ private:
     // Estado expuesto vía atomics (lectura desde getters, escritura desde setters/worker).
     std::atomic<bool>     enabled_{false};
     std::atomic<bool>     active_{false};
-    std::atomic<float>    intensity_{1.0f};
+    // Default 0.4 (spec dsp-chain-optimization R3.1): valor previo 1.0
+    // suprimía voz junto al ruido; 0.4 preserva mejor la inteligibilidad.
+    std::atomic<float>    intensity_{0.4f};
     std::atomic<uint64_t> processedFrames_{0};
     std::atomic<uint64_t> droppedFrames_{0};
     std::atomic<uint32_t> lastInferenceUs_{0};

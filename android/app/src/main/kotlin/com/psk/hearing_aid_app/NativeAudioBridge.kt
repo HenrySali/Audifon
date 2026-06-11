@@ -428,11 +428,22 @@ class NativeAudioBridge {
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.
+     *
+     * Campos extra (spec dsp-chain-optimization task 4.4):
+     *   - `preDnnLevelDb`: nivel pre-DNN en dB SPL pasado al WDRC. -1.0
+     *     indica "no hay nivel externo" (medición local).
+     *   - `wdrcLevelSource`: "pre-dnn" si el WDRC usó el nivel externo
+     *     pre-DNN del AudioEngine, "local" si midió RMS desde el buffer.
      */
     fun getDspStageMetrics(): Map<String, Any>? {
         val data = try { nativeGetDspStageMetrics() } catch (_: Exception) { return null }
         if (data.isEmpty()) return null
         val regions = arrayOf("expansion", "linear", "compression")
+        // Compatibilidad: si el .so es de una versión vieja que devuelve
+        // 12 floats (sin preDnnLevelDb / wdrcUsesExternalLevel), exponer
+        // valores por defecto para no romper a los callers.
+        val preDnnLevelDb = if (data.size >= 13) data[12] else -1.0f
+        val wdrcUsesExternal = if (data.size >= 14) data[13] != 0.0f else false
         return mapOf(
             "inputLevel" to data[0],
             "postNrLevel" to data[1],
@@ -446,6 +457,8 @@ class NativeAudioBridge {
             "wdrcRegion" to (regions.getOrNull(data[9].toInt()) ?: "unknown"),
             "eqMaxGain" to data[10],
             "environmentClass" to data[11].toInt(),
+            "preDnnLevelDb" to preDnnLevelDb,
+            "wdrcLevelSource" to if (wdrcUsesExternal) "pre-dnn" else "local",
         )
     }
 }

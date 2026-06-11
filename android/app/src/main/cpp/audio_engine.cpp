@@ -436,6 +436,48 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
              userIntensity, effectiveIntensity, vadActive ? 1 : 0);
     }
 
+    // ─── Pre-DNN Level Measurement (DSP chain optimization, R1.1, R1.2) ─
+    // Medimos RMS del buffer ANTES de la DNN para que el WDRC use el nivel
+    // real de entrada. La DNN atenúa típicamente -6 a -10 dB, lo cual
+    // empujaba al WDRC a operar en región de expansión cuando debería
+    // estar comprimiendo. El valor se pasa luego a pipeline_.processBlock
+    // como externalLevelDb (ver task 2.4).
+    {
+        float sumSq = 0.0f;
+        for (int i = 0; i < numFrames; ++i) {
+            sumSq += outPtr[i] * outPtr[i];
+        }
+        float rms = std::sqrt(sumSq / static_cast<float>(numFrames));
+        if (rms < 1e-10f) rms = 1e-10f;  // piso para evitar log(0)
+        lastPreDnnLevelDb_ = 20.0f * std::log10(rms) + config_.splOffset;
+    }
+
+    // ─── Headroom Stage — atenuación pre-DNN (R2.1, R2.2, R2.4) ──────────
+    // Sólo atenuamos cuando el DNN está habilitado: señales near-full-scale
+    // (peak > -3 dBFS ≈ 0.7079 lineal) saturan la representación interna
+    // de GTCRN y producen THD excesiva. Atenuamos -6 dB (×0.5) antes del
+    // modelo y restauramos +6 dB (×2.0) después. Si el DNN está off, no
+    // hay riesgo de saturación interna y la señal pasa sin modificar
+    // (Requirement 2.4).
+    //
+    // El flag `headroomApplied_` es por-bloque (no estado persistente):
+    // se reinicia en cada callback y la restauración post-DNN sólo se
+    // ejecuta si este mismo bloque fue atenuado.
+    headroomApplied_ = false;
+    if (dnnDenoiser_.isEnabled()) {
+        float peakSample = 0.0f;
+        for (int i = 0; i < numFrames; ++i) {
+            float absVal = std::fabs(outPtr[i]);
+            if (absVal > peakSample) peakSample = absVal;
+        }
+        if (peakSample > kHeadroomThresholdLinear) {
+            for (int i = 0; i < numFrames; ++i) {
+                outPtr[i] *= kHeadroomAttenLinear;
+            }
+            headroomApplied_ = true;
+        }
+    }
+
     // ─── DNN Denoiser (GTCRN) — REEMPLAZA al NR Wiener cuando enabled ────
     // Por contrato del wrapper:
     //   - Si dnnDenoiser_.isEnabled() == false y crossfadeGain == 0 →
@@ -445,8 +487,25 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // ejecutar el NR Wiener cuando el DNN está activo.
     dnnDenoiser_.process(outPtr, numFrames);
 
+    // ─── Headroom Stage — restauración post-DNN (R2.3) ───────────────────
+    // Si este bloque fue atenuado pre-DNN, restauramos +6 dB para que el
+    // resto del pipeline (HPF, EQ, WDRC, MPO) reciba la señal al mismo
+    // nivel que tendría sin el headroom. Round-trip 0.5 × 2.0 == 1.0
+    // (bit-exact en float32 para todos los samples representables).
+    if (headroomApplied_) {
+        for (int i = 0; i < numFrames; ++i) {
+            outPtr[i] *= kHeadroomRestoreLinear;
+        }
+    }
+
     // ─── DSP processing in-place on output buffer ────────────────────────
-    pipeline_.processBlock(outPtr, numFrames);
+    // Pasamos `lastPreDnnLevelDb_` (medido en la sección Pre-DNN Level
+    // Measurement de arriba) como tercer parámetro `externalLevelDb`. Esto
+    // hace que el WDRC del pipeline use el nivel real de entrada (antes de
+    // la DNN) en lugar de medir el RMS post-DNN, evitando que opere en
+    // región de expansión cuando debería comprimir
+    // (Requirements 1.2, 5.1 — DSP chain optimization, task 2.4).
+    pipeline_.processBlock(outPtr, numFrames, lastPreDnnLevelDb_);
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
     sceneAnalyzer_.process(inPtr, numFrames);
