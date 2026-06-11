@@ -886,10 +886,37 @@ class AmplificationBloc
 
   /// Busca los parámetros WDRC recomendados para un preset EQ por nombre.
   /// Retorna null si no es un preset conocido.
+  ///
+  /// La grilla actual son los 9 presets de [StyleApplicator] (Suave/Medio/Alto
+  /// × Plano/Voz/Agudos). Los parámetros WDRC dependen principalmente de la
+  /// **intensidad** (loudness range) — Suave usa knee alto y CR bajo, Alto
+  /// usa knee bajo y CR alto. La forma (Plano/Voz/Agudos) no afecta WDRC.
+  ///
+  /// Mantiene compatibilidad con los 10 nombres legacy
+  /// (Normal, Mild High, Mild Flat, etc.) por si un bundle viejo o un test
+  /// los llega a referenciar.
   ({double compressionRatio, double compressionKnee, double expansionKnee})?
       _findEqPresetWdrcParams(String presetName) {
-    // Parámetros WDRC optimizados por preset (de eq_preset.dart)
     switch (presetName) {
+      // ─── Grilla actual (9 presets de StyleApplicator) ─────────────────
+      case 'Suave Plano':
+      case 'Suave Voz':
+      case 'Suave Agudos':
+        return (compressionRatio: 1.3, compressionKnee: 58.0, expansionKnee: 35.0);
+      case 'Medio Plano':
+      case 'Medio Voz':
+      case 'Medio Agudos':
+        return (compressionRatio: 1.5, compressionKnee: 55.0, expansionKnee: 35.0);
+      case 'Alto Plano':
+      case 'Alto Voz':
+      case 'Alto Agudos':
+        return (compressionRatio: 1.8, compressionKnee: 52.0, expansionKnee: 35.0);
+
+      // ─── Bypass intencional (sin amplificación) ───────────────────────
+      case 'Sin amplificación':
+        return (compressionRatio: 1.2, compressionKnee: 60.0, expansionKnee: 35.0);
+
+      // ─── Compatibilidad backward con nombres legacy ───────────────────
       case 'Normal':
         return (compressionRatio: 1.2, compressionKnee: 60.0, expansionKnee: 35.0);
       case 'Mild High':

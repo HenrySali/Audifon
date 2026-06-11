@@ -4,13 +4,44 @@ import 'audiogram_driven_bundle.dart';
 
 /// Aplicador de "estilos" sobre un [AudiogramDrivenBundle].
 ///
-/// Los estilos son refinamientos relativos a la prescripción audiograma
-/// derivada. Conservan los nombres visibles al usuario de los 10
-/// `EqPreset.allPresets` clásicos (`Normal`, `Mild High`, `Mild Flat`,
-/// `Moderate High`, `Moderate Flat`, `Moderate+`, `Voice Clarity`,
-/// `Music`, `Outdoor`, `TV/Media`) pero internamente cada estilo es una
-/// función pura que suma deltas a [AudiogramDrivenBundle.gainsDb] sin
-/// reemplazar las ganancias prescritas.
+/// El sistema expone 9 presets escalados, formados por la combinación de
+/// 3 niveles de intensidad sobre la prescripción NAL-NL2 base × 3
+/// perfiles espectrales:
+///
+/// - **Intensidades** (multiplicadores sobre `bundle.gainsDb`):
+///   - `Suave`: ×0.7 (más conservador)
+///   - `Medio`: ×1.0 (NAL-NL2 puro)
+///   - `Alto`:  ×1.3 (más agresivo)
+///
+/// - **Perfiles** (deltas sumados por banda):
+///   - `Plano`:  shape neutro, `[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]`
+///   - `Voz`:    `[0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 0, 0]`
+///     (foco 1–4 kHz: fricativas + formantes)
+///   - `Agudos`: `[0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 4, 4]`
+///     (realce >3 kHz)
+///
+/// Los nombres de los 9 presets son la concatenación
+/// `<intensidad> <perfil>`:
+///
+/// `Suave Plano`, `Suave Voz`, `Suave Agudos`,
+/// `Medio Plano`, `Medio Voz`, `Medio Agudos`,
+/// `Alto Plano`,  `Alto Voz`,  `Alto Agudos`.
+///
+/// ## Lógica de aplicación
+///
+/// La ganancia final por banda es:
+///
+/// ```
+/// gain[band] = clamp(
+///   bundle.gainsDb[band] * intensity_multiplier
+///       + profile_delta[band],
+///   0,
+///   50,
+/// )
+/// ```
+///
+/// donde `bundle.gainsDb` ya viene prescrito por NAL-NL2 desde el
+/// [BundleBuilder] (Req 1.x, 2.x).
 ///
 /// El [StyleApplicator] respeta la separación de responsabilidades del
 /// bundle:
@@ -25,139 +56,141 @@ import 'audiogram_driven_bundle.dart';
 ///   [AudiogramDrivenBundle.expansionKneeDbSpl] permanecen idénticos al
 ///   bundle de entrada (Req 5.3, Req 10.x).
 /// - **No aplica clamp de headroom (MPO).** El handler atómico del bloc
-///   (`_onApplyBundle`, wave 4) es el responsable del clamp final por
-///   banda contra `mpoProfileDbSpl[f] - input - 3` (Req 10.3). El
-///   estilo solo clampa al rango estructural del bundle
-///   (`[0, 50] dB`, Req 5.3).
-/// - **El estilo `Normal` retorna el bundle sin cambios.** Si se pasa un
-///   [DateTime] en `derivedAt`, se actualiza ese campo; en caso
-///   contrario el bundle se devuelve idéntico (Req 5.2).
+///   es el responsable del clamp final por banda contra
+///   `mpoProfileDbSpl[f] - input - 3` (Req 10.3). El estilo solo clampa
+///   al rango estructural del bundle (`[0, 50] dB`, Req 5.3).
 /// - **Estilo desconocido = no-op observado.** Si `styleName` no
-///   corresponde a uno de los 10 estilos soportados, el método registra
+///   corresponde a uno de los 9 presets soportados, el método registra
 ///   un error vía `dart:developer.log` y retorna el bundle de entrada
 ///   sin modificarlo (Req 5.7).
-///
-/// ## Tabla de deltas por banda
-///
-/// Los deltas están alineados con el orden de
-/// [Audiogram.standardFrequencies] (12 bandas: 250, 500, 750, 1000, 1500,
-/// 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz).
-///
-/// **Estilos orientados a forma de pérdida** (Req 5.3, deltas por banda
-/// dentro de `[-3, +3] dB`):
-///
-/// | Estilo         | 250 | 500 | 750 | 1k | 1.5k | 2k | 2.5k | 3k | 3.5k | 4k | 6k | 8k |
-/// |----------------|----:|----:|----:|---:|-----:|---:|-----:|---:|-----:|---:|---:|---:|
-/// | Normal         |   0 |   0 |   0 |  0 |    0 |  0 |    0 |  0 |    0 |  0 |  0 |  0 |
-/// | Mild High      |   0 |   0 |   0 |  0 |    0 |  0 |    0 |  0 |    0 | +1 | +2 | +3 |
-/// | Mild Flat      |  +1 |  +1 |  +1 | +2 |   +2 | +2 |   +2 | +2 |   +2 | +2 | +1 | +1 |
-/// | Moderate High  |   0 |   0 |   0 |  0 |    0 | +1 |   +1 | +2 |   +2 | +3 | +3 | +3 |
-/// | Moderate Flat  |  +1 |  +1 |  +2 | +2 |   +2 | +3 |   +3 | +3 |   +3 | +3 | +2 | +2 |
-/// | Moderate+      |  +1 |  +1 |  +1 | +1 |   +1 | +2 |   +2 | +3 |   +3 | +3 | +3 | +2 |
-///
-/// **Estilos de uso** (Req 5.4, deltas por grupo frecuencial dentro de
-/// `[-4, +4] dB` — graves: 250–750, medios: 1000–4000, agudos:
-/// 6000–8000):
-///
-/// | Estilo         | 250 | 500 | 750 | 1k | 1.5k | 2k | 2.5k | 3k | 3.5k | 4k | 6k | 8k |
-/// |----------------|----:|----:|----:|---:|-----:|---:|-----:|---:|-----:|---:|---:|---:|
-/// | Voice Clarity  |   0 |   0 |   0 | +4 |   +4 | +4 |   +4 | +4 |   +4 | +4 |  0 |  0 |
-/// | Music          |  +1 |  +1 |  +1 |  0 |    0 |  0 |    0 |  0 |    0 |  0 | -1 | -1 |
-/// | Outdoor        |  -4 |  -4 |  -4 | +3 |   +3 | +3 |   +3 | +3 |   +3 | +3 | -1 | -1 |
-/// | TV/Media       |  +2 |  +2 |  +2 | +4 |   +4 | +4 |   +4 | +4 |   +4 | +4 | -1 | -1 |
-///
-/// > El ajuste de [AudiogramDrivenBundle.nrLevel] mencionado en Req 5.4
-/// > no se aplica en este componente: queda delegado al handler atómico
-/// > del bloc, que sumará el `nrDelta` apropiado del
-/// > `EnvironmentProfile` activo. El [StyleApplicator] mantiene foco en
-/// > [AudiogramDrivenBundle.gainsDb] para preservar la pureza de la
-/// > función y la separación de responsabilidades del wave 5.
 ///
 /// ## Bibliografía
 ///
 /// - Keidser, G., Dillon, H., Flax, M., Ching, T., & Brewer, S. (2011).
 ///   "The NAL-NL2 prescription procedure". *Audiology Research*, 1(1),
-///   e24. (Base de la prescripción que el estilo refina.)
+///   e24. (Base de la prescripción que el estilo escala/refina.)
 /// - Moore, B. C. J. (2012). "Effects of Bandwidth, Compression Speed,
 ///   and Gain at High Frequencies on Preferences for Amplified Music".
 ///   *Trends in Amplification*, 16(3), 159–172.
-///   (Justifica el shape plano del estilo `Music`.)
-///
-/// **Documento del proyecto:** ver
-/// `docs/07-calibracion-audiograma/analisis-prescripcion-real-vs-simulador.md`
-/// §7 "Estilos como deltas relativos sobre la prescripción audiograma".
+///   (Justifica el shape del perfil `Plano`.)
 ///
 /// Requisitos: 5.1, 5.2, 5.3, 5.4, 5.7
 class StyleApplicator {
-  /// Estilo neutro. Retorna el bundle sin cambios (Req 5.2).
-  static const String styleNormal = 'Normal';
+  // ─── Intensidades ─────────────────────────────────────────────────────
 
-  /// Estilo "Mild High": leve realce de agudos a partir de 4 kHz.
-  static const String styleMildHigh = 'Mild High';
+  /// Intensidad "Suave": multiplicador 0.7 sobre la prescripción base.
+  static const String intensitySoft = 'Suave';
 
-  /// Estilo "Mild Flat": realce uniforme suave en todas las bandas.
-  static const String styleMildFlat = 'Mild Flat';
+  /// Intensidad "Medio": multiplicador 1.0 (NAL-NL2 puro).
+  static const String intensityMedium = 'Medio';
 
-  /// Estilo "Moderate High": realce moderado a partir de 2 kHz.
-  static const String styleModerateHigh = 'Moderate High';
+  /// Intensidad "Alto": multiplicador 1.3 (más agresivo).
+  static const String intensityHigh = 'Alto';
 
-  /// Estilo "Moderate Flat": realce moderado en todas las bandas.
-  static const String styleModerateFlat = 'Moderate Flat';
-
-  /// Estilo "Moderate+": realce moderado-fuerte a partir de 2 kHz.
-  static const String styleModeratePlus = 'Moderate+';
-
-  /// Estilo "Voice Clarity": foco fuerte en medios (1–4 kHz).
-  static const String styleVoiceClarity = 'Voice Clarity';
-
-  /// Estilo "Music": shape plano, ajustes mínimos.
-  static const String styleMusic = 'Music';
-
-  /// Estilo "Outdoor": reduce graves (viento), realza medios (voz).
-  static const String styleOutdoor = 'Outdoor';
-
-  /// Estilo "TV/Media": realza graves moderadamente y medios fuertes.
-  static const String styleTvMedia = 'TV/Media';
-
-  /// Tabla canónica de deltas por estilo. Cada entrada tiene exactamente
-  /// 12 valores `double` alineados con
-  /// [Audiogram.standardFrequencies].
-  ///
-  /// La tabla se usa como `static const` para garantizar que cada estilo
-  /// es determinista, no aloca por llamada y no depende del reloj.
-  static const Map<String, List<double>> _styleDeltas = {
-    styleNormal:        <double>[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    styleMildHigh:      <double>[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3],
-    styleMildFlat:      <double>[1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 1],
-    styleModerateHigh:  <double>[0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 3],
-    styleModerateFlat:  <double>[1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 2, 2],
-    styleModeratePlus:  <double>[1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 2],
-    styleVoiceClarity:  <double>[0, 0, 0, 4, 4, 4, 4, 4, 4, 4, 0, 0],
-    styleMusic:         <double>[1, 1, 1, 0, 0, 0, 0, 0, 0, 0, -1, -1],
-    styleOutdoor:       <double>[-4, -4, -4, 3, 3, 3, 3, 3, 3, 3, -1, -1],
-    styleTvMedia:       <double>[2, 2, 2, 4, 4, 4, 4, 4, 4, 4, -1, -1],
+  /// Multiplicadores por intensidad. La key es el prefijo del nombre de
+  /// preset; el valor se aplica a `bundle.gainsDb`.
+  static const Map<String, double> _intensityMultipliers = <String, double>{
+    intensitySoft:   0.7,
+    intensityMedium: 1.0,
+    intensityHigh:   1.3,
   };
 
-  /// Lista de los 10 nombres de estilo soportados, en el orden canónico
-  /// de UI (Normal primero, estilos de pérdida, estilos de uso).
-  ///
-  /// Útil para la UI (renderizar el selector de estilo) y para tests
-  /// (iterar todas las opciones).
-  static List<String> get supportedStyles => List<String>.unmodifiable(
-        _styleDeltas.keys,
-      );
+  // ─── Perfiles ─────────────────────────────────────────────────────────
 
-  /// Aplica el estilo [styleName] al [bundle] sumando deltas a
-  /// [AudiogramDrivenBundle.gainsDb] y clampando al rango estructural
+  /// Perfil "Plano": delta cero en todas las bandas.
+  static const String profileFlat = 'Plano';
+
+  /// Perfil "Voz": +3 dB en 1–4 kHz (índices 3..9).
+  static const String profileVoice = 'Voz';
+
+  /// Perfil "Agudos": realce progresivo a partir de 3 kHz.
+  static const String profileTreble = 'Agudos';
+
+  /// Deltas por perfil. Cada lista tiene exactamente 12 valores
+  /// alineados con [Audiogram.standardFrequencies]:
+  /// `250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz`.
+  static const Map<String, List<double>> _profileDeltas =
+      <String, List<double>>{
+    profileFlat:   <double>[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    profileVoice:  <double>[0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 0, 0],
+    profileTreble: <double>[0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 4, 4],
+  };
+
+  // ─── Presets soportados ───────────────────────────────────────────────
+
+  /// Preset `Suave Plano`.
+  static const String styleSoftFlat   = 'Suave Plano';
+
+  /// Preset `Suave Voz`.
+  static const String styleSoftVoice  = 'Suave Voz';
+
+  /// Preset `Suave Agudos`.
+  static const String styleSoftTreble = 'Suave Agudos';
+
+  /// Preset `Medio Plano`.
+  static const String styleMediumFlat   = 'Medio Plano';
+
+  /// Preset `Medio Voz`.
+  static const String styleMediumVoice  = 'Medio Voz';
+
+  /// Preset `Medio Agudos`.
+  static const String styleMediumTreble = 'Medio Agudos';
+
+  /// Preset `Alto Plano`.
+  static const String styleHighFlat   = 'Alto Plano';
+
+  /// Preset `Alto Voz`.
+  static const String styleHighVoice  = 'Alto Voz';
+
+  /// Preset `Alto Agudos`.
+  static const String styleHighTreble = 'Alto Agudos';
+
+  /// Lista de los 9 nombres de preset soportados, en el orden canónico
+  /// de UI (intensidad ascendente × perfil Plano → Voz → Agudos).
+  ///
+  /// Útil para la UI (renderizar el selector de preset) y para tests
+  /// (iterar todas las opciones).
+  static const List<String> _supportedStylesList = <String>[
+    styleSoftFlat, styleSoftVoice, styleSoftTreble,
+    styleMediumFlat, styleMediumVoice, styleMediumTreble,
+    styleHighFlat, styleHighVoice, styleHighTreble,
+  ];
+
+  /// Vista pública de la lista de presets soportados (inmutable).
+  static List<String> get supportedStyles =>
+      List<String>.unmodifiable(_supportedStylesList);
+
+  /// Resuelve un nombre de preset a `(multiplier, profileDeltas)`.
+  ///
+  /// Retorna `null` si `styleName` no es uno de los 9 presets
+  /// soportados. La búsqueda es por coincidencia exacta del nombre
+  /// completo (ej. `'Medio Voz'`); el formato esperado es
+  /// `<intensidad> <perfil>` con un único espacio.
+  static (double, List<double>)? _resolve(String styleName) {
+    final spaceIdx = styleName.indexOf(' ');
+    if (spaceIdx <= 0 || spaceIdx >= styleName.length - 1) return null;
+    final intensity = styleName.substring(0, spaceIdx);
+    final profile = styleName.substring(spaceIdx + 1);
+    final mult = _intensityMultipliers[intensity];
+    final deltas = _profileDeltas[profile];
+    if (mult == null || deltas == null) return null;
+    return (mult, deltas);
+  }
+
+  /// Aplica el preset [styleName] al [bundle] escalando
+  /// [AudiogramDrivenBundle.gainsDb] por el multiplicador de intensidad
+  /// y sumando el delta del perfil, clampando al rango estructural
   /// `[0, 50] dB`.
   ///
+  /// Fórmula: `gain[band] = clamp(base[band] * mult + delta[band], 0, 50)`.
+  ///
   /// **Parámetros:**
-  /// - [bundle]: bundle base derivado del audiograma. Sus 12
+  /// - [bundle]: bundle base derivado del audiograma (NAL-NL2). Sus 12
   ///   ganancias `gainsDb` (en dB, rango `[0, 50]`) son las que se
   ///   ajustan. El resto de los campos se preservan tal cual.
-  /// - [styleName]: nombre del estilo a aplicar. Debe ser uno de los 10
+  /// - [styleName]: nombre del preset a aplicar. Debe ser uno de los 9
   ///   strings expuestos en [supportedStyles]. Cualquier otro valor se
-  ///   trata como estilo desconocido y dispara el camino de Req 5.7.
+  ///   trata como preset desconocido y dispara el camino de Req 5.7.
   /// - [derivedAt]: timestamp opcional (UTC, resolución milisegundos)
   ///   para refrescar [AudiogramDrivenBundle.derivedAt] del bundle
   ///   resultante. Cuando se omite, el bundle resultante conserva el
@@ -165,11 +198,9 @@ class StyleApplicator {
   ///   determinista del aplicador (Req 1.3).
   ///
   /// **Retorna:** un nuevo [AudiogramDrivenBundle] con `gainsDb`
-  /// modificado por los deltas del estilo (rango `[0, 50] dB`) y todos
-  /// los demás campos idénticos al [bundle] de entrada. Para
-  /// `styleName == 'Normal'` o un nombre desconocido, retorna un bundle
-  /// estructuralmente equivalente al de entrada (con `derivedAt`
-  /// actualizado solo si se pasó y la entrada NO es desconocida).
+  /// modificado (rango `[0, 50] dB`) y todos los demás campos idénticos
+  /// al [bundle] de entrada. Para un nombre desconocido, retorna el
+  /// bundle de entrada sin modificarlo (Req 5.7).
   ///
   /// **Errores observables (no excepciones):**
   /// - Cuando `styleName` no está en [supportedStyles], se registra un
@@ -177,77 +208,37 @@ class StyleApplicator {
   ///   `level: 1000` (SEVERE). El bundle se devuelve sin modificar
   ///   (Req 5.7).
   ///
-  /// **Ejemplo de uso:**
-  /// ```dart
-  /// import 'package:hearing_aid_app/domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
-  /// import 'package:hearing_aid_app/domain/audiogram_driven_presets/style_applicator.dart';
-  ///
-  /// // Bundle base hipotético derivado de un audiograma plano de 30 dB
-  /// // HL (mock simplificado para el ejemplo).
-  /// final base = AudiogramDrivenBundle(
-  ///   gainsDb: const [10, 12, 14, 15, 16, 17, 18, 18, 18, 17, 15, 12],
-  ///   compressionRatios:    const [1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5],
-  ///   compressionKneesDbSpl:const [42.5, 42.5, 42.5, 42.5, 42.5, 42.5, 42.5, 42.5, 42.5, 42.5, 42.5, 42.5],
-  ///   mpoProfileDbSpl:      const [104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104],
-  ///   nrLevel: 1,
-  ///   wdrcAttackMs: 5.0,
-  ///   wdrcReleaseMs: 100.0,
-  ///   expansionKneeDbSpl: 35.0,
-  ///   lossType: LossType.flat,
-  ///   prescriptionMode: PrescriptionMode.quiet,
-  ///   mode: OperatingMode.diagnostic,
-  ///   gainScale: 1.0,
-  ///   derivedAt: DateTime.utc(2026, 6, 3, 12, 0, 0),
-  /// );
-  ///
-  /// // Aplicar estilo "Voice Clarity": +4 dB en mids (1k–4k).
-  /// final clarity = StyleApplicator.applyStyle(base, 'Voice Clarity');
-  /// // clarity.gainsDb[3]  == 19  (15 + 4)  banda 1 kHz
-  /// // clarity.gainsDb[9]  == 21  (17 + 4)  banda 4 kHz
-  /// // clarity.gainsDb[0]  == 10  (10 + 0)  banda 250 Hz (sin cambio)
-  ///
-  /// // Estilo desconocido: log + bundle sin cambios.
-  /// final fallback = StyleApplicator.applyStyle(base, 'Unknown');
-  /// assert(identical(fallback, base));
-  /// ```
-  ///
   /// Requisitos: 5.1, 5.2, 5.3, 5.4, 5.7
   static AudiogramDrivenBundle applyStyle(
     AudiogramDrivenBundle bundle,
     String styleName, {
     DateTime? derivedAt,
   }) {
-    final deltas = _styleDeltas[styleName];
+    final resolved = _resolve(styleName);
 
-    // Estilo desconocido: log + retornar el bundle sin modificar (Req 5.7).
+    // Preset desconocido: log + retornar el bundle sin modificar (Req 5.7).
     // No se actualiza derivedAt para respetar "rechazar la selección sin
     // modificar el bundle activo".
-    if (deltas == null) {
+    if (resolved == null) {
       developer.log(
-        'StyleApplicator: estilo desconocido "$styleName" — bundle sin '
-        'modificar. Estilos soportados: ${supportedStyles.join(", ")}.',
+        'StyleApplicator: preset desconocido "$styleName" — bundle sin '
+        'modificar. Presets soportados: ${supportedStyles.join(", ")}.',
         name: 'StyleApplicator',
         level: 1000,
       );
       return bundle;
     }
 
-    // Estilo "Normal": bundle estructuralmente idéntico al de entrada
-    // (Req 5.2). Solo se materializa una copia si se pidió refrescar el
-    // derivedAt.
-    if (styleName == styleNormal) {
-      if (derivedAt == null || derivedAt == bundle.derivedAt) {
-        return bundle;
-      }
-      return _withGainsAndDerivedAt(bundle, bundle.gainsDb, derivedAt);
-    }
+    final mult = resolved.$1;
+    final deltas = resolved.$2;
 
-    // Estilo conocido: sumar deltas y clampar al rango estructural de
-    // `gainsDb` (Req 5.3). El clamp por headroom MPO (Req 10.3) lo hace
-    // el handler atómico del bloc, no este aplicador.
+    // Escala la prescripción base por el multiplicador de intensidad,
+    // suma el delta del perfil y clampa al rango estructural [0, 50]
+    // (Req 5.3). El clamp por headroom MPO (Req 10.3) lo hace el handler
+    // atómico del bloc, no este aplicador.
     final newGains = List<double>.generate(
       AudiogramDrivenBundle.bandCount,
-      (i) => (bundle.gainsDb[i] + deltas[i]).clamp(
+      (i) => (bundle.gainsDb[i] * mult + deltas[i]).clamp(
         AudiogramDrivenBundle.gainMinDb,
         AudiogramDrivenBundle.gainMaxDb,
       ),

@@ -54,7 +54,7 @@ void main() {
         name: 'Mi Preset',
         audiogram: audiogram,
         bundle: bundle,
-        appliedStyleName: 'Voice Clarity',
+        appliedStyleName: 'Medio Voz',
         nrOverride: 1,
         manualDelta: ManualAdjustmentDelta.zero(),
         createdAt: DateTime.utc(2026, 6, 3, 12, 0, 0),
@@ -65,7 +65,7 @@ void main() {
       expect(loaded!.name, 'Mi Preset');
       expect(loaded.audiogram, equals(audiogram));
       expect(loaded.bundle, equals(bundle));
-      expect(loaded.appliedStyleName, 'Voice Clarity');
+      expect(loaded.appliedStyleName, 'Medio Voz');
       expect(loaded.nrOverride, 1);
       expect(loaded.stale, isFalse);
       expect(loaded.migrated, isFalse);
@@ -319,7 +319,7 @@ void main() {
       );
       final styledOld = StyleApplicator.applyStyle(
         bundleOld,
-        StyleApplicator.styleVoiceClarity,
+        StyleApplicator.styleMediumVoice,
         derivedAt: DateTime.utc(2026, 6, 3),
       );
 
@@ -327,7 +327,7 @@ void main() {
         name: 'Regen',
         audiogram: audiogramOld,
         bundle: styledOld,
-        appliedStyleName: StyleApplicator.styleVoiceClarity,
+        appliedStyleName: StyleApplicator.styleMediumVoice,
       );
       // Marcar el preset como stale para verificar que se limpia.
       await repo.markCustomPresetsAsStale(audiogramNew);
@@ -343,7 +343,7 @@ void main() {
       loaded = await repo.getCustomPresetByName('Regen');
       expect(loaded, isNotNull);
       expect(loaded!.audiogram, equals(audiogramNew));
-      expect(loaded.appliedStyleName, StyleApplicator.styleVoiceClarity);
+      expect(loaded.appliedStyleName, StyleApplicator.styleMediumVoice);
       expect(loaded.stale, isFalse);
       // El bundle se reconstruyó: las ganancias deberían diferir del
       // bundle original (porque el audiograma cambió).
@@ -430,7 +430,7 @@ void main() {
         name: 'RT',
         audiogram: audiogram,
         bundle: bundle,
-        appliedStyleName: 'Voice Clarity',
+        appliedStyleName: 'Medio Voz',
         nrOverride: 1,
         manualDelta: ManualAdjustmentDelta.zero(),
         createdAt: DateTime.utc(2026, 6, 3, 12, 0, 0),
