@@ -62,8 +62,8 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
   }
 
   /// Lee los presets disponibles para mostrarlos en el dropdown:
-  /// - Estilos audiogram-driven (Normal, Voice Clarity, etc.)
-  /// - "Sin amplificación" (bypass)
+  /// - Estilos audiogram-driven (los 9 presets escalados expuestos por
+  ///   [StyleApplicator.supportedStyles]).
   /// - Custom presets persistidos (lista del `ProfileRepository`).
   /// - Fallback al `activeEqPreset` del estado si todo falla.
   Future<void> _loadPresetOptions() async {
@@ -74,7 +74,6 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
     for (final s in StyleApplicator.supportedStyles) {
       names.add(s);
     }
-    names.add('Sin amplificación');
 
     // 2. Presets personalizados persistidos en el repo.
     try {
@@ -161,13 +160,11 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
     }
   }
 
-  /// Junta los presets audiogram-driven (con ganancias NAL-NL2 reales)
-  /// + un preset "Sin amplificación" plano + custom del repo.
+  /// Junta los presets audiogram-driven (con ganancias NAL-NL2 escaladas
+  /// por intensidad + perfil) y los custom del repo.
   ///
-  /// El paciente ve ambos tipos en el selector y elige según preferencia:
-  /// - Presets con nombre de estilo (Normal, Voice Clarity, etc.):
-  ///   ganancias prescritas por NAL-NL2 + delta del estilo.
-  /// - "Sin amplificación": bypass (ganancias 0 en todas las bandas).
+  /// El paciente ve los 9 presets predefinidos del [StyleApplicator]
+  /// más cualquier preset personalizado guardado por el técnico.
   Future<List<EqPreset>> _collectPresets(AmplificationBloc bloc) async {
     final byName = <String, EqPreset>{};
 
@@ -212,17 +209,7 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
       }
     }
 
-    // 2. Siempre incluir un preset "Sin amplificación" (plano, ganancias 0)
-    //    para que el paciente pueda comparar con/sin prescripción.
-    byName['Sin amplificación'] = const EqPreset(
-      name: 'Sin amplificación',
-      description: 'Bypass — sin ganancia prescrita (solo reducción de ruido)',
-      gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-      compressionRatio: 1.2,
-      compressionKnee: 60.0,
-    );
-
-    // 3. Custom presets del repo (ya tienen ganancias audiogram-driven).
+    // 2. Custom presets del repo (ya tienen ganancias audiogram-driven).
     try {
       final customs = await bloc.profileRepository.getCustomPresets();
       for (final CustomPresetRecord c in customs) {

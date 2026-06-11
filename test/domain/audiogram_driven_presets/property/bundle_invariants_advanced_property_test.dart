@@ -25,11 +25,11 @@
 //   deterministic function of (bundle, styleName, derivedAt). Calling
 //   it twice with the same arguments produces equal bundles. Note that
 //   true *idempotence* (applyStyle(applyStyle(b, s), s) == applyStyle(b,
-//   s)) does NOT hold for non-Normal styles because the deltas in the
-//   current implementation are additive: applying the same style on top
-//   of an already-styled bundle stacks the deltas (style "Voice
-//   Clarity" with +4 dB on band 4 would add +8 dB total). The clinical
-//   property the bloc relies on is determinism — the Style is applied
+//   s)) does NOT hold in the current grid because the formula
+//   `gain[i] = base[i] * intensity + profile[i]` is non-idempotent
+//   (e.g. applying "Alto Voz" twice yields
+//   `((base * 1.3) + 4) * 1.3 + 4` ≠ `base * 1.3 + 4`). The clinical
+//   property the bloc relies on is determinism — the preset is applied
 //   from the BASE bundle every time, never on top of itself — and that
 //   is what we validate here. We additionally assert the structural
 //   range invariant `gainsDb ∈ [0, 50]` is preserved by the styler.
@@ -103,8 +103,8 @@ PrescriptionMode _seedToMode(double seed) {
   return modes[idx];
 }
 
-/// Selecciona un nombre de estilo de [StyleApplicator.supportedStyles] a
-/// partir del seed. Cubre los 10 estilos en muestras de 200 runs.
+/// Selecciona un nombre de preset de [StyleApplicator.supportedStyles] a
+/// partir del seed. Cubre los 9 presets en muestras de 200 runs.
 String _seedToStyleName(double seed) {
   final styles = StyleApplicator.supportedStyles;
   final idx = (seed.abs() * 1000).floor() % styles.length;
@@ -335,8 +335,10 @@ void main() {
   //
   // NOTA: la formulación literal del task 11.9 ("applyStyle(applyStyle(b,s),s)
   // == applyStyle(b,s)") es FALSA por construcción en la implementación
-  // actual de [StyleApplicator] para los estilos no-Normal: los deltas son
-  // aditivos y aplicar dos veces el mismo estilo stackea. La propiedad
+  // actual de [StyleApplicator]: la fórmula
+  // `gain[i] = base[i] * intensity + profile[i]` no es idempotente porque
+  // intensity ≠ 1.0 hace que aplicar dos veces dé
+  // `(base * intensity + profile) * intensity + profile`. La propiedad
   // clínicamente válida que el bloc usa (y que design.md P10 buscaba
   // capturar) es DETERMINISMO: aplicar el estilo desde el bundle base
   // siempre da el mismo resultado para el mismo (bundle, styleName,
@@ -400,7 +402,7 @@ void main() {
         // Style sólo modifica gainsDb (Req 5.3): el resto de los campos
         // del bundle deben ser idénticos a los del base. Esta verificación
         // es complementaria al test unitario y aumenta cobertura sobre los
-        // 10 estilos × cualquier audiograma.
+        // 9 presets × cualquier audiograma.
         expect(styled1.compressionRatios, equals(base.compressionRatios));
         expect(
           styled1.compressionKneesDbSpl,

@@ -318,8 +318,9 @@ class ProfileRepositoryImpl implements ProfileRepository {
       );
 
       // 2. Aplicar el estilo original (si existe).
-      if (current.appliedStyleName.isNotEmpty &&
-          current.appliedStyleName != StyleApplicator.styleNormal) {
+      //    Si el nombre no corresponde a uno de los presets soportados,
+      //    `applyStyle` devuelve el bundle base sin modificar (Req 5.7).
+      if (current.appliedStyleName.isNotEmpty) {
         newBundle = StyleApplicator.applyStyle(
           base,
           current.appliedStyleName,
@@ -572,8 +573,7 @@ class ProfileRepositoryImpl implements ProfileRepository {
         audiogram,
         mode: PrescriptionMode.quiet,
       );
-      final bundle = appliedStyleName.isNotEmpty &&
-              appliedStyleName != StyleApplicator.styleNormal
+      final bundle = appliedStyleName.isNotEmpty
           ? StyleApplicator.applyStyle(base, appliedStyleName)
           : base;
 
