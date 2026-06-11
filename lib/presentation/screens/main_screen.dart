@@ -26,6 +26,7 @@ import '../../domain/entities/prescription_mode.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
+import 'diagnostic_analyzer_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
@@ -191,6 +192,26 @@ class _StatusBar extends StatelessWidget {
                               value: context.read<AmplificationBloc>(),
                               child: const DiagnosticFlowScreen(),
                             ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Spec in-app-diagnostic-analyzer · Task 10.3 · Req 18.1.
+                  // Botón "Analizar grabación DSP" — abre el AnalyzerScreen
+                  // compartido con el paciente, sin Service_Code_Gate.
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.analytics_outlined,
+                          color: Colors.white70, size: 21),
+                      tooltip: 'Analizar grabación DSP',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const DiagnosticAnalyzerScreen(),
                           ),
                         );
                       },
