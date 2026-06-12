@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../data/services/preset_learning_service.dart';
@@ -48,6 +49,50 @@ import '../../feedback_checklist/screens/feedback_checklist_dialog.dart';
 /// - Wakelock mientras la amplificación está activa
 ///
 /// Requisitos: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
+/// Nombre del preset "Personal" — built-in, NO viene de los profiles del
+/// `ProfileRepository` ni de los presets del bundle. Se persiste en el
+/// Hive box `settings_box` con 3 valores (graves/medios/agudos) y se
+/// aplica disparando `UpdateEqGains(gains, presetName: 'Personal')`.
+const String _kPersonalPresetName = 'Personal';
+
+/// Tope blando por sección 0..20 dB. Mismo valor que el paciente para
+/// mantener paridad UX.
+const double _kPersonalGainMaxDb = 20.0;
+
+/// Hive keys para persistir los 3 sliders del preset Personal.
+const String _kPersonalLowKey = 'personalLowGainDb';
+const String _kPersonalMidKey = 'personalMidGainDb';
+const String _kPersonalHighKey = 'personalHighGainDb';
+
+/// Construye un array de 12 gains EQ a partir de las 3 ganancias del
+/// preset Personal. Mapeo (mismo que el paciente, debe matchear
+/// `kEqFrequencies` en `equalizer.h`):
+///   - graves : bandas 0-3  (250, 500, 750, 1000 Hz)
+///   - medios : bandas 4-7  (1500, 2000, 2500, 3000 Hz)
+///   - agudos : bandas 8-11 (3500, 4000, 6000, 8000 Hz)
+List<double> _buildPersonalGains(double low, double mid, double high) {
+  final out = List<double>.filled(12, 0.0);
+  for (int i = 0; i < 4; i++) {
+    out[i] = low;
+  }
+  for (int i = 4; i < 8; i++) {
+    out[i] = mid;
+  }
+  for (int i = 8; i < 12; i++) {
+    out[i] = high;
+  }
+  return out;
+}
+
+/// Lee un valor de gain desde el Hive box `settings_box`, clampeado a
+/// [0, kPersonalGainMaxDb]. Si la key no existe o no es numérica devuelve
+/// `0.0` (default = sin amplificación).
+double _readPersonalGain(Box<dynamic> box, String key) {
+  final v = box.get(key);
+  if (v is num) return v.toDouble().clamp(0.0, _kPersonalGainMaxDb);
+  return 0.0;
+}
+
 class MainScreen extends StatelessWidget {
   const MainScreen({super.key});
 
@@ -603,6 +648,10 @@ class _ActiveView extends StatelessWidget {
           const SizedBox(height: 16),
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
+          if (state.activeEqPreset == _kPersonalPresetName) ...[
+            const SizedBox(height: 16),
+            const _PersonalGainsCard(),
+          ],
           const SizedBox(height: 24),
         ],
       ),
@@ -1065,24 +1114,64 @@ class _ProfileSelectorState extends State<_ProfileSelector> {
         alignment: WrapAlignment.center,
         spacing: 8,
         runSpacing: 8,
-        children: profiles.map((profile) {
-          final isActive = profile.name == widget.activeProfile;
-          final isPredefined = EnvironmentProfile.predefinedProfiles
-              .any((p) => p.name == profile.name);
-          return _ProfileChip(
-            profile: profile,
-            isActive: isActive,
-            onTap: () {
-              context
-                  .read<AmplificationBloc>()
-                  .add(ChangeProfile(profile: profile.name));
-            },
-            onLongPress: isPredefined
-                ? null
-                : () => _confirmDelete(context, profile),
-          );
-        }).toList(),
+        children: [
+          ...profiles.map((profile) {
+            final isActive = profile.name == widget.activeProfile;
+            final isPredefined = EnvironmentProfile.predefinedProfiles
+                .any((p) => p.name == profile.name);
+            return _ProfileChip(
+              profile: profile,
+              isActive: isActive,
+              onTap: () {
+                context
+                    .read<AmplificationBloc>()
+                    .add(ChangeProfile(profile: profile.name));
+              },
+              onLongPress: isPredefined
+                  ? null
+                  : () => _confirmDelete(context, profile),
+            );
+          }),
+          // Chip "Personal" — built-in, dispatcheado fuera del flujo de
+          // ChangeProfile (no busca en ProfileRepository). Despacha
+          // UpdateEqGains directamente con los gains construidos desde
+          // los 3 valores persistidos en Hive box `settings_box`.
+          _PersonalProfileChip(
+            isActive: _isPersonalActive(context),
+            onTap: () => _activatePersonal(context),
+          ),
+        ],
       ),
+    );
+  }
+
+  /// Lee `state.activeEqPreset` del bloc actual para saber si el preset
+  /// Personal está activo. Se usa para resaltar el chip y para mostrar
+  /// el `_PersonalGainsCard` en `main_screen`.
+  bool _isPersonalActive(BuildContext context) {
+    final state = context.read<AmplificationBloc>().state;
+    if (state is AmplificationActive) {
+      return state.activeEqPreset == _kPersonalPresetName;
+    }
+    return false;
+  }
+
+  /// Activa el preset Personal: lee los 3 sliders persistidos, construye
+  /// los 12 gains y despacha `UpdateEqGains(gains, presetName: 'Personal')`.
+  /// Si el box todavía no se abrió o no hay valores guardados, los 3
+  /// arrancan en 0 dB (preset bypass).
+  Future<void> _activatePersonal(BuildContext context) async {
+    // Capturamos el bloc ANTES del await para evitar el lint
+    // `use_build_context_synchronously`. El bloc es el mismo aunque el
+    // widget se desmonte después del await; despachar al bloc es seguro.
+    final bloc = context.read<AmplificationBloc>();
+    final box = await Hive.openBox<dynamic>('settings_box');
+    final low = _readPersonalGain(box, _kPersonalLowKey);
+    final mid = _readPersonalGain(box, _kPersonalMidKey);
+    final high = _readPersonalGain(box, _kPersonalHighKey);
+    final gains = _buildPersonalGains(low, mid, high);
+    bloc.add(
+      UpdateEqGains(gains: gains, presetName: _kPersonalPresetName),
     );
   }
 }
@@ -1143,6 +1232,224 @@ class _ProfileChip extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Chip "Personal" — built-in, no persiste en `ProfileRepository`. Su
+/// `onTap` despacha `UpdateEqGains(presetName: 'Personal')` directamente,
+/// usando los 3 sliders persistidos en Hive box `settings_box`.
+///
+/// Visualmente es similar al `_ProfileChip` pero con icono distinto
+/// (`Icons.equalizer`) y sin long-press (no se borra como un custom
+/// preset).
+class _PersonalProfileChip extends StatelessWidget {
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _PersonalProfileChip({
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.cyan.withOpacity(0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isActive ? Colors.cyan : Colors.white24,
+            width: isActive ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.equalizer,
+              color: isActive ? Colors.cyan : Colors.white54,
+              size: 22,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Personal',
+              style: TextStyle(
+                color: isActive ? Colors.cyan : Colors.white54,
+                fontSize: 11,
+                fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Card con 3 sliders graves/medios/agudos para el preset Personal del
+/// técnico. Solo se renderiza cuando `state.activeEqPreset == 'Personal'`.
+///
+/// Carga los 3 valores desde Hive box `settings_box` en `initState`. Al
+/// mover un slider, persiste el valor y despacha
+/// `UpdateEqGains(gains: built, presetName: 'Personal')` para que el
+/// motor reciba los nuevos gains. El bloc preserva el `activeEqPreset`
+/// para que el card siga visible.
+class _PersonalGainsCard extends StatefulWidget {
+  const _PersonalGainsCard();
+
+  @override
+  State<_PersonalGainsCard> createState() => _PersonalGainsCardState();
+}
+
+class _PersonalGainsCardState extends State<_PersonalGainsCard> {
+  double _low = 0.0;
+  double _mid = 0.0;
+  double _high = 0.0;
+  Box<dynamic>? _box;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFromHive();
+  }
+
+  Future<void> _loadFromHive() async {
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      if (!mounted) return;
+      setState(() {
+        _box = box;
+        _low = _readPersonalGain(box, _kPersonalLowKey);
+        _mid = _readPersonalGain(box, _kPersonalMidKey);
+        _high = _readPersonalGain(box, _kPersonalHighKey);
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  Future<void> _onChanged(String key, double v, void Function(double) updater) async {
+    setState(() => updater(v));
+    final box = _box;
+    if (box != null) {
+      try {
+        await box.put(key, v);
+      } catch (_) {/* best effort */}
+    }
+    if (!mounted) return;
+    final gains = _buildPersonalGains(_low, _mid, _high);
+    context.read<AmplificationBloc>().add(
+          UpdateEqGains(gains: gains, presetName: _kPersonalPresetName),
+        );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Mi mezcla — ajustá a gusto',
+            style: TextStyle(
+              color: Colors.cyan,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'El motor protege contra saturación: nunca daña el oído.',
+            style: TextStyle(color: Colors.white54, fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+          _PersonalSlider(
+            label: 'Graves',
+            sublabel: '250 a 1000 Hz',
+            value: _low,
+            onChanged: (v) => _onChanged(_kPersonalLowKey, v, (x) => _low = x),
+          ),
+          _PersonalSlider(
+            label: 'Medios',
+            sublabel: '1500 a 3000 Hz',
+            value: _mid,
+            onChanged: (v) => _onChanged(_kPersonalMidKey, v, (x) => _mid = x),
+          ),
+          _PersonalSlider(
+            label: 'Agudos',
+            sublabel: '3500 a 8000 Hz',
+            value: _high,
+            onChanged: (v) => _onChanged(_kPersonalHighKey, v, (x) => _high = x),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PersonalSlider extends StatelessWidget {
+  final String label;
+  final String sublabel;
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  const _PersonalSlider({
+    required this.label,
+    required this.sublabel,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+              ),
+              Text(
+                '${value.toStringAsFixed(1)} dB',
+                style: const TextStyle(color: Colors.cyan, fontSize: 13),
+              ),
+            ],
+          ),
+          Text(
+            sublabel,
+            style: const TextStyle(color: Colors.white54, fontSize: 10),
+          ),
+          Slider(
+            value: value.clamp(0.0, _kPersonalGainMaxDb),
+            min: 0.0,
+            max: _kPersonalGainMaxDb,
+            divisions: 40,
+            activeColor: Colors.cyan,
+            onChanged: onChanged,
+          ),
+        ],
       ),
     );
   }
