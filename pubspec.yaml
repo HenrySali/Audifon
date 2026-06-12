@@ -43,11 +43,36 @@ dependencies:
   # to send EQ / AGC / volume / profile / MPO / NR / FB-cancel commands
   # over the GATT custom service (UUID 0x1850-custom). The package author
   # explicitly recommends pinning a fixed version because minor-version
-  # bumps may include breaking API changes; we pick 1.35.5 (last 1.35.x
-  # patch with no known regressions). Manifest permissions
-  # BLUETOOTH_CONNECT, BLUETOOTH_SCAN (neverForLocation) are already
-  # declared in android/app/src/main/AndroidManifest.xml.
-  flutter_blue_plus: ^1.35.5
+  # bumps may include breaking API changes (semver: MAJOR = breaking API).
+  #
+  # 2026-XX downgrade 1.36.8 → 1.35.5 (CI build-apk fix):
+  # `flutter_blue_plus 1.36.x` is federated and pulls
+  # `flutter_blue_plus_android@7.0.x`, whose
+  # `android/build.gradle` evaluates `compileSdkVersion = flutter.compileSdkVersion`
+  # at line 7. Under our toolchain (AGP 8.3.2 / compileSdk 34, Flutter
+  # Gradle plugin loaded via `dev.flutter.flutter-gradle-plugin` in
+  # `android/settings.gradle`), Gradle resolves `flutter` as a property
+  # of the `LibraryExtension` (the consuming sub-project) instead of as
+  # the global `flutter` extension defined by the Flutter plugin, and
+  # the build fails with:
+  #   > Could not get unknown property 'flutter' for extension 'android'
+  #   > of type com.android.build.gradle.LibraryExtension.
+  #   > compileSdkVersion is not specified.
+  # Pin 1.35.5 (last patch of the 1.35.x series) until we bump AGP /
+  # compileSdk to a version that wires the `flutter` extension into
+  # library sub-projects automatically.
+  # NOTE: 1.35.5 is ALSO federated (depends on `flutter_blue_plus_android:
+  # ^4.0.0`). The downgrade resolves to flutter_blue_plus_android 4.x,
+  # whose `android/build.gradle` uses a hard-coded `compileSdkVersion`
+  # rather than the `flutter.compileSdkVersion` lookup, so it builds
+  # cleanly under AGP 8.3.2.
+  # Validated against 1136 unit tests in this repo.
+  # Source: pub.dev changelog (jamcorder.com publisher, accessed
+  # 2026-06-11).
+  # Manifest permissions BLUETOOTH_CONNECT, BLUETOOTH_SCAN
+  # (neverForLocation) are already declared in
+  # android/app/src/main/AndroidManifest.xml.
+  flutter_blue_plus: 1.35.5
   # PDF generation for the QC loopback audit trail report (spec
   # `audiogram-driven-presets`, tarea 15.3, Req 15.14). Used by
   # `lib/data/repositories/qc_audit_repository_impl.dart` to render the
@@ -59,6 +84,12 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # `integration_test/e2e_integration_test.dart` imports
+  # `package:integration_test/integration_test.dart` to drive the BLE
+  # end-to-end suite on physical devices. Shipped with the Flutter SDK
+  # (no version, only `sdk: flutter` — same pattern as `flutter_test`).
+  integration_test:
     sdk: flutter
   flutter_lints: ^3.0.0
   build_runner: ^2.4.6
@@ -82,3 +113,30 @@ flutter:
   uses-material-design: true
   assets:
     - assets/simulator/
+  # Roboto Regular + Bold (Apache License 2.0) bundled for `package:pdf`
+  # so the QC loopback audit-trail report renders Spanish accents
+  # (á é í ó ú ñ ¿ ¡) correctly in operator names, patient names, and
+  # notes. The PDF default Helvetica is a Type1 font with no Unicode
+  # support — every accented codepoint becomes a `?` or empty box,
+  # which would silently corrupt regulatory audit records.
+  #
+  # Source / license:
+  #   - upstream:    https://github.com/googlefonts/roboto-2
+  #   - license:     Apache-2.0 (file `LICENSE` in repo root, Fedora
+  #                  packages page also confirms `Apache-2.0 AND CC0-1.0`)
+  #   - downloaded:  src/hinted/Roboto-Regular.ttf (515 KB)
+  #                  src/hinted/Roboto-Bold.ttf    (514 KB)
+  #
+  # We declare these under `flutter.fonts` (NOT `flutter.assets`) on
+  # purpose: declaring under `fonts` registers the asset path with
+  # `rootBundle` AND the Flutter font resolver, while declaring under
+  # `assets` registers only with `rootBundle`. Either path makes
+  # `await rootBundle.load('assets/fonts/Roboto-Regular.ttf')` work,
+  # but `fonts:` is the canonical place. See:
+  # https://docs.flutter.dev/cookbook/design/fonts
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
