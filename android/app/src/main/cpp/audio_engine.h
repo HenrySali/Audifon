@@ -15,6 +15,7 @@
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
+#include "latency_loopback_tester.h"
 
 // Forward decl from <android/asset_manager.h>
 struct AAssetManager;
@@ -27,6 +28,51 @@ struct AudioEngineConfig {
     float mpoThresholdDbSpl = 110.0f;   ///< Threshold del MPO en dB SPL (FDA OTC: 111)
     float splOffset = 93.0f;             ///< Offset dBFS → dB SPL (93 para mic celular con AGC)
     int builtInMicDeviceId = 0;          ///< Device ID for built-in mic (from Kotlin)
+};
+
+/// Snapshot de métricas de latencia del motor de audio.
+///
+/// Estructura POD-like que se rellena desde `AudioEngine::getLatencyMetrics()`
+/// y se serializa a un Map vía JNI para consumo desde Kotlin/Dart. Todos los
+/// campos son thread-safe-readable: el getter toma snapshots consistentes
+/// usando atómicos relajados y getters de Oboe que no bloquean el callback.
+///
+/// Convenciones:
+/// - Latencias en milisegundos (double).
+/// - `inputLatencyMs` y `outputLatencyMs` valen `-1` cuando el timestamp de
+///   Oboe no está disponible (stream sin getTimestamp() válido todavía).
+/// - `inputAudioApi` / `outputAudioApi`: 0=Unspecified, 1=AAudio, 2=OpenSLES.
+/// - `inputSharingMode` / `outputSharingMode`: 0=Exclusive, 1=Shared.
+/// - `outputPerformanceMode`: 0=None, 1=PowerSaving, 2=LowLatency.
+/// - `schemaVersion`: bump cuando cambien los campos de forma incompatible.
+struct LatencyMetrics {
+    // ─── Configuración del stream ──────────────────────────────────────
+    int32_t sampleRate;              ///< Hz negociado por Oboe
+    int32_t inputFramesPerBurst;     ///< frames por callback (input)
+    int32_t outputFramesPerBurst;    ///< frames por callback (output)
+    int32_t outputBufferSizeFrames;  ///< buffer size actual del output
+    int32_t inputAudioApi;           ///< 0=Unspecified, 1=AAudio, 2=OpenSLES
+    int32_t outputAudioApi;
+    int32_t inputSharingMode;        ///< 0=Exclusive, 1=Shared
+    int32_t outputSharingMode;
+    int32_t outputPerformanceMode;   ///< 0=None, 1=PowerSaving, 2=LowLatency
+
+    // ─── Latencias por etapa (todas en ms; -1 si no disponible) ────────
+    double inputLatencyMs;           ///< Oboe input getTimestamp(), -1 si N/A
+    double outputLatencyMs;          ///< Oboe output getTimestamp(), -1 si N/A
+    double dspBlockMs;               ///< framesPerBlock / sampleRate * 1000
+    double dspProcessingMsAvg;       ///< promedio móvil últimos 50 callbacks
+    double dspProcessingMsMax;       ///< peor caso últimos 50 callbacks
+    double dnnInferenceMs;           ///< dnnDenoiser.getLastInferenceUs() / 1000
+    double dnnGroupDelayMs;          ///< dnnDenoiser.groupDelayMs(sampleRate)
+    double tnrLookaheadMs;           ///< constante 5.0 ms
+
+    // ─── Estado de salud ───────────────────────────────────────────────
+    int32_t callbackUnderruns;       ///< outputStream.getXRunCount()
+    bool    timestampsHealthy;       ///< false si getTimestamp() falló > 3s
+
+    // ─── Versionado ────────────────────────────────────────────────────
+    int32_t schemaVersion = 1;       ///< versión del esquema
 };
 
 /// Motor de audio de baja latencia con procesamiento DSP integrado.
@@ -144,6 +190,55 @@ public:
     void onErrorAfterClose(oboe::AudioStream *stream,
                            oboe::Result error) override;
 
+    // ─── Latency Monitor (Requirements 2.x, 4.x del spec monitor-latencia) ─
+    /// Obtiene un snapshot consistente de las métricas de latencia.
+    /// Thread-safe y lock-free: usa atómicos relajados y getters de Oboe
+    /// que NO bloquean el callback de audio. Se llama desde el lado de
+    /// control (Kotlin/Dart vía JNI), nunca desde el callback.
+    /// @return snapshot del estado actual; campos `inputLatencyMs` y
+    ///         `outputLatencyMs` valen -1 si el timestamp no está disponible.
+    LatencyMetrics getLatencyMetrics() const;
+
+    /// Activa o desactiva el muteo del audio ambiente (mic) durante el
+    /// test acústico de loopback. Cuando `muted=true`, el callback escribe
+    /// silencio en el output en lugar de procesar el pipeline DSP, para no
+    /// contaminar la grabación del chirp emitido por el LatencyLoopbackTester.
+    /// Idempotente; thread-safe (atomic store relajado).
+    void setAmbientMute(bool muted);
+
+    /// @return true si los streams expusieron timestamps válidos en los
+    ///         últimos 3 segundos. Se basa en `lastSuccessfulTimestampNs_`,
+    ///         que se refresca desde el callback cuando getTimestamp() OK.
+    bool areTimestampsHealthy() const;
+
+    // ─── Loopback Test (Requirement 5.x del spec monitor-latencia-audio) ──
+    // Wrappers públicos sobre `loopbackTester_` que coordinan el muteo de
+    // ambiente (`setAmbientMute`) con el ciclo de vida del test acústico.
+    // Implementación en task 4.3 (esta task 4.1 solo declara los métodos
+    // y crea el miembro `loopbackTester_`).
+
+    /// Prepara y arranca un test de loopback acústico. Internamente llama
+    /// `loopbackTester_->prepare(params)`, después `setAmbientMute(true)`
+    /// y finalmente `loopbackTester_->start()`. Si algo falla, revierte
+    /// el muteo del ambiente.
+    /// @return true si el test arrancó correctamente; false en caso de error.
+    bool startLoopbackTest(const latency_monitor::LoopbackParams& params);
+
+    /// @return true si hay un test de loopback en curso (delega al tester).
+    bool isLoopbackTestActive() const;
+
+    /// Obtiene el resultado del test de loopback. Solo válido cuando
+    /// `isLoopbackTestActive() == false`. Restaura `setAmbientMute(false)`
+    /// antes de devolver el resultado.
+    /// @return resultado final del tester; si todavía está activo, retorna
+    ///         un `LoopbackResult` con `success=false` y `errorMessage`
+    ///         describiendo el motivo.
+    latency_monitor::LoopbackResult getLoopbackTestResult();
+
+    /// Cancela el test en curso (si lo hay) y restaura `setAmbientMute(false)`.
+    /// Idempotente: llamarlo cuando no hay test en curso es no-op.
+    void cancelLoopbackTest();
+
 private:
     /// Creates and opens input stream (built-in mic).
     oboe::Result openInputStream();
@@ -216,6 +311,41 @@ private:
     /// Restauración post-DNN: multiplicador lineal para +6 dB.
     /// kHeadroomAttenLinear * kHeadroomRestoreLinear == 1.0 (round-trip 0 dB).
     static constexpr float kHeadroomRestoreLinear   = 2.0f;
+
+    // ─── Latency Monitor — campos privados (spec monitor-latencia-audio) ──
+    /// Tamaño del ring buffer de medidas DSP timing (50 callbacks ≈ 50 ms
+    /// a 48 kHz / 48 frames-per-burst, suficiente para un promedio móvil
+    /// estable sin invalidar cache lines).
+    static constexpr int kDspTimingRingSize = 50;
+
+    /// Ring buffer de duración del callback en microsegundos. Se actualiza
+    /// desde `onBothStreamsReady()` con `store(relaxed)`; se lee desde
+    /// `getLatencyMetrics()` con `load(relaxed)`. Sin locks, sin contention.
+    std::atomic<uint32_t> dspTimingRing_[kDspTimingRingSize];
+
+    /// Índice circular del próximo slot a escribir en `dspTimingRing_`.
+    /// Se incrementa con `fetch_add(relaxed)` y se reduce módulo el tamaño.
+    std::atomic<int> dspTimingIndex_{0};
+
+    /// Timestamp `CLOCK_MONOTONIC` (en nanosegundos) del último intento
+    /// exitoso de `getTimestamp()` desde el callback. Permite a
+    /// `areTimestampsHealthy()` reportar `false` si pasaron más de 3 s
+    /// sin un timestamp válido.
+    std::atomic<int64_t> lastSuccessfulTimestampNs_{0};
+
+    /// Flag para muteo del audio ambiente durante el test acústico de
+    /// loopback. Cuando es true, el callback escribe silencio en el output
+    /// en lugar de procesar el pipeline DSP. Lo controla `setAmbientMute()`
+    /// y lo lee el callback con `load(relaxed)`.
+    std::atomic<bool> ambientMuted_{false};
+
+    /// Tester de loopback acústico (Requirement 5.x del spec
+    /// monitor-latencia-audio). Se construye en el constructor de
+    /// AudioEngine y vive todo el ciclo de vida del motor; los wrappers
+    /// públicos `startLoopbackTest`/`getLoopbackTestResult`/`cancelLoopbackTest`
+    /// delegan en él. El callback de audio (onBothStreamsReady) lo invoca
+    /// vía `loopbackTester_->onAudioCallback(...)` cuando `isActive()` es true.
+    std::unique_ptr<latency_monitor::LatencyLoopbackTester> loopbackTester_;
 };
 
 #endif // HEARING_AID_AUDIO_ENGINE_H

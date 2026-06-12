@@ -20,10 +20,12 @@
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
 #include <atomic>
+#include <cmath>
 #include <memory>
 
 #include "audio_engine.h"
 #include "calibration_spectrum/tone_types.h"
+#include "latency_loopback_tester.h"
 
 #include <string>
 
@@ -49,6 +51,169 @@ std::unique_ptr<AudioEngine> g_engine;
 
 /// Flag atómico que indica si el engine está activo.
 std::atomic<bool> g_running{false};
+
+} // namespace anónimo
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JNI helpers — conversiones de structs C++ a java.util.HashMap<String, Object>
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Estos helpers se usan desde las funciones JNI nativeGetLatencyMetrics y
+// nativeGetLoopbackTestResult para construir el Map que MethodChannel
+// transporta al lado Dart. Las claves siguen los nombres documentados en
+// `design.md` sección "Modelo de datos cruzando capas" y deben coincidir
+// EXACTAMENTE con los nombres consumidos por LatencyMetrics.fromMap y
+// LoopbackResult.fromMap del lado Dart.
+//
+// Sentinelas:
+// - LatencyMetrics: inputLatencyMs/outputLatencyMs == -1 → null Java
+//   (significa "Oboe getTimestamp() todavía no disponible")
+// - LoopbackResult: latencyMs == NaN → null Java
+//   (significa "test no detectó el chirp con confianza suficiente")
+
+namespace {
+
+/// Boxea un int32_t en java.lang.Integer.
+[[maybe_unused]] jobject boxInt(JNIEnv* env, int32_t v) {
+    jclass cls = env->FindClass("java/lang/Integer");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(I)V");
+    jobject obj = env->NewObject(cls, ctor, static_cast<jint>(v));
+    env->DeleteLocalRef(cls);
+    return obj;
+}
+
+/// Boxea un int64_t en java.lang.Long.
+[[maybe_unused]] jobject boxLong(JNIEnv* env, int64_t v) {
+    jclass cls = env->FindClass("java/lang/Long");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(J)V");
+    jobject obj = env->NewObject(cls, ctor, static_cast<jlong>(v));
+    env->DeleteLocalRef(cls);
+    return obj;
+}
+
+/// Boxea un double en java.lang.Double.
+[[maybe_unused]] jobject boxDouble(JNIEnv* env, double v) {
+    jclass cls = env->FindClass("java/lang/Double");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(D)V");
+    jobject obj = env->NewObject(cls, ctor, static_cast<jdouble>(v));
+    env->DeleteLocalRef(cls);
+    return obj;
+}
+
+/// Boxea un bool en java.lang.Boolean.
+[[maybe_unused]] jobject boxBool(JNIEnv* env, bool v) {
+    jclass cls = env->FindClass("java/lang/Boolean");
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(Z)V");
+    jobject obj = env->NewObject(cls, ctor, v ? JNI_TRUE : JNI_FALSE);
+    env->DeleteLocalRef(cls);
+    return obj;
+}
+
+/// Inserta (key, value) en un HashMap. `value` puede ser nullptr (representa
+/// null Java). Libera las referencias locales de la key y del value tras
+/// la inserción para evitar agotar la tabla local de referencias JNI.
+[[maybe_unused]] void putKv(JNIEnv* env, jobject map, jmethodID putMethod,
+                            const char* key, jobject value) {
+    jstring jkey = env->NewStringUTF(key);
+    env->CallObjectMethod(map, putMethod, jkey, value);
+    env->DeleteLocalRef(jkey);
+    if (value != nullptr) {
+        env->DeleteLocalRef(value);
+    }
+}
+
+/// Construye un java.util.HashMap a partir de LatencyMetrics.
+///
+/// Las claves siguen los nombres documentados en design.md:
+///   sampleRate, inputFramesPerBurst, outputFramesPerBurst,
+///   outputBufferSizeFrames, inputAudioApi, outputAudioApi,
+///   inputSharingMode, outputSharingMode, outputPerformanceMode,
+///   inputLatencyMs, outputLatencyMs, dspBlockMs, dspProcessingMsAvg,
+///   dspProcessingMsMax, dnnInferenceMs, dnnGroupDelayMs, tnrLookaheadMs,
+///   callbackUnderruns, timestampsHealthy, schemaVersion.
+///
+/// Convierte `inputLatencyMs == -1` y `outputLatencyMs == -1` en null Java
+/// (no en Double(-1.0)). El resto de los floating-points siempre se boxean
+/// como Double para que Dart vea `Double` consistentemente.
+[[maybe_unused]] jobject latencyMetricsToJavaMap(JNIEnv* env,
+                                                 const LatencyMetrics& m) {
+    jclass hashMapCls = env->FindClass("java/util/HashMap");
+    jmethodID ctor = env->GetMethodID(hashMapCls, "<init>", "()V");
+    jmethodID put  = env->GetMethodID(hashMapCls, "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    jobject map = env->NewObject(hashMapCls, ctor);
+
+    // Configuración del stream
+    putKv(env, map, put, "sampleRate",             boxInt(env, m.sampleRate));
+    putKv(env, map, put, "inputFramesPerBurst",    boxInt(env, m.inputFramesPerBurst));
+    putKv(env, map, put, "outputFramesPerBurst",   boxInt(env, m.outputFramesPerBurst));
+    putKv(env, map, put, "outputBufferSizeFrames", boxInt(env, m.outputBufferSizeFrames));
+    putKv(env, map, put, "inputAudioApi",          boxInt(env, m.inputAudioApi));
+    putKv(env, map, put, "outputAudioApi",         boxInt(env, m.outputAudioApi));
+    putKv(env, map, put, "inputSharingMode",       boxInt(env, m.inputSharingMode));
+    putKv(env, map, put, "outputSharingMode",      boxInt(env, m.outputSharingMode));
+    putKv(env, map, put, "outputPerformanceMode",  boxInt(env, m.outputPerformanceMode));
+
+    // Latencias por etapa: -1 → null, resto → Double
+    jobject inputLat  = (m.inputLatencyMs  == -1.0) ? nullptr : boxDouble(env, m.inputLatencyMs);
+    jobject outputLat = (m.outputLatencyMs == -1.0) ? nullptr : boxDouble(env, m.outputLatencyMs);
+    putKv(env, map, put, "inputLatencyMs",  inputLat);
+    putKv(env, map, put, "outputLatencyMs", outputLat);
+    putKv(env, map, put, "dspBlockMs",         boxDouble(env, m.dspBlockMs));
+    putKv(env, map, put, "dspProcessingMsAvg", boxDouble(env, m.dspProcessingMsAvg));
+    putKv(env, map, put, "dspProcessingMsMax", boxDouble(env, m.dspProcessingMsMax));
+    putKv(env, map, put, "dnnInferenceMs",     boxDouble(env, m.dnnInferenceMs));
+    putKv(env, map, put, "dnnGroupDelayMs",    boxDouble(env, m.dnnGroupDelayMs));
+    putKv(env, map, put, "tnrLookaheadMs",     boxDouble(env, m.tnrLookaheadMs));
+
+    // Estado de salud + versionado
+    putKv(env, map, put, "callbackUnderruns", boxInt(env, m.callbackUnderruns));
+    putKv(env, map, put, "timestampsHealthy", boxBool(env, m.timestampsHealthy));
+    putKv(env, map, put, "schemaVersion",     boxInt(env, m.schemaVersion));
+
+    env->DeleteLocalRef(hashMapCls);
+    return map;
+}
+
+/// Construye un java.util.HashMap a partir de LoopbackResult.
+///
+/// Las claves siguen los nombres documentados en design.md:
+///   success, lowConfidence, lagSamples, latencyMs, normalizedPeak,
+///   emissionTimestampNs, completionTimestampNs, errorMessage, schemaVersion.
+///
+/// Convierte `latencyMs == NaN` en null Java (caso lowConfidence=true). El
+/// struct C++ no tiene `schemaVersion`; se asigna fijo a 1 en este helper
+/// para mantener la convención de versionado del Map en Dart.
+[[maybe_unused]] jobject loopbackResultToJavaMap(JNIEnv* env,
+                                                 const latency_monitor::LoopbackResult& r) {
+    jclass hashMapCls = env->FindClass("java/util/HashMap");
+    jmethodID ctor = env->GetMethodID(hashMapCls, "<init>", "()V");
+    jmethodID put  = env->GetMethodID(hashMapCls, "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    jobject map = env->NewObject(hashMapCls, ctor);
+
+    putKv(env, map, put, "success",       boxBool(env, r.success));
+    putKv(env, map, put, "lowConfidence", boxBool(env, r.lowConfidence));
+    putKv(env, map, put, "lagSamples",    boxInt(env, r.lagSamples));
+
+    // latencyMs: NaN → null (lowConfidence), resto → Double
+    jobject lat = std::isnan(r.latencyMs) ? nullptr : boxDouble(env, r.latencyMs);
+    putKv(env, map, put, "latencyMs", lat);
+
+    putKv(env, map, put, "normalizedPeak",        boxDouble(env, r.normalizedPeak));
+    putKv(env, map, put, "emissionTimestampNs",   boxLong(env, r.emissionTimestampNs));
+    putKv(env, map, put, "completionTimestampNs", boxLong(env, r.completionTimestampNs));
+
+    // errorMessage: char[128] → String Java (NewStringUTF acepta C-string).
+    // Se rutea por putKv usando jstring como jobject; putKv libera la ref local.
+    putKv(env, map, put, "errorMessage", env->NewStringUTF(r.errorMessage));
+
+    // schemaVersion no existe en el struct C++; lo asignamos fijo a 1 acá.
+    putKv(env, map, put, "schemaVersion", boxInt(env, 1));
+
+    env->DeleteLocalRef(hashMapCls);
+    return map;
+}
 
 } // namespace anónimo
 
@@ -896,6 +1061,105 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDiagnosticRecordingPro
     }
 
     return g_engine->getDiagnosticRecordingProgress();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Latency Monitor & Loopback Test JNI Functions
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Las cinco funciones a continuación exponen al lado Kotlin/Dart el monitor
+// de latencia y el test de loopback acústico documentados en el spec
+// `monitor-latencia-audio`. Convención de retorno:
+//
+//   nativeGetLatencyMetrics:
+//     - Si `g_engine == nullptr` → null (Dart lo trata como "no hay datos").
+//     - Si hay engine → java.util.HashMap construido por `latencyMetricsToJavaMap`.
+//
+//   nativeStartLoopbackTest:
+//     - Usa `LoopbackParams{}` (defaults: 48 kHz, chirp 200→8000 Hz, 50 ms).
+//     - Retorna jboolean: true si el test arrancó, false si engine null o falló.
+//
+//   nativeIsLoopbackTestActive:
+//     - Delegación pura a `g_engine->isLoopbackTestActive()`.
+//
+//   nativeGetLoopbackTestResult:
+//     - Si todavía está activo → null (Dart sigue polleando).
+//     - Si terminó → java.util.HashMap construido por `loopbackResultToJavaMap`.
+//     - Si engine null → null.
+//
+//   nativeCancelLoopbackTest:
+//     - Idempotente: si engine null o no hay test, no-op.
+//
+// Nombres JNI: paquete Kotlin `com.psk.hearing_aid_app` → mangling con
+// underscores escapados como `_1` → `Java_com_psk_hearing_1aid_1app_...`.
+
+/// Devuelve un snapshot de las métricas de latencia del motor de audio.
+/// @return java.util.HashMap<String,Object> con las claves documentadas en
+///         `latencyMetricsToJavaMap`, o null si el engine no está creado.
+JNIEXPORT jobject JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetLatencyMetrics(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_engine) return nullptr;
+    LatencyMetrics m = g_engine->getLatencyMetrics();
+    return latencyMetricsToJavaMap(env, m);
+}
+
+/// Inicia el test de loopback acústico con parámetros por defecto
+/// (48 kHz, chirp 200→8000 Hz, ventana de medición de 500 ms).
+/// @return true si el tester arrancó correctamente; false si el engine no
+///         está creado o si el tester rechazó los parámetros.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStartLoopbackTest(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_engine) return JNI_FALSE;
+    latency_monitor::LoopbackParams params;  // defaults
+    bool ok = g_engine->startLoopbackTest(params);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/// @return true si hay un test de loopback en curso, false si no o si el
+///         engine no está creado.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeIsLoopbackTestActive(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_engine) return JNI_FALSE;
+    return g_engine->isLoopbackTestActive() ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Obtiene el resultado del test de loopback.
+/// @return - null si todavía está activo (Dart debe seguir polleando).
+///         - null si el engine no está creado.
+///         - java.util.HashMap<String,Object> con las claves documentadas en
+///           `loopbackResultToJavaMap` cuando el test terminó.
+JNIEXPORT jobject JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetLoopbackTestResult(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_engine) return nullptr;
+    // Si todavía está activo, retornar null para que Dart sepa que debe
+    // seguir polleando hasta que el tester complete la medición.
+    if (g_engine->isLoopbackTestActive()) return nullptr;
+    latency_monitor::LoopbackResult r = g_engine->getLoopbackTestResult();
+    return loopbackResultToJavaMap(env, r);
+}
+
+/// Cancela el test de loopback en curso (si lo hay) y restaura el muteo
+/// del audio ambiente. Idempotente.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeCancelLoopbackTest(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (g_engine) {
+        g_engine->cancelLoopbackTest();
+    }
 }
 
 } // extern "C"

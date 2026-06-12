@@ -461,4 +461,62 @@ class NativeAudioBridge {
             "wdrcLevelSource" to if (wdrcUsesExternal) "pre-dnn" else "local",
         )
     }
+
+    // ─── Latency Monitor & Loopback Test (spec monitor-latencia-audio) ───
+
+    /**
+     * Retorna métricas de latencia del pipeline DSP como Map.
+     *
+     * Campos esperados (poblados por el lado nativo desde
+     * [AudioEngine::getLatencyMetrics] vía `latencyMetricsToJavaMap`):
+     *   - `inputLatencyMs`: latencia del stream de entrada en ms.
+     *   - `outputLatencyMs`: latencia del stream de salida en ms.
+     *   - `bufferLatencyMs`: latencia de buffering del DSP en ms.
+     *   - `totalLatencyMs`: suma de las anteriores.
+     *   - `samplesProcessed`: muestras procesadas en la ventana actual.
+     *   - `xrunCount`: cantidad de under/over-runs detectados.
+     *   - `timestampValid`: true si los timestamps de AAudio son válidos.
+     *
+     * @return Map con las métricas, o null si el engine nativo no está creado.
+     */
+    external fun nativeGetLatencyMetrics(): Map<String, Any?>?
+
+    /**
+     * Inicia un test de loopback (medición end-to-end de latencia mediante
+     * tono de prueba inyectado en el output y detectado en el input).
+     *
+     * Idempotente: si ya hay un test activo, simplemente lo continúa.
+     *
+     * @return true si el test inició correctamente; false si el engine nativo
+     *         no está creado o si el tester rechazó los parámetros.
+     */
+    external fun nativeStartLoopbackTest(): Boolean
+
+    /**
+     * Indica si actualmente hay un test de loopback en curso.
+     *
+     * @return true si el tester está en estado activo; false en caso contrario
+     *         o si el engine nativo no está creado.
+     */
+    external fun nativeIsLoopbackTestActive(): Boolean
+
+    /**
+     * Retorna el resultado del último test de loopback como Map.
+     *
+     * Campos esperados (poblados desde `loopbackResultToJavaMap`):
+     *   - `roundTripLatencyMs`: latencia round-trip medida en ms.
+     *   - `confidence`: confianza de la medición [0.0, 1.0].
+     *   - `success`: true si el test completó con resultado válido.
+     *   - `errorMessage`: descripción del error si `success == false`.
+     *
+     * @return Map con el resultado mientras el test sigue activo o cuando
+     *         terminó; null si nunca se ejecutó o el engine no está creado.
+     */
+    external fun nativeGetLoopbackTestResult(): Map<String, Any?>?
+
+    /**
+     * Cancela un test de loopback en curso y restaura el procesamiento
+     * normal del audio ambiente. Idempotente: si no hay test activo, no-op.
+     */
+    external fun nativeCancelLoopbackTest()
 }

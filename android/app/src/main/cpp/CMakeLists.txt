@@ -62,6 +62,8 @@ add_library(
     dnn_denoiser/dnn_denoiser.cpp
     # Diagnostic Recorder (grabación dual-channel pre/post DSP)
     diagnostic_recorder.cpp
+    # Latency Loopback Tester (chirp + cross-correlation para medir latencia round-trip)
+    latency_loopback_tester.cpp
 )
 
 # Enlazar con Oboe, librerías del sistema Android, y OnnxRuntime
