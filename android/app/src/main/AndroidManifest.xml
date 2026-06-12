@@ -9,6 +9,13 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Guardar el .oirpro.json en Downloads del celular sin share sheet
+         (ver LocalDownloadsChannel.kt). En Android 10+ no se requiere
+         permiso (MediaStore.Downloads), por eso maxSdkVersion="28". -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Biometría al abrir (Fase 3 spec oir-pro-rebrand-harden-and-remote-config):
          huella / face unlock vía local_auth. USE_FINGERPRINT cubre dispositivos
          pre-API 28; USE_BIOMETRIC es el permiso vigente desde Android 9. -->

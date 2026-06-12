@@ -33,6 +33,9 @@ class MainActivity : FlutterFragmentActivity() {
     /** Plugin nativo para volumen del sistema durante la calibración biológica. */
     private var biologicalVolumePlugin: BiologicalCalibrationVolumePlugin? = null
 
+    /** Canal nativo para guardar archivos en Downloads sin pasar por share sheet. */
+    private var localDownloadsChannel: LocalDownloadsChannel? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         Log.i(TAG, "Configuring Flutter engine and platform channels")
@@ -44,6 +47,10 @@ class MainActivity : FlutterFragmentActivity() {
         biologicalVolumePlugin = BiologicalCalibrationVolumePlugin(flutterEngine, this).also {
             it.register()
         }
+
+        localDownloadsChannel = LocalDownloadsChannel(flutterEngine, this).also {
+            it.register()
+        }
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -52,6 +59,8 @@ class MainActivity : FlutterFragmentActivity() {
         audioMethodChannel = null
         biologicalVolumePlugin?.unregister()
         biologicalVolumePlugin = null
+        localDownloadsChannel?.unregister()
+        localDownloadsChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

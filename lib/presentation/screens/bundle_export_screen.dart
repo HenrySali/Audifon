@@ -168,6 +168,62 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
     }
   }
 
+  /// Genera el bundle y lo guarda directamente en `Download/` del
+  /// celular sin abrir el share sheet. Útil cuando el share está roto
+  /// o el técnico prefiere enviar el archivo después manualmente.
+  Future<void> _onSaveLocally() async {
+    if (_busy) return;
+    final defaultPreset = _defaultPresetName;
+    if (defaultPreset == null || defaultPreset.isEmpty) {
+      _showSnack('Elegí un preset por defecto.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final bloc = context.read<AmplificationBloc>();
+
+      final audiogram = await bloc.audiogramRepository.getAudiogram() ??
+          Audiogram.defaultAudiogram();
+
+      final presets = await _collectPresets(bloc);
+      final normalizedPresets = presets
+          .map((p) => _normalizePresetForExport(p, audiogram))
+          .toList();
+
+      final state = bloc.state;
+      final wdrc = _wdrcFromState(state);
+      final mpo = _mpoFromState(state);
+      final mhlEnabled =
+          state is AmplificationActive ? state.mhlActive : false;
+
+      final exporter = BundleExporter();
+      final savedAt = await exporter.exportBundleToLocalDownloads(
+        audiogram: audiogram,
+        presets: normalizedPresets,
+        wdrc: wdrc,
+        mpoThresholdDbSpl: mpo,
+        mhlEnabled: mhlEnabled,
+        defaultPresetName: defaultPreset,
+        patientName: _patientNameController.text.trim().isEmpty
+            ? null
+            : _patientNameController.text.trim(),
+        notes: _notesController.text.trim().isEmpty
+            ? null
+            : _notesController.text.trim(),
+      );
+
+      if (!mounted) return;
+      _showSnack('Guardado en: $savedAt');
+    } on StateError catch (e) {
+      _showSnack('No se pudo generar: ${e.message}');
+    } catch (e) {
+      _showSnack('Error al guardar localmente: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// Junta los presets audiogram-driven (con ganancias NAL-NL2 escaladas
   /// por intensidad + perfil) y los custom del repo.
   ///
@@ -404,6 +460,22 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
                 backgroundColor: Colors.greenAccent.withOpacity(0.15),
                 foregroundColor: Colors.greenAccent,
                 side: BorderSide(color: Colors.greenAccent.withOpacity(0.4)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _busy ? null : _onSaveLocally,
+              icon: const Icon(Icons.download, color: Color(0xFF00e5ff)),
+              label: const Text(
+                'Guardar en Descargas',
+                style: TextStyle(color: Color(0xFF00e5ff)),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFF00e5ff)),
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),

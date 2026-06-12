@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../data/services/local_downloads_service.dart';
 import '../domain/entities/audiogram.dart';
 import '../domain/entities/eq_preset.dart';
 import '../domain/entities/wdrc_params.dart';
@@ -131,6 +132,78 @@ class BundleExporter {
       text: 'Configuración Oír Pro para ${patientName ?? "paciente"}',
     );
     return file;
+  }
+
+  /// Genera el bundle igual que [exportBundle] pero lo escribe
+  /// directamente al directorio público `Download/` del dispositivo
+  /// usando `MediaStore.Downloads` (Android 10+) o el filesystem
+  /// (Android 9 y anteriores) **sin abrir el share sheet**.
+  ///
+  /// Útil cuando el técnico solo quiere dejar el `.oirpro.json`
+  /// guardado en el celular para enviarlo después por el medio que
+  /// prefiera (WhatsApp, Drive, USB), sin depender de `share_plus`
+  /// (que actualmente está roto en builds release por reglas ProGuard
+  /// incompletas).
+  ///
+  /// Devuelve un [String] con la ubicación visible al usuario
+  /// (ej. `"Descargas/oirpro_juan_20260612.oirpro.json"`).
+  ///
+  /// Errores:
+  /// - [StateError] si `HMAC_SECRET` no fue inyectado en build.
+  /// - [LocalDownloadsException] si el canal nativo falla.
+  Future<String> exportBundleToLocalDownloads({
+    required Audiogram audiogram,
+    required List<EqPreset?> presets,
+    required WdrcParams wdrc,
+    required double mpoThresholdDbSpl,
+    required bool mhlEnabled,
+    required String defaultPresetName,
+    String? patientName,
+    String? notes,
+    LocalDownloadsService? service,
+  }) async {
+    if (_hmacSecret.isEmpty) {
+      throw StateError(
+        'HMAC_SECRET no configurado. Build con --dart-define=HMAC_SECRET=...',
+      );
+    }
+
+    final exportablePresets = <EqPreset>[
+      for (final p in presets)
+        if (p != null) p,
+    ];
+
+    final body = <String, dynamic>{
+      'schemaVersion': _kSchemaVersion,
+      'keyVersion': _kKeyVersion,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'patient': {
+        'name': patientName ?? '',
+        'notes': notes ?? '',
+      },
+      'audiogram': audiogram.toJson(),
+      'presets': exportablePresets.map((p) => p.toJson()).toList(),
+      'wdrc': wdrc.toJson(),
+      'mpo': {'thresholdDbSpl': mpoThresholdDbSpl},
+      'mhl': {'enabled': mhlEnabled},
+      'defaults': {'presetName': defaultPresetName},
+    };
+
+    final canonical = _canonicalJson(body);
+    final signature = _hmacSha256(canonical, _hmacSecret);
+    final wrapped = <String, dynamic>{
+      ...body,
+      'signature': {'algo': 'HMAC-SHA256', 'value': signature},
+    };
+
+    final json = jsonEncode(wrapped);
+    final filename = _buildFilename(patientName);
+    final downloads = service ?? LocalDownloadsService();
+    final savedAt = await downloads.saveJsonToDownloads(
+      filename: filename,
+      content: json,
+    );
+    return savedAt;
   }
 
   // --- helpers ---
