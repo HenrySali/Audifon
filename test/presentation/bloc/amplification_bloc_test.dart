@@ -133,6 +133,11 @@ void main() {
         profileRepository: mockProfileRepo,
         settingsRepository: mockSettingsRepo,
         gainPrescriber: mockGainPrescriber,
+        // Sin delay artificial al boot: los tests del bloc verifican
+        // transiciones de estado y no necesitan esperar el delay
+        // clínico de 200 ms (Req 3.3 del spec
+        // tecnico-paciente-feature-parity).
+        bootDelay: Duration.zero,
       );
 
   group('Start → Active → Stop flow', () {

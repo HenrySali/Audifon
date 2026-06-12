@@ -202,6 +202,7 @@ void main() {
         profileRepository: profileRepo,
         settingsRepository: settingsRepo,
         gainPrescriber: gainPrescriber,
+        bootDelay: Duration.zero,
       );
 
   group('audiogram-driven-presets · _onApplyBundle rollback (Req 4.3)', () {

@@ -123,6 +123,14 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
       // 2. Lista de presets para el bundle: predefinidos + custom.
       final presets = await _collectPresets(bloc);
 
+      // Req 5.6, 5.7: re-derivar gains de presets legacy con todos los
+      // gains en 0 (excepto "Sin amplificación") usando el audiograma
+      // del paciente. Si la re-derivación falla, el preset queda como
+      // `null` y el exporter lo omite sin abortar.
+      final normalizedPresets = presets
+          .map((p) => _normalizePresetForExport(p, audiogram))
+          .toList();
+
       // 3. WDRC + MPO + MHL: derivados del estado activo del bloc si
       //    está `AmplificationActive`, sino defaults seguros.
       final state = bloc.state;
@@ -134,7 +142,7 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
       final exporter = BundleExporter();
       final File file = await exporter.exportBundle(
         audiogram: audiogram,
-        presets: presets,
+        presets: normalizedPresets,
         wdrc: wdrc,
         mpoThresholdDbSpl: mpo,
         mhlEnabled: mhlEnabled,
@@ -229,6 +237,17 @@ class _BundleExportScreenState extends State<BundleExportScreen> {
       // Si la lectura falla seguimos con los que ya tenemos.
     }
     return byName.values.toList();
+  }
+
+  /// Wrapper local sobre [BundleExporter.normalizePresetForExport] que
+  /// re-deriva ganancias para presets legacy con `gains=[0,...,0]` y
+  /// nombre distinto a `"Sin amplificación"` (Req 5.6, 5.7).
+  ///
+  /// Devuelve `null` si la re-derivación falla; el exporter filtra
+  /// esos `null` y continúa con los demás presets sin abortar el
+  /// share-sheet completo.
+  EqPreset? _normalizePresetForExport(EqPreset preset, Audiogram audiogram) {
+    return BundleExporter.normalizePresetForExport(preset, audiogram);
   }
 
   /// Deriva ganancias mínimas NAL-NL2 desde el audiograma para fallback.

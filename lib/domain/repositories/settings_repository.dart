@@ -74,4 +74,78 @@ abstract class SettingsRepository {
   ///
   /// Acepta valores ≥ 0; los valores negativos se tratan como cero.
   Future<void> setExperienceMonths(int months);
+
+  // --- Tecnico↔Paciente feature parity (Task 1.1) -------------------------
+  // Las cinco keys siguientes se introducen para alinear el técnico con el
+  // paciente. Los getters son SINCRÓNICOS para que el helper
+  // `_effectiveCompressionRatio(bundle)` del AmplificationBloc pueda leerlos
+  // sin `await` (Req 4.4, 4.5, 4.7). Los setters quedan asíncronos porque
+  // Hive escribe a disco.
+
+  /// Estado del toggle "MHL Prescripción" (gains EQ flat 8 dB + ratio 1.0).
+  /// Default `false` cuando la key está ausente.
+  ///
+  /// Requisitos: 1.10
+  bool get mhlPrescriptionEnabled;
+
+  /// Persiste el estado del toggle "MHL Prescripción".
+  ///
+  /// Requisitos: 1.10
+  Future<void> setMhlPrescriptionEnabled(bool value);
+
+  /// Estado del toggle "Modo Música" (NR=0 + DNN=0).
+  /// Default `false` cuando la key está ausente.
+  ///
+  /// Requisitos: 1.11
+  bool get musicModeEnabled;
+
+  /// Persiste el estado del toggle "Modo Música".
+  ///
+  /// Requisitos: 1.11
+  Future<void> setMusicModeEnabled(bool value);
+
+  /// Slider de Comodidad `[0.0, 1.0]` que ajusta el `compressionRatio` del
+  /// WDRC vía `base + (1 - base) * comfort`. Default `0.5` cuando la key
+  /// está ausente o contiene un valor no numérico (NaN, null, etc.).
+  /// El valor retornado siempre está clampeado a `[0.0, 1.0]`.
+  ///
+  /// Requisitos: 4.6, 4.7
+  double get comfort;
+
+  /// Persiste el slider de Comodidad. El valor se clampa a `[0.0, 1.0]`
+  /// antes de escribir; valores no finitos (NaN/±Infinity) se reemplazan
+  /// por el default `0.5`.
+  ///
+  /// Requisitos: 4.6, 4.7
+  Future<void> setComfort(double value);
+
+  /// Intensidad del DNN `[0.0, 1.0]`. Default `0.6` cuando la key está
+  /// ausente o contiene un valor no numérico. El valor retornado siempre
+  /// está clampeado a `[0.0, 1.0]`.
+  ///
+  /// Requisitos: 6.7
+  double get dnnIntensity;
+
+  /// Persiste la intensidad del DNN. El valor se clampa a `[0.0, 1.0]`;
+  /// valores no finitos se reemplazan por el default `0.6`.
+  ///
+  /// Requisitos: 6.7
+  Future<void> setDnnIntensity(double value);
+
+  /// Nivel de NR `[0, 3]`. Default `0` cuando ninguna key está presente.
+  ///
+  /// Lee primero la key nueva `nrLevel`; si no existe, hace fallback a la
+  /// key legacy `lastNrLevel` (vía [getLastNrLevel]) para mantener
+  /// retro-compatibilidad con instalaciones previas. La primera invocación
+  /// de [setNrLevel] sincroniza ambas keys.
+  ///
+  /// Requisitos: 6.8
+  int get nrLevel;
+
+  /// Persiste el nivel de NR clampeado a `[0, 3]` y sincroniza la key
+  /// legacy `lastNrLevel` para que [getLastNrLevel] devuelva el mismo
+  /// valor.
+  ///
+  /// Requisitos: 6.8
+  Future<void> setNrLevel(int value);
 }

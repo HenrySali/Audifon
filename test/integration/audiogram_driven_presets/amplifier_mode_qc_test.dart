@@ -270,6 +270,7 @@ void main() {
         profileRepository: profileRepo,
         settingsRepository: settingsRepo,
         gainPrescriber: gainPrescriber,
+        bootDelay: Duration.zero,
       );
 
   /// Drives the bloc until the initial bundle from

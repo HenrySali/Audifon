@@ -1,18 +1,33 @@
 import 'package:flutter/material.dart';
 
-/// Toggle de Modo MHL (Minimal Hearing Loss) para la UI principal.
+import 'mode_toggles.dart';
+
+/// Wrapper legacy del toggle "MHL Prescripción".
 ///
-/// Muestra un switch interactivo que permite al usuario activar/desactivar
-/// el modo MHL de forma explícita. Cuando MHL está activo, se aplica
-/// ganancia flat mínima con reducción de ruido máxima.
+/// Este widget existió antes de la introducción de `ModeToggles` (que
+/// renderiza dos toggles independientes: "MHL Prescripción" y "Modo
+/// Música"). Para no romper screens viejas que lo importan (p. ej.
+/// `main_screen.dart`), `MhlModeToggle` se mantiene con su API pública
+/// original (`isActive`, `ptaWarning`, `onToggled`, `enabled`) y su
+/// comportamiento visual anterior:
 ///
-/// Indicadores visuales:
-/// - Toggle activo sin warning: color verde (MHL activo, PTA ≤ 25 dB).
-/// - Toggle activo con warning: color ámbar + icono de advertencia
-///   (MHL activo pero PTA > 25 dB, se recomienda prescripción estándar).
-/// - Toggle inactivo: color neutro (MHL desactivado).
+/// - Renderiza únicamente el toggle de "MHL Prescripción" (sin el de
+///   "Modo Música") delegando en `ModeToggles` con `showMusic: false`.
+/// - Conserva el banner de advertencia PTA cuando MHL está activo y
+///   `ptaWarning == true`, ya que es comportamiento legacy ligado a la
+///   semántica del antiguo "Modo MHL" y no al nuevo "MHL Prescripción"
+///   genérico.
 ///
-/// Ejemplo de uso:
+/// Indicadores visuales heredados:
+/// - Toggle activo sin warning: acento cyan (color del nuevo
+///   `ModeToggles` para MHL Prescripción).
+/// - Toggle activo con warning: acento cyan + banner ámbar debajo.
+/// - Toggle inactivo: color neutro.
+///
+/// Para código nuevo, preferir usar `ModeToggles` directamente y manejar
+/// el chequeo PTA fuera del widget.
+///
+/// Ejemplo de uso (legacy):
 /// ```dart
 /// MhlModeToggle(
 ///   isActive: state.mhlActive,
@@ -21,7 +36,7 @@ import 'package:flutter/material.dart';
 /// )
 /// ```
 ///
-/// Requisitos: 4.3, 4.5, 4.6
+/// Requisitos: 1.12, 4.3, 4.5, 4.6
 class MhlModeToggle extends StatelessWidget {
   /// Si el modo MHL está actualmente activo.
   final bool isActive;
@@ -46,93 +61,33 @@ class MhlModeToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Determinar colores según estado activo y warning.
-    final Color accentColor;
-    if (isActive && ptaWarning) {
-      accentColor = Colors.amber;
-    } else if (isActive) {
-      accentColor = Colors.greenAccent;
-    } else {
-      accentColor = Colors.white38;
-    }
-
-    final borderColor = isActive ? accentColor : Colors.white24;
-    final backgroundColor = isActive
-        ? accentColor.withOpacity(0.12)
-        : Colors.transparent;
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeInOut,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: borderColor.withOpacity(0.5),
-          width: isActive ? 1.5 : 0.5,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Delega el render del toggle MHL en `ModeToggles` con el toggle de
+        // "Modo Música" oculto. Esto garantiza que el visual y el contrato
+        // de callbacks sea exactamente el del nuevo widget compartido.
+        ModeToggles(
+          mhlPrescription: isActive,
+          musicMode: false,
+          onMhlChanged: onToggled,
+          onMusicChanged: _noop,
+          enabled: enabled,
+          showMusic: false,
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Encabezado con icono, título y switch
-          Row(
-            children: [
-              Icon(
-                Icons.noise_aware,
-                color: accentColor,
-                size: 18,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  'Modo MHL',
-                  style: TextStyle(
-                    color: isActive ? accentColor : Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-              // Switch de activación
-              SizedBox(
-                height: 28,
-                child: Switch(
-                  value: isActive,
-                  onChanged: enabled ? onToggled : null,
-                  activeColor: accentColor,
-                  activeTrackColor: accentColor.withOpacity(0.3),
-                  inactiveThumbColor: Colors.white38,
-                  inactiveTrackColor: Colors.white12,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          // Subtítulo descriptivo
-          Text(
-            isActive
-                ? 'Ganancia mínima · NR máximo · Compresión lineal'
-                : 'Pérdida mínima / dificultad en ruido',
-            style: TextStyle(
-              color: isActive
-                  ? accentColor.withOpacity(0.7)
-                  : Colors.white38,
-              fontSize: 10,
-            ),
-          ),
-          // Advertencia PTA (visible solo cuando MHL activo y PTA > 25)
-          if (isActive && ptaWarning) ...[
-            const SizedBox(height: 8),
-            _PtaWarningBanner(),
-          ],
+        // Banner PTA legacy: solo cuando MHL activo y warning presente.
+        if (isActive && ptaWarning) ...[
+          const SizedBox(height: 8),
+          const _PtaWarningBanner(),
         ],
-      ),
+      ],
     );
   }
+
+  // No-op para satisfacer el contrato `required` de `onMusicChanged` sin
+  // efectos colaterales. Como `showMusic: false`, este callback nunca se
+  // dispara desde la UI.
+  static void _noop(bool _) {}
 }
 
 /// Banner de advertencia PTA que se muestra cuando el PTA del paciente
@@ -143,6 +98,8 @@ class MhlModeToggle extends StatelessWidget {
 ///
 /// Requisito 4.3
 class _PtaWarningBanner extends StatelessWidget {
+  const _PtaWarningBanner();
+
   @override
   Widget build(BuildContext context) {
     return Container(

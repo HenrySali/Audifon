@@ -38,6 +38,24 @@ dependencies:
   fl_chart: ^0.68.0
   # In-app diagnostic analyzer file picker for the technician variant.
   file_picker: ^8.0.0
+  # BLE proprietary protocol with the in-house hearing-aid chip (NOT the
+  # commercial A2DP/SCO headset). Used by `lib/data/repositories/ble_repository.dart`
+  # to send EQ / AGC / volume / profile / MPO / NR / FB-cancel commands
+  # over the GATT custom service (UUID 0x1850-custom). The package author
+  # explicitly recommends pinning a fixed version because minor-version
+  # bumps may include breaking API changes; we pick 1.35.5 (last 1.35.x
+  # patch with no known regressions). Manifest permissions
+  # BLUETOOTH_CONNECT, BLUETOOTH_SCAN (neverForLocation) are already
+  # declared in android/app/src/main/AndroidManifest.xml.
+  flutter_blue_plus: ^1.35.5
+  # PDF generation for the QC loopback audit trail report (spec
+  # `audiogram-driven-presets`, tarea 15.3, Req 15.14). Used by
+  # `lib/data/repositories/qc_audit_repository_impl.dart` to render the
+  # operator + equipment + measurements + signature block as an A4 PDF
+  # whose bytes the release_gate verifies. We do NOT add `package:printing`
+  # because the report is saved-to-bytes only (never sent to a physical
+  # printer from the technician app).
+  pdf: ^3.11.3
 
 dev_dependencies:
   flutter_test:

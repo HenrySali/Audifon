@@ -267,6 +267,86 @@ class ToggleMhlMode extends AmplificationEvent {
   List<Object?> get props => [activate];
 }
 
+/// Solicita activar o desactivar **MHL Prescripción** (modo selectivo).
+///
+/// Reemplazo no destructivo de [ToggleMhlMode]: este evento despacha al
+/// handler nuevo `_onToggleMhlPrescription`, que aplica el modo de forma
+/// selectiva (solo gains EQ a 8 dB en 12 bandas + `compressionRatio = 1.0`),
+/// dejando intactos NR, DNN, knees, attack/release y volumen del estado
+/// previo del motor.
+///
+/// La regla de mutex con [ToggleMusicMode] (Req 1.3, 1.4) se aplica en el
+/// handler: si Modo Música está activo al activar MHL, el handler ejecuta
+/// primero la rama OFF de Música (restaurando NR/DNN) y luego la rama ON
+/// de MHL.
+///
+/// El evento legacy [ToggleMhlMode] se conserva con su firma original y
+/// delega a este handler para no romper screens viejas (Req 1.12).
+///
+/// Requisitos: 1.1, 1.3, 1.5, 1.6, 1.7, 1.10, 1.12
+class ToggleMhlPrescription extends AmplificationEvent {
+  /// true para activar MHL Prescripción, false para desactivar.
+  final bool activate;
+
+  const ToggleMhlPrescription({required this.activate});
+
+  @override
+  List<Object?> get props => [activate];
+}
+
+/// Solicita activar o desactivar **Modo Música** (modo selectivo).
+///
+/// Aplica de forma selectiva `nrLevel = 0` y `dnnIntensity = 0.0` para
+/// preservar transitorios y dinámica musical, dejando intactos los gains
+/// EQ, WDRC, knees, attack/release y volumen del estado previo del motor.
+///
+/// La regla de mutex con [ToggleMhlPrescription] (Req 1.3, 1.4) se aplica
+/// en el handler: si MHL Prescripción está activo al activar Música, el
+/// handler ejecuta primero la rama OFF de MHL (restaurando gains/WDRC)
+/// y luego la rama ON de Música.
+///
+/// Al desactivar, el handler restaura `nrLevel` y `dnnIntensity` desde
+/// `SettingsRepository` y reaplica el preset activo con
+/// `_effectiveCompressionRatio(bundle)` para no perder el offset de
+/// Comodidad (Req 1.8).
+///
+/// Requisitos: 1.2, 1.4, 1.5, 1.6, 1.8, 1.11
+class ToggleMusicMode extends AmplificationEvent {
+  /// true para activar Modo Música, false para desactivar.
+  final bool activate;
+
+  const ToggleMusicMode({required this.activate});
+
+  @override
+  List<Object?> get props => [activate];
+}
+
+/// Solicita aplicar un nuevo valor del slider **Comodidad** [0.0, 1.0].
+///
+/// El handler recalcula WDRC con `_effectiveCompressionRatio(bundle)`
+/// usando el bundle activo en el instante del evento y aplica el ratio
+/// efectivo al motor mediante `updateWdrcParams`, sin modificar otros
+/// parámetros del WDRC ni del DSP.
+///
+/// El valor [comfort] debe estar en el rango [0.0, 1.0]; valores fuera
+/// de rango se clampean en el helper `_effectiveCompressionRatio` y
+/// valores no numéricos (`NaN`) se tratan como 0.5 (default).
+///
+/// La persistencia del valor en `SettingsRepository` ocurre en la UI
+/// (`SimulatorScreen.onChangeEnd`) antes del despacho del evento, no en
+/// el handler.
+///
+/// Requisitos: 4.2, 4.4, 4.5
+class ChangeComfort extends AmplificationEvent {
+  /// Nuevo valor de comodidad en [0.0, 1.0].
+  final double comfort;
+
+  const ChangeComfort({required this.comfort});
+
+  @override
+  List<Object?> get props => [comfort];
+}
+
 /// Notifica al bloc que el Smart Scene Engine clasificó una nueva escena.
 ///
 /// Cuando el modo de prescriptor es NL3, el bloc usa esta señal para

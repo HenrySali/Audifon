@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -159,6 +160,15 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
 
             // ─── NR & Auto-Classify Controls ──────────────────────────
             _NrAutoClassifyControls(),
+            const SizedBox(height: 16),
+
+            // ─── Comodidad (slider del WDRC compressionRatio) ─────────
+            // Task 7.1: ajusta el `compressionRatio` efectivo del WDRC vía
+            // la fórmula `base + (1 - base) * comfort`. comfort=0 → ratio
+            // del bundle (lo que el técnico fijó), comfort=1 → ratio=1.0
+            // (sin compresión = sonido más natural). Persiste en Settings
+            // y despacha `ChangeComfort` al bloc en `onChangeEnd`.
+            const _ComfortSlider(),
             const SizedBox(height: 24),
           ],
         ),
@@ -774,6 +784,175 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
                 activeColor: Colors.green,
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// COMODIDAD SLIDER — WDRC compressionRatio offset
+// =============================================================================
+
+/// Slider continuo `[0.0, 1.0]` (paso 0.01, display 0–100 %) que controla
+/// el offset de "Comodidad" sobre el `compressionRatio` del WDRC.
+///
+/// Comportamiento (Task 7.1, Req 4.1, 4.2, 4.3):
+///
+/// - **`onChanged`**: solo `setState` local; no toca persistencia ni bloc
+///   para evitar bursts de eventos durante el drag (Req 4.2).
+/// - **`onChangeEnd`**: persiste vía `SettingsRepository.setComfort(v)` y
+///   despacha [ChangeComfort] al [AmplificationBloc]. Ambos se completan
+///   dentro de 200 ms en el camino feliz.
+/// - **Fallo de persistencia**: log warning + snackbar no bloqueante con
+///   el mensaje exacto del Req 4.3, y se continúa con el dispatch
+///   (cambio activo solo en esta sesión).
+/// - **Carga inicial**: `initState` lee `bloc.settingsRepository.comfort`
+///   sincrónicamente (el getter del repo ya retorna `0.5` cuando la key
+///   está ausente, es no numérica o `NaN`, y clampea a `[0.0, 1.0]`).
+class _ComfortSlider extends StatefulWidget {
+  const _ComfortSlider();
+
+  @override
+  State<_ComfortSlider> createState() => _ComfortSliderState();
+}
+
+class _ComfortSliderState extends State<_ComfortSlider> {
+  /// Valor actual del slider en `[0.0, 1.0]`. Default 0.5 cuando no hay
+  /// valor persistido (Req 4.6).
+  double _comfort = 0.5;
+
+  @override
+  void initState() {
+    super.initState();
+    // Cargar valor inicial desde Settings (Req 4.1, 4.6). El getter es
+    // sincrónico y ya saneans NaN/null/clamp internamente.
+    try {
+      final bloc = context.read<AmplificationBloc>();
+      _comfort = bloc.settingsRepository.comfort;
+    } catch (e) {
+      // Bloc no disponible (caso de tests aislados o pantalla
+      // construida fuera del provider) → mantener default 0.5.
+      developer.log(
+        '_ComfortSlider.initState: no se pudo leer comfort desde '
+        'SettingsRepository ($e) — usando default 0.5.',
+        name: 'SimulatorScreen',
+      );
+    }
+  }
+
+  /// Persiste el nuevo valor en Settings y despacha [ChangeComfort] al
+  /// bloc. En fallo de persistencia, muestra snackbar + continúa con el
+  /// dispatch (Req 4.3).
+  Future<void> _onChangeEnd(double v) async {
+    AmplificationBloc? bloc;
+    try {
+      bloc = context.read<AmplificationBloc>();
+    } catch (e) {
+      // Bloc no disponible → no hay nada que despachar; abortar
+      // silenciosamente. El estado local ya se actualizó en `onChanged`.
+      developer.log(
+        '_ComfortSlider._onChangeEnd: AmplificationBloc no disponible '
+        '($e) — ignorando dispatch.',
+        name: 'SimulatorScreen',
+      );
+      return;
+    }
+
+    // 1) Persistir vía SettingsRepository.setComfort.
+    try {
+      await bloc.settingsRepository.setComfort(v);
+    } catch (e, st) {
+      developer.log(
+        '_ComfortSlider: persistencia de comfort falló: $e — '
+        'aplicando solo a la sesión.',
+        name: 'SimulatorScreen',
+        error: e,
+        stackTrace: st,
+      );
+      if (mounted) {
+        // Snackbar no bloqueante con el texto exacto del Req 4.3.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudo guardar Comodidad. Cambio activo solo en '
+              'esta sesión.',
+            ),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      // Req 4.3: continuar con dispatch incluso si la persistencia falla.
+    }
+
+    // 2) Despachar el evento al bloc para que recalcule WDRC con
+    //    `_effectiveCompressionRatio(bundle)` y aplique al motor.
+    bloc.add(ChangeComfort(comfort: v));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final percentLabel = '${(_comfort * 100).round()}%';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.spa, color: Colors.cyan, size: 18),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Comodidad',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Text(
+                percentLabel,
+                style: const TextStyle(
+                  color: Colors.cyan,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Más comodidad = menos compresión = sonido más natural.',
+            style: TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+          const SizedBox(height: 8),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: Colors.cyan,
+              inactiveTrackColor: Colors.cyan.withOpacity(0.15),
+              thumbColor: Colors.cyan,
+              overlayColor: Colors.cyan.withOpacity(0.1),
+              trackHeight: 4,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+            ),
+            child: Slider(
+              value: _comfort,
+              min: 0.0,
+              max: 1.0,
+              // 100 divisiones sobre [0,1] → paso 0.01 (Req 4.1).
+              divisions: 100,
+              label: percentLabel,
+              onChanged: (v) => setState(() => _comfort = v),
+              onChangeEnd: _onChangeEnd,
+            ),
           ),
         ],
       ),

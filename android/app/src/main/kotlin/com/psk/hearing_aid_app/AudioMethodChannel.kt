@@ -77,6 +77,26 @@ class AudioMethodChannel(
     private var currentState: String = "idle"
 
     // ─────────────────────────────────────────────────────────────────────
+    // Caches del último estado aplicado al motor.
+    //
+    // Espejo exacto de `AudioMethodChannelPatient.kt` (tecnico-paciente-feature-parity
+    // task 1.6): los handlers `setMhlPrescriptionEnabled` y `setMusicModeEnabled`
+    // necesitan re-aplicar EQ/WDRC con los valores previos al activar/desactivar
+    // los modos. Se populan desde los handlers existentes (`handleStartAudio`,
+    // `handleUpdateEqGains`, `handleUpdateWdrcParams`, `handleSetMpoThresholdDbSpl`).
+    // ─────────────────────────────────────────────────────────────────────
+
+    private var lastEqGains: FloatArray = FloatArray(12) { 0f }
+    private var lastVolumeDb: Float = 0f
+    private var lastMpoDbSpl: Float = 100f
+    private var lastExpKnee: Float = 35f
+    private var lastExpRatio: Float = 2f
+    private var lastCompKnee: Float = 55f
+    private var lastCompRatio: Float = 2f
+    private var lastAttackMs: Float = 5f
+    private var lastReleaseMs: Float = 100f
+
+    // ─────────────────────────────────────────────────────────────────────
     // Inicialización
     // ─────────────────────────────────────────────────────────────────────
 
@@ -237,6 +257,50 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetDnnIsActive()
                     result.success(active)
                 }
+                // ─── MHL Prescripción / Modo Música ─────────────────────
+                // Espejo bit-a-bit de AudioMethodChannelPatient.kt
+                // (tecnico-paciente-feature-parity, Requirements 1.1 y 1.2).
+                "setMhlPrescriptionEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    applyMhlPrescription(enabled)
+                    result.success(null)
+                }
+                "setMusicModeEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    applyMusicMode(enabled)
+                    result.success(null)
+                }
+                // ─── Diagnostic Recording (DSP Verification) ────────────
+                // Requirements 6.2, 6.3, 6.4. Misma firma que el paciente:
+                // - startDiagnosticRecording: arg `filePath` (String relativo al
+                //   external files dir), retorna Boolean.
+                // - stopDiagnosticRecording: sin args, retorna Int (0=ok, -1=error).
+                // - getDiagnosticRecordingProgress: sin args, retorna Int
+                //   (progress.toInt() del Double JNI; -1 si no hay grabación).
+                "startDiagnosticRecording" -> {
+                    val filePath = call.argument<String>("filePath")
+                        ?: return result.error("INVALID_ARGS", "Missing 'filePath'", null)
+                    val dir = context.getExternalFilesDir(null)
+                        ?: return result.error(
+                            "STORAGE_ERROR",
+                            "External storage not available",
+                            null,
+                        )
+                    val fullPath = "${dir.absolutePath}/$filePath"
+                    val ok = nativeBridge.nativeStartDiagnosticRecording(fullPath)
+                    result.success(ok)
+                }
+                "stopDiagnosticRecording" -> {
+                    val ok = nativeBridge.nativeStopDiagnosticRecording()
+                    // Dart espera: 0=completado, 1=descartado, -1=error.
+                    // El nativo solo distingue ok/err, así que mapeamos
+                    // exactamente como el paciente: ok→0, err→-1.
+                    result.success(if (ok) 0 else -1)
+                }
+                "getDiagnosticRecordingProgress" -> {
+                    val progress = nativeBridge.nativeGetDiagnosticRecordingProgress()
+                    result.success(progress.toInt())
+                }
                 // ─── Calibración de hardware (C-3, native-calibration-handlers) ─
                 // Implementación real de los 3 handlers con AudioRecord directo
                 // (no pasa por el pipeline DSP del proyecto). Persistencia +
@@ -295,6 +359,17 @@ class AudioMethodChannel(
         val eqGains = FloatArray(12) { i ->
             if (i < eqGainsList.size) eqGainsList[i].toFloat() else 0f
         }
+
+        // Cache para handlers de MHL Prescripción / Modo Música (espejo paciente).
+        lastEqGains = eqGains.copyOf()
+        lastVolumeDb = volumeDb.toFloat()
+        lastExpKnee = expansionKnee.toFloat()
+        lastExpRatio = expansionRatio.toFloat()
+        lastCompKnee = compressionKnee.toFloat()
+        lastCompRatio = compressionRatio.toFloat()
+        lastAttackMs = attackMs.toFloat()
+        lastReleaseMs = releaseMs.toFloat()
+        lastMpoDbSpl = mpoThresholdDbSpl.toFloat()
 
         emitState("starting")
 
@@ -368,6 +443,7 @@ class AudioMethodChannel(
         }
 
         val gains = FloatArray(12) { i -> gainsList[i].toFloat() }
+        lastEqGains = gains.copyOf()
         nativeBridge.setEqGains(gains)
         result.success(null)
     }
@@ -381,6 +457,7 @@ class AudioMethodChannel(
         val volumeDb = call.argument<Double>("volumeDb")
             ?: return result.error("INVALID_ARGS", "Missing 'volumeDb' argument", null)
 
+        lastVolumeDb = volumeDb.toFloat()
         nativeBridge.setVolume(volumeDb.toFloat())
         result.success(null)
     }
@@ -398,6 +475,13 @@ class AudioMethodChannel(
         val compRatio = call.argument<Double>("compressionRatio") ?: 2.0
         val attackMs = call.argument<Double>("attackMs") ?: 5.0
         val releaseMs = call.argument<Double>("releaseMs") ?: 100.0
+
+        lastExpKnee = expKnee.toFloat()
+        lastExpRatio = expRatio.toFloat()
+        lastCompKnee = compKnee.toFloat()
+        lastCompRatio = compRatio.toFloat()
+        lastAttackMs = attackMs.toFloat()
+        lastReleaseMs = releaseMs.toFloat()
 
         nativeBridge.setWdrcParams(
             expKnee = expKnee.toFloat(),
@@ -488,6 +572,7 @@ class AudioMethodChannel(
             )
         }
 
+        lastMpoDbSpl = thresholdDbSpl.toFloat()
         nativeBridge.setMpoThresholdDbSpl(thresholdDbSpl.toFloat())
         result.success(null)
     }
@@ -961,5 +1046,84 @@ class AudioMethodChannel(
         } finally {
             capture.release()
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // MHL Prescripción / Modo Música — espejo de AudioMethodChannelPatient.kt
+    // (tecnico-paciente-feature-parity, task 1.6).
+    //
+    // Estos helpers reproducen bit-a-bit la lógica del paciente:
+    //   - applyMhlPrescription(true): EQ flat 8 dB en las 12 bandas + WDRC
+    //     con `compRatio = 1.0` (preservando knees/expansion/attack/release del
+    //     preset activo, tomados del cache last*) + setAutoClassifyEnabled(false).
+    //   - applyMhlPrescription(false): restaura EQ y WDRC desde el cache last*.
+    //   - applyMusicMode(true): nrLevel=0 + dnnIntensity=0.0 + setAutoClassifyEnabled(false).
+    //     EQ y WDRC quedan como están (el preset sigue aplicándose).
+    //   - applyMusicMode(false): no-op a nivel motor — Dart reaplica nrLevel y
+    //     dnnIntensity desde Settings.
+    //
+    // El lado Dart (AmplificationBloc) además gestiona el snapshot/restore del
+    // toggle Smart y reaplica el preset al desactivar; este nivel solo replica
+    // las llamadas JNI que el paciente hace.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * MHL — Prescripción mínima.
+     *
+     * ON  → gains flat de 8 dB en las 12 bandas + compresión 1.0:1 (lineal)
+     *       preservando el resto de los WDRC params del preset (knees,
+     *       attack, release, expansion). Apaga el clasificador automático
+     *       a nivel motor.
+     * OFF → restaura el último EQ y WDRC guardados (los del preset activo,
+     *       cacheados en lastEqGains / last*Knee / last*Ratio).
+     */
+    private fun applyMhlPrescription(enabled: Boolean) {
+        if (enabled) {
+            val flatGains = FloatArray(12) { 8f }
+            nativeBridge.setEqGains(flatGains)
+            // Compresión lineal 1.0:1 — preserva el resto de los WDRC
+            // params del preset (knees, attack, release, expansion).
+            nativeBridge.setWdrcParams(
+                expKnee = lastExpKnee,
+                expRatio = lastExpRatio,
+                compKnee = lastCompKnee,
+                compRatio = 1.0f,
+                attackMs = lastAttackMs,
+                releaseMs = lastReleaseMs
+            )
+            // Apagar el clasificador automático (es responsabilidad del lado
+            // Dart forzar el toggle de Smart en false; acá lo replicamos
+            // a nivel motor para evitar que un polling viejo lo prenda).
+            nativeBridge.setAutoClassifyEnabled(false)
+        } else {
+            // Restaurar EQ y WDRC originales del preset activo.
+            nativeBridge.setEqGains(lastEqGains)
+            nativeBridge.setWdrcParams(
+                expKnee = lastExpKnee,
+                expRatio = lastExpRatio,
+                compKnee = lastCompKnee,
+                compRatio = lastCompRatio,
+                attackMs = lastAttackMs,
+                releaseMs = lastReleaseMs
+            )
+        }
+    }
+
+    /**
+     * Modo Música.
+     *
+     * ON  → NR=0 (Off) + DNN intensity 0.0 para preservar timbres y dinámicas.
+     *       EQ y WDRC quedan como están (el preset sigue aplicándose).
+     * OFF → restauración la hace Dart leyendo SettingsRepository.nrLevel y
+     *       SettingsRepository.dnnIntensity (los settings persisten el valor
+     *       que el técnico eligió antes de activar Modo Música).
+     */
+    private fun applyMusicMode(enabled: Boolean) {
+        if (enabled) {
+            nativeBridge.setNrLevel(0)
+            nativeBridge.nativeSetDnnIntensity(0.0f)
+            nativeBridge.setAutoClassifyEnabled(false)
+        }
+        // OFF: el lado Dart reaplica nrLevel + dnnIntensity desde Settings.
     }
 }

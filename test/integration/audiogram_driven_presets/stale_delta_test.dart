@@ -202,6 +202,7 @@ void main() {
         profileRepository: profileRepo,
         settingsRepository: settingsRepo,
         gainPrescriber: gainPrescriber,
+        bootDelay: Duration.zero,
       );
 
   /// Drives the bloc until the first [AmplificationActive] state is reached

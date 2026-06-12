@@ -17,6 +17,21 @@ class _SettingsKeys {
   static const String lastNrLevel = 'lastNrLevel';
   static const String prescriberMode = 'prescriberMode';
   static const String experienceMonths = 'experienceMonths';
+
+  // --- Tecnico↔Paciente feature parity (Task 1.1) -------------------------
+  // Keys nuevas alineadas con el paciente
+  // (`PACIENTE/oir_pro_patient_app/lib/data/settings_repository.dart`).
+  // Defaults: false / false / 0.5 / 0.6 / 0.
+  static const String mhlPrescriptionEnabled = 'mhlPrescriptionEnabled';
+  static const String musicModeEnabled = 'musicModeEnabled';
+  static const String comfort = 'comfort';
+  static const String dnnIntensity = 'dnnIntensity';
+
+  /// Storage key del nuevo `nrLevel`. El nombre del campo lleva el sufijo
+  /// `V2` para distinguirlo del legacy [lastNrLevel] dentro del mapa de
+  /// constantes; el valor en disco (`'nrLevel'`) coincide con el del
+  /// paciente.
+  static const String nrLevelV2 = 'nrLevel';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -151,6 +166,107 @@ class SettingsRepositoryImpl implements SettingsRepository {
       // Persistencia tolerante: si Hive falla, no propagar el error
       // para no interrumpir el flujo de UI.
     }
+  }
+
+  // --- Tecnico↔Paciente feature parity (Task 1.1) -------------------------
+  // Implementación de las cinco keys nuevas que alinean el técnico con el
+  // paciente. Los getters son sincrónicos (sin `Future`) para que el helper
+  // `_effectiveCompressionRatio(bundle)` del AmplificationBloc pueda leer
+  // `comfort` sin `await`. La normalización (clamp, NaN→default) ocurre
+  // tanto en lectura como en escritura para protegernos de boxes corruptos
+  // o legados.
+
+  @override
+  bool get mhlPrescriptionEnabled =>
+      _box.get(_SettingsKeys.mhlPrescriptionEnabled) == true;
+
+  @override
+  Future<void> setMhlPrescriptionEnabled(bool value) async {
+    await _box.put(_SettingsKeys.mhlPrescriptionEnabled, value);
+  }
+
+  @override
+  bool get musicModeEnabled =>
+      _box.get(_SettingsKeys.musicModeEnabled) == true;
+
+  @override
+  Future<void> setMusicModeEnabled(bool value) async {
+    await _box.put(_SettingsKeys.musicModeEnabled, value);
+  }
+
+  @override
+  double get comfort => _readClamped01(_SettingsKeys.comfort, fallback: 0.5);
+
+  @override
+  Future<void> setComfort(double value) async {
+    await _box.put(_SettingsKeys.comfort, _normalize01(value, fallback: 0.5));
+  }
+
+  @override
+  double get dnnIntensity =>
+      _readClamped01(_SettingsKeys.dnnIntensity, fallback: 0.6);
+
+  @override
+  Future<void> setDnnIntensity(double value) async {
+    await _box.put(
+      _SettingsKeys.dnnIntensity,
+      _normalize01(value, fallback: 0.6),
+    );
+  }
+
+  @override
+  int get nrLevel {
+    // 1) Lee la key nueva (`nrLevel`).
+    final v = _box.get(_SettingsKeys.nrLevelV2);
+    if (v is int) return _clampNrLevel(v);
+    // 2) Fallback a la key legacy `lastNrLevel` para retro-compatibilidad
+    //    con instalaciones previas (Task 1.1: "Mantener `lastNrLevel` como
+    //    fallback de lectura").
+    final legacy = _box.get(_SettingsKeys.lastNrLevel);
+    if (legacy is int) return _clampNrLevel(legacy);
+    if (legacy is num) return _clampNrLevel(legacy.toInt());
+    // 3) Sin valor previo → default 0.
+    return 0;
+  }
+
+  @override
+  Future<void> setNrLevel(int value) async {
+    final clamped = _clampNrLevel(value);
+    // Sincroniza ambas keys: el primer `setNrLevel` deja la legacy alineada
+    // con la nueva para que `getLastNrLevel()` siga devolviendo el valor
+    // correcto a cualquier consumidor antiguo.
+    await _box.put(_SettingsKeys.nrLevelV2, clamped);
+    await _box.put(_SettingsKeys.lastNrLevel, clamped);
+  }
+
+  /// Lee una key con un valor numérico esperado en `[0.0, 1.0]`. Trata
+  /// valores ausentes, no numéricos, NaN y ±Infinity como [fallback].
+  /// Cualquier otro valor se clampa al rango.
+  double _readClamped01(String key, {required double fallback}) {
+    final raw = _box.get(key);
+    if (raw is! num || raw.isNaN) return fallback;
+    final d = raw.toDouble();
+    if (!d.isFinite) return fallback;
+    if (d < 0.0) return 0.0;
+    if (d > 1.0) return 1.0;
+    return d;
+  }
+
+  /// Normaliza un valor antes de persistirlo en una key de rango `[0, 1]`.
+  /// Valores no finitos (NaN, ±Infinity) se reemplazan por [fallback];
+  /// cualquier otro valor se clampa al rango.
+  double _normalize01(double value, {required double fallback}) {
+    if (value.isNaN || !value.isFinite) return fallback;
+    if (value < 0.0) return 0.0;
+    if (value > 1.0) return 1.0;
+    return value;
+  }
+
+  /// Clampa un entero al rango válido del NR `[0, 3]`.
+  int _clampNrLevel(int value) {
+    if (value < 0) return 0;
+    if (value > 3) return 3;
+    return value;
   }
 
   // --- Serialización de CalibrationData ---

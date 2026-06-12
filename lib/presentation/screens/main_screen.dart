@@ -12,7 +12,7 @@ import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 import '../widgets/prescriber_mode_selector.dart';
-import '../widgets/mhl_mode_toggle.dart';
+import '../widgets/mode_toggles.dart';
 import '../widgets/gain_comparison_widget.dart';
 import '../widgets/gain_detail_view.dart';
 import '../widgets/experience_months_picker.dart';
@@ -27,6 +27,7 @@ import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
 import 'diagnostic_analyzer_screen.dart';
+import 'diagnostico_dsp_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
@@ -212,6 +213,31 @@ class _StatusBar extends StatelessWidget {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const DiagnosticAnalyzerScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Spec tecnico-paciente-feature-parity · Task 12.2 · Req 6.1.
+                  // Botón "Diagnóstico DSP" — abre la pantalla de captura de
+                  // 60 s (WAV+JSON) homóloga a la del paciente. La screen
+                  // hace pre-check del motor (Req 6.11) y se autoabastece
+                  // del AmplificationBloc vía context.read<>.
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.fiber_smart_record,
+                          color: Colors.white70, size: 21),
+                      tooltip: 'Diagnóstico DSP',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const DiagnosticoDspScreen(),
+                            ),
                           ),
                         );
                       },
@@ -508,14 +534,28 @@ class _ActiveView extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 12),
-          // Toggle de modo MHL (Minimal Hearing Loss) — Req 4.3, 4.5, 4.6
-          MhlModeToggle(
-            isActive: state.mhlActive,
-            ptaWarning: state.ptaWarning,
-            onToggled: (activate) {
+          // tecnico-paciente-feature-parity — task 9.3 (Req 1.1, 1.2, 1.3, 1.4):
+          // Reemplazo del toggle monolítico legacy `MhlModeToggle` por
+          // `ModeToggles`, que renderiza dos toggles independientes ("MHL
+          // Prescripción" + "Modo Música") y delega la regla de mutex al
+          // `AmplificationBloc` (handlers `_onToggleMhlPrescription` y
+          // `_onToggleMusicMode`). El widget legacy `MhlModeToggle` se
+          // conserva en `lib/presentation/widgets/mhl_mode_toggle.dart` como
+          // wrapper backward-compatible que delega en `ModeToggles` con
+          // `showMusic: false` (Req 1.12), pero la pantalla principal usa
+          // ahora la versión nueva directamente.
+          ModeToggles(
+            mhlPrescription: state.mhlActive,
+            musicMode: state.musicModeActive,
+            onMhlChanged: (activate) {
               context
                   .read<AmplificationBloc>()
-                  .add(ToggleMhlMode(activate: activate));
+                  .add(ToggleMhlPrescription(activate: activate));
+            },
+            onMusicChanged: (activate) {
+              context
+                  .read<AmplificationBloc>()
+                  .add(ToggleMusicMode(activate: activate));
             },
           ),
           // Comparación visual NL2 vs NL3 (solo cuando hay datos NL3 y el

@@ -141,6 +141,38 @@ class DiagnosticMetadata {
   /// Spec: dsp-chain-optimization · Task 4.4 · Requirements 6.1, 6.2.
   final String wdrcLevelSource;
 
+  // ─── Extensiones del técnico (spec tecnico-paciente-feature-parity) ───
+  // Permiten reproducir desde el JSON el estado runtime de los modos
+  // Prescripción MHL / Modo Música / Smart, y el cómputo del compression
+  // ratio efectivo a partir del slider de Comodidad.
+  //
+  // Default seguro `false` para los flags y `0.5` para `effectiveComfort`,
+  // que reproduce el comportamiento neutral cuando se lee un JSON antiguo
+  // que no incluye estos campos (Req 6.13).
+
+  /// Estado del toggle "MHL Prescripción" al momento de la grabación.
+  ///
+  /// Spec: tecnico-paciente-feature-parity · Task 11.1 · Requirements 6.13.
+  final bool mhlPrescriptionEnabled;
+
+  /// Estado del toggle "Modo Música" al momento de la grabación.
+  ///
+  /// Spec: tecnico-paciente-feature-parity · Task 11.1 · Requirements 6.13.
+  final bool musicModeEnabled;
+
+  /// Estado del Smart Scene al momento de la grabación.
+  ///
+  /// Spec: tecnico-paciente-feature-parity · Task 11.1 · Requirements 6.13.
+  final bool smartEnabled;
+
+  /// Comfort efectivo (0..1) usado para calcular `wdrc.compressionRatio`.
+  ///
+  /// `0.5` es el default neutral. Permite reproducir el cálculo
+  /// `base + (1 - base) * comfort` desde el JSON.
+  ///
+  /// Spec: tecnico-paciente-feature-parity · Task 11.1 · Requirements 6.13.
+  final double effectiveComfort;
+
   // ─── Device Info ──────────────────────────────────────────────────────
   final DeviceMetadata device;
 
@@ -170,6 +202,13 @@ class DiagnosticMetadata {
     this.schemaVersion = '1.0',
     this.preDnnLevelDb = -1.0,
     this.wdrcLevelSource = 'local',
+    // Extensiones del técnico (Task 11.1). Defaults seguros para mantener
+    // compatibilidad con call sites que aún no pasan estos parámetros
+    // y con JSONs antiguos en `fromJson`.
+    this.mhlPrescriptionEnabled = false,
+    this.musicModeEnabled = false,
+    this.smartEnabled = false,
+    this.effectiveComfort = 0.5,
   });
 
   /// Serializa a un mapa JSON compatible con el schema v1.0.
@@ -204,6 +243,13 @@ class DiagnosticMetadata {
           // (spec dsp-chain-optimization · Task 4.4 · Property 8).
           'preDnnLevelDb': preDnnLevelDb,
           'wdrcLevelSource': wdrcLevelSource,
+          // Extensiones del técnico (spec tecnico-paciente-feature-parity ·
+          // Task 11.1 · Requirements 6.13). Permiten reproducir el estado
+          // de los modos y el slider de Comodidad desde el JSON.
+          'mhlPrescriptionEnabled': mhlPrescriptionEnabled,
+          'musicModeEnabled': musicModeEnabled,
+          'smartEnabled': smartEnabled,
+          'effectiveComfort': effectiveComfort,
         },
         'device': device.toJson(),
       };
@@ -247,6 +293,22 @@ class DiagnosticMetadata {
           ? (dspConfig['preDnnLevelDb'] as num).toDouble()
           : -1.0,
       wdrcLevelSource: dspConfig['wdrcLevelSource'] as String? ?? 'local',
+      // Extensiones del técnico (spec tecnico-paciente-feature-parity ·
+      // Task 11.1 · Requirements 6.13). Defaults seguros (`false`, `0.5`)
+      // para mantener compatibilidad backward con JSONs viejos del paciente
+      // o anteriores a esta extensión.
+      mhlPrescriptionEnabled: dspConfig['mhlPrescriptionEnabled'] is bool
+          ? dspConfig['mhlPrescriptionEnabled'] as bool
+          : false,
+      musicModeEnabled: dspConfig['musicModeEnabled'] is bool
+          ? dspConfig['musicModeEnabled'] as bool
+          : false,
+      smartEnabled: dspConfig['smartEnabled'] is bool
+          ? dspConfig['smartEnabled'] as bool
+          : false,
+      effectiveComfort: dspConfig['effectiveComfort'] is num
+          ? (dspConfig['effectiveComfort'] as num).toDouble()
+          : 0.5,
       device: DeviceMetadata.fromJson(json['device'] as Map<String, dynamic>),
       recordingTimestamp: json['recordingTimestamp'] as String,
       appVersion: json['appVersion'] as String,

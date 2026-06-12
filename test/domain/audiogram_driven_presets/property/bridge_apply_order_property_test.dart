@@ -253,6 +253,7 @@ void main() {
           profileRepository: profileRepo,
           settingsRepository: settingsRepo,
           gainPrescriber: gainPrescriber,
+          bootDelay: Duration.zero,
         );
 
         try {

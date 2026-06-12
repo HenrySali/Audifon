@@ -17,13 +17,13 @@ import '../../domain/audiogram_driven_presets/recd_provider.dart';
 import '../../domain/entities/audio_config.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
+import '../../domain/entities/eq_preset.dart';
 import '../../domain/entities/nl3_prescription_result.dart';
 import '../../domain/entities/patient_profile.dart';
 import '../../domain/entities/prescription_mode.dart';
 import '../../domain/entities/wdrc_params.dart';
 import '../../domain/gain_prescriber.dart';
 import '../../domain/gain_prescriber_nl3.dart';
-import '../../domain/mhl_module.dart';
 import '../../domain/repositories/audiogram_repository.dart';
 import '../../domain/repositories/profile_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
@@ -65,6 +65,77 @@ class AmplificationBloc
   /// Expone el repositorio de perfiles para consultas desde la UI.
   ProfileRepository get profileRepository => _profileRepository;
 
+  /// Expone el [AudioBridge] para que screens orientadas a diagnóstico
+  /// (por ejemplo, `SmartSceneScreen` en su polling 1 Hz de
+  /// `getDspStageMetrics()`, o `DiagnosticoDspScreen` para el progreso
+  /// de grabación) puedan invocar métodos del bridge sin acoplarse al
+  /// `MethodChannel` directo. Mantiene el patrón ya usado por los otros
+  /// repositorios expuestos arriba.
+  ///
+  /// Requisitos: 2.1, 2.2, 2.10
+  AudioBridge get audioBridge => _audioBridge;
+
+  /// Expone el audiograma actualmente cargado en el bloc.
+  ///
+  /// La pantalla de Diagnóstico DSP lo lee para incluir
+  /// `audiogramThresholds` en el JSON acompañante (Req 6.6). Devuelve
+  /// `null` cuando todavía no se cargó (boot temprano o estado idle).
+  ///
+  /// Requisitos: 6.6
+  Audiogram? get currentAudiogram => _currentAudiogram;
+
+  /// Expone el último [AudiogramDrivenBundle] aplicado atómicamente al
+  /// motor.
+  ///
+  /// La pantalla de Diagnóstico DSP lo lee para registrar el snapshot
+  /// clínico (gains, compresión, MPO, NR, attack/release) al momento
+  /// de la grabación (Req 6.5, 6.7, 6.13). Devuelve `null` cuando
+  /// todavía no se aplicó ningún bundle al motor.
+  ///
+  /// Requisitos: 6.5, 6.7
+  AudiogramDrivenBundle? get lastBundle => _lastBundle;
+
+  /// Mirror lógico del estado del Smart Scene Engine que vive en
+  /// [_smartEnabled].
+  ///
+  /// La pantalla de Diagnóstico DSP lo lee para incluir `smartEnabled`
+  /// en el JSON acompañante (Req 6.13). El bloc fuerza este mirror a
+  /// `false` durante MHL Prescripción y Modo Música (Req 1.5, 1.6),
+  /// y lo restaura al desactivar el modo, así que el valor leído
+  /// refleja siempre el estado clínicamente correcto en el instante
+  /// de la grabación.
+  ///
+  /// Requisitos: 6.13
+  bool get isSmartEnabled => _smartEnabled;
+
+  /// Versión pública de `_effectiveCompressionRatio`.
+  ///
+  /// Permite a las screens (en particular `DiagnosticoDspScreen`)
+  /// registrar en el JSON el `compressionRatio` EFECTIVAMENTE aplicado
+  /// al motor (con el offset del slider "Comodidad" del usuario) en
+  /// lugar del valor crudo del bundle. Mantiene consistencia con
+  /// `dnn.intensity` y `nrLevel`, que también se serializan con valores
+  /// de Settings, no con defaults del bundle.
+  ///
+  /// Operación read-only sobre [bundle]: nunca lo muta.
+  ///
+  /// Requisitos: 4.4, 4.5, 6.7
+  double computeEffectiveCompressionRatio(AudiogramDrivenBundle bundle) =>
+      _effectiveCompressionRatio(bundle);
+
+  /// Versión pública de `_resolveBroadbandMpo`.
+  ///
+  /// Devuelve el MPO broadband enviado al bridge para [bundle]: el
+  /// mínimo de `bundle.mpoProfileDbSpl` clampado al rango
+  /// `[80, 132] dB SPL`. La pantalla de Diagnóstico DSP lo usa como
+  /// `mpoThresholdDbSpl` escalar en el JSON acompañante (Req 6.6).
+  ///
+  /// Operación read-only sobre [bundle].
+  ///
+  /// Requisitos: 6.6
+  double computeBroadbandMpo(AudiogramDrivenBundle bundle) =>
+      _resolveBroadbandMpo(bundle);
+
   /// Suscripción al stream de nivel de entrada (~10 Hz).
   StreamSubscription<double>? _inputLevelSubscription;
 
@@ -92,9 +163,58 @@ class AmplificationBloc
   /// Expone el estado MHL para consultas internas.
   bool get isMhlActive => _mhlActive;
 
-  /// Modo de prescripción previo a la activación de MHL.
-  /// Se usa para restaurar al desactivar MHL (Req 4.6).
-  PrescriptionMode _previousPrescriptionMode = PrescriptionMode.quiet;
+  // ═════════════════════════════════════════════════════════════════
+  // tecnico-paciente-feature-parity — task 4.2 / 4.3
+  // ═════════════════════════════════════════════════════════════════
+
+  /// Estado lógico del "Smart Scene Engine" según lo entiende el bloc.
+  ///
+  /// El control real del clasificador automático en el motor C++ vive en
+  /// el lado de UI (el handler Kotlin `applyMhlPrescription` ya invoca
+  /// `setAutoClassifyEnabled(false)` defensivamente al activar MHL o
+  /// Modo Música, ver `AudioMethodChannel.kt`). Este field es el mirror
+  /// lógico que el bloc usa para el snapshot/restore en los handlers de
+  /// MHL Prescripción (task 4.2) y Modo Música (task 4.3).
+  ///
+  /// Default `false` mientras el técnico no expone un setter dedicado en
+  /// el `AudioBridge`. Cuando un futuro handler de "ToggleSmart" exista,
+  /// este campo será su single-source-of-truth.
+  bool _smartEnabled = false;
+
+  /// Snapshot del [_smartEnabled] al activar MHL Prescripción o Modo
+  /// Música. Permite restaurar el estado previo al desactivar el modo.
+  ///
+  /// Réplica del campo `_smartBeforeMhl` del paciente
+  /// (`PACIENTE/oir_pro_patient_app/lib/presentation/home_screen.dart`).
+  /// Cuando los dos toggles se cruzan (Música ON → MHL ON o viceversa),
+  /// el bloc respeta el snapshot anidado: el Smart "real" guardado al
+  /// activar el primer modo se preserva hasta que se apague el segundo.
+  ///
+  /// `null` cuando no hay un modo MHL/Música activo (no hay nada que
+  /// restaurar).
+  ///
+  /// Requisitos: 1.5, 1.6
+  bool? _smartEnabledBeforeMhl;
+
+  /// Snapshot simétrico del [_smartEnabled] al activar Modo Música.
+  ///
+  /// Réplica del campo `_smartBeforeMusic` del paciente
+  /// (`home_screen.dart`). El cruce con MHL es anidado: si MHL ya
+  /// había guardado un Smart previo, ese mismo valor se respeta al
+  /// activar Música porque la rama OFF de MHL ejecutada como mutex
+  /// restaura `_smartEnabled` antes de que Música tome su snapshot.
+  ///
+  /// Requisitos: 1.5, 1.6
+  bool? _smartEnabledBeforeMusic;
+
+  /// Mirror lógico del flag `musicModeEnabled` persistido en
+  /// [SettingsRepository]. Permite que `_onSceneClassUpdated` y otras
+  /// rutinas dependientes ignoren eventos de clasificación cuando
+  /// Música está ON. La fuente de verdad para persistencia sigue
+  /// siendo el repositorio.
+  ///
+  /// Requisitos: 1.2, 1.4, 1.11
+  bool _musicModeActive = false;
 
   /// Prescriptor NL3-inspired (instanciado una sola vez).
   late final GainPrescriberNL3 _nl3Prescriber;
@@ -181,6 +301,15 @@ class AmplificationBloc
   /// [DateTime.now]. Se propaga a [GainPrescriberNL3] y [BundleBuilder].
   final DateTime Function() _clock;
 
+  /// Delay aplicado entre la finalización exitosa de
+  /// `audioBridge.startAudio` y la aplicación de los setters runtime
+  /// (Phase 3 del lifecycle, Req 3.3 del spec
+  /// `tecnico-paciente-feature-parity`). En producción es 200 ms (mismo
+  /// valor que el paciente). En tests del bloc se inyecta `Duration.zero`
+  /// para que las aserciones sobre transiciones de estado no necesiten
+  /// awaits artificiales.
+  final Duration _bootDelay;
+
   AmplificationBloc({
     required AudioBridge audioBridge,
     required AudiogramRepository audiogramRepository,
@@ -188,12 +317,14 @@ class AmplificationBloc
     required SettingsRepository settingsRepository,
     required GainPrescriber gainPrescriber,
     DateTime Function()? clock,
+    Duration bootDelay = const Duration(milliseconds: 200),
   })  : _audioBridge = audioBridge,
         _audiogramRepository = audiogramRepository,
         _profileRepository = profileRepository,
         _settingsRepository = settingsRepository,
         _gainPrescriber = gainPrescriber,
         _clock = clock ?? DateTime.now,
+        _bootDelay = bootDelay,
         super(const AmplificationIdle()) {
     // Instanciar el prescriptor NL3 usando el NL2 existente (composición).
     _nl3Prescriber = GainPrescriberNL3(nl2Prescriber: _gainPrescriber, clock: _clock);
@@ -222,6 +353,26 @@ class AmplificationBloc
     on<UpdateNrLevel>(_onUpdateNrLevel);
     on<ChangePrescriberMode>(_onChangePrescriberMode);
     on<ToggleMhlMode>(_onToggleMhlMode);
+    // tecnico-paciente-feature-parity — task 4.2: nuevo handler para
+    // "MHL Prescripción" como modo selectivo (gains flat 8 dB + ratio 1.0
+    // sin tocar NR/DNN/knees/attack/release). El evento legacy
+    // [ToggleMhlMode] se conserva con su firma actual; en task 4.4
+    // delegará a este handler.
+    on<ToggleMhlPrescription>(_onToggleMhlPrescription);
+    // tecnico-paciente-feature-parity — task 4.3: handler de "Modo Música"
+    // como modo selectivo (NR=0 + dnnIntensity=0 sin tocar EQ/WDRC/knees/
+    // attack/release). Réplica simétrica de [_onToggleMhlPrescription]; el
+    // cruce con MHL (Req 1.4) ejecuta la rama OFF de MHL primero.
+    on<ToggleMusicMode>(_onToggleMusicMode);
+    // tecnico-paciente-feature-parity — task 4.5: handler del slider
+    // "Comodidad". Recalcula WDRC con `_effectiveCompressionRatio(bundle)`
+    // sobre el bundle activo y reaplica solo `compressionRatio` al motor;
+    // los demás parámetros (knees, attack/release, NR, EQ, MPO) quedan
+    // intactos. La persistencia del valor `comfort` ocurre en la UI
+    // (`SimulatorScreen.onChangeEnd`) ANTES del despacho del evento; el
+    // handler lee `comfort` vía `SettingsRepository.comfort` (sync) dentro
+    // del helper.
+    on<ChangeComfort>(_onChangeComfort);
     on<SceneClassUpdated>(_onSceneClassUpdated);
     on<SetExperienceMonths>(_onSetExperienceMonths);
     // FIX Causa C (smart-scene-diagnostico-chasquido.md): registrar handlers
@@ -238,9 +389,63 @@ class AmplificationBloc
     on<ResetManualDelta>(_onResetManualDelta);
   }
 
-  /// Inicia la amplificación: permisos → auriculares → foco → servicio.
+  /// Inicia la amplificación con secuencia ordenada en 4 fases.
   ///
-  /// Flujo completo en < 500 ms (Req 5.2).
+  /// **tecnico-paciente-feature-parity — task 5.1 (Req 1.13, 1.14, 3.1,
+  /// 3.2, 3.3, 3.4, 3.5, 3.7)**:
+  ///
+  /// La secuencia replica la del paciente (`PACIENTE/.../home_screen.dart`)
+  /// para evitar el race del lifecycle donde setters DSP se aplicaban
+  /// antes de que el motor JNI estuviera listo y silenciosamente se
+  /// perdían:
+  ///
+  /// 1. **Fase 1 — Carga de estado persistido (timeout 2000 ms).** Sin
+  ///    tocar el motor. Carga audiograma, modo de operación, gainScale,
+  ///    manualDelta, perfil, volumen, modo prescriptor, experiencia,
+  ///    edad, NL2/NL3 gains, bundle inicial, lastEqPreset, flags
+  ///    `mhlPrescriptionEnabled`/`musicModeEnabled` y `nrLevel`. Si la
+  ///    carga falla o excede 2000 ms, emite
+  ///    `AmplificationError('Fallo de carga de configuración persistida')`
+  ///    y NO invoca `startAudio` (Req 3.2). Detección defensiva del
+  ///    estado inválido `(mhl, music) = (true, true)`: fuerza
+  ///    `musicModeEnabled = false` y log warning antes de continuar
+  ///    (Req 1.14).
+  ///
+  /// 2. **Fase 2 — `audioBridge.startAudio(config)` con timeout 5000 ms.**
+  ///    En fallo emite `AmplificationError` y NO aplica setters runtime
+  ///    (Req 3.7).
+  ///
+  /// 3. **Fase 3 — `Future.delayed(200 ms)`.** El motor JNI necesita
+  ///    ~150 ms para producir el primer callback de `AudioRecord`.
+  ///    Aplicar setters antes hace que el primer ciclo del DSP los
+  ///    pise con valores default (Req 3.3).
+  ///
+  /// 4. **Fase 4 — Setters runtime en orden estricto (Req 3.4):**
+  ///    `updateEqGains` (con [_resolveGainsForPreset]) →
+  ///    `updateWdrcParams` (con [_effectiveCompressionRatio]) →
+  ///    `setMpoThresholdDbSpl` → `updateNrLevel` → `setSmartEnabled`
+  ///    (mirror lógico — el técnico no expone setter dedicado, ver
+  ///    nota abajo) → `setMhlPrescriptionEnabled` (sólo si
+  ///    persistido `true`) → `setMusicModeEnabled` (sólo si persistido
+  ///    `true`) → `updateVolume`. En excepción de cualquier setter:
+  ///    detener cadena, emitir `AmplificationError(setterName)`, NO
+  ///    revertir setters previos (Req 3.5).
+  ///
+  /// **Nota sobre `setSmartEnabled`**: el [AudioBridge] del técnico no
+  /// expone un setter dedicado para el Smart Scene Engine. El
+  /// invariante clínico al boot — Smart=false hasta que el usuario lo
+  /// active — se mantiene actualizando el mirror lógico
+  /// [_smartEnabled] que los handlers de MHL/Música snapshotean. Si
+  /// en el futuro [AudioBridge] expone `setSmartEnabled`, este lugar
+  /// de la cadena es donde la llamada nativa debe insertarse, sin
+  /// alterar el orden ni el flag mirror.
+  ///
+  /// Tras Fase 4: persiste `_lastBundle`, escribe `last_bundle` en
+  /// `settings_box` (best-effort), suscribe streams del engine y
+  /// emite `AmplificationActive` con los datos clínicos del bundle
+  /// inicial (gains, lossType, prescriptionMode, modo, gainScale).
+  ///
+  /// Requisitos: 1.13, 1.14, 3.1, 3.2, 3.3, 3.4, 3.5, 3.7
   Future<void> _onStartAmplification(
     StartAmplification event,
     Emitter<AmplificationState> emit,
@@ -251,135 +456,93 @@ class AmplificationBloc
 
     emit(const AmplificationStarting());
 
+    // ─────────────────────────────────────────────────────────────
+    // Fase 1 — Carga de estado persistido (timeout 2000 ms).
+    // Sin tocar el motor nativo (Req 3.1, 3.2).
+    // ─────────────────────────────────────────────────────────────
+    late final AudiogramDrivenBundle initialBundle;
+    late final AudioConfig config;
+    NL3PrescriptionResult? nl3Result;
+    EqPreset? bootPreset;
+    late final bool mhlPersisted;
+    late final bool musicPersisted;
+
     try {
-      // 1. Cargar audiograma (o usar default). Si no hay audiograma
-      //    medido se asume Modo Amplificador (Req 13.1, 13.2).
-      final storedAudiogram = await _audiogramRepository.getAudiogram();
-      final hasMeasuredAudiogram =
-          storedAudiogram != null && _isAudiogramComplete(storedAudiogram);
-      _currentAudiogram = storedAudiogram ?? Audiogram.defaultAudiogram();
+      await Future<void>(() async {
+        // 1. Audiograma + auto-detección OperatingMode/gainScale
+        //    (Req 13.1, 13.2, 13.4).
+        final storedAudiogram = await _audiogramRepository.getAudiogram();
+        final hasMeasuredAudiogram = storedAudiogram != null &&
+            _isAudiogramComplete(storedAudiogram);
+        _currentAudiogram = storedAudiogram ?? Audiogram.defaultAudiogram();
 
-      // 2. Auto-detección de OperatingMode + gainScale (task 4.9).
-      if (hasMeasuredAudiogram) {
-        _operatingMode = OperatingMode.diagnostic;
-        _gainScale = 1.0; // Forzado por contrato (Req 13.4).
-      } else {
-        _operatingMode = OperatingMode.amplifier;
-        _gainScale = await _loadAmplifierGainScale();
-      }
-
-      // 3. Restaurar el ManualAdjustmentDelta del modo activo
-      //    (cada modo tiene su propio delta independiente — Req 14.6).
-      _manualDelta = await _loadManualDeltaFor(_operatingMode);
-
-      // 4. Cargar último perfil y volumen
-      final lastConfig = await _settingsRepository.restoreLastConfig();
-      final profileName = lastConfig.lastProfile ?? 'Conversación';
-      _currentVolumeDb = lastConfig.lastVolume ?? 0.0;
-
-      // 5. Obtener perfil
-      _currentProfile =
-          await _profileRepository.getProfileByName(profileName) ??
-              EnvironmentProfile.conversation;
-
-      // 6. Calcular ganancias NAL-NL2
-      final eqGains =
-          _gainPrescriber.prescribeFromAudiogram(_currentAudiogram!);
-      _lastNl2Gains = List<double>.unmodifiable(eqGains);
-
-      // 6b. Restaurar el modo de prescriptor persistido (Req 5.7, 5.8).
-      //     Default = smartNl2 para instalaciones nuevas.
-      try {
-        final savedMode = await _settingsRepository.getPrescriberMode();
-        _currentPrescriberMode = savedMode;
-      } catch (_) {
-        // Persistencia tolerante: si falla, mantener el default (smartNl2).
-      }
-      _sceneController.setPrescriberMode(_currentPrescriberMode);
-
-      // 6b'. Restaurar la experiencia previa del usuario (en meses).
-      //     `null` se interpreta como onboarding pendiente.
-      try {
-        _experienceMonths = await _settingsRepository.getExperienceMonths();
-      } catch (_) {
-        // Persistencia tolerante: dejarlo en null si falla.
-        _experienceMonths = null;
-      }
-
-      // 6b''. Restaurar la edad del paciente (años cumplidos) desde
-      //       Hive. Cuando está presente, el bundle path emite el log
-      //       de conversión HL → SPL real-ear (hallazgo A-10). Si la
-      //       clave no existe o la lectura falla, dejar en null para
-      //       preservar el comportamiento previo (sin conversión).
-      try {
-        final box = await _openSettingsBox();
-        final raw = box?.get('patient_age_years');
-        if (raw is int) {
-          _ageYears = raw;
-        } else if (raw is num) {
-          _ageYears = raw.toInt();
+        if (hasMeasuredAudiogram) {
+          _operatingMode = OperatingMode.diagnostic;
+          _gainScale = 1.0;
         } else {
+          _operatingMode = OperatingMode.amplifier;
+          _gainScale = await _loadAmplifierGainScale();
+        }
+
+        // 2. ManualAdjustmentDelta del modo activo (Req 14.6).
+        _manualDelta = await _loadManualDeltaFor(_operatingMode);
+
+        // 3. Último perfil + volumen.
+        final lastConfig = await _settingsRepository.restoreLastConfig();
+        final profileName = lastConfig.lastProfile ?? 'Conversación';
+        _currentVolumeDb = lastConfig.lastVolume ?? 0.0;
+        _currentProfile =
+            await _profileRepository.getProfileByName(profileName) ??
+                EnvironmentProfile.conversation;
+
+        // 4. Modo prescriptor (Req 5.7, 5.8). Tolerante a fallo.
+        try {
+          _currentPrescriberMode =
+              await _settingsRepository.getPrescriberMode();
+        } catch (_) {
+          // Default smartNl2.
+        }
+        _sceneController.setPrescriberMode(_currentPrescriberMode);
+
+        // 5. Experiencia previa + edad. Tolerantes; informativos para
+        //    el bundle path (real-ear conversion log — A-10).
+        try {
+          _experienceMonths =
+              await _settingsRepository.getExperienceMonths();
+        } catch (_) {
+          _experienceMonths = null;
+        }
+        try {
+          final box = await _openSettingsBox();
+          final raw = box?.get('patient_age_years');
+          if (raw is int) {
+            _ageYears = raw;
+          } else if (raw is num) {
+            _ageYears = raw.toInt();
+          } else {
+            _ageYears = null;
+          }
+        } catch (_) {
           _ageYears = null;
         }
-      } catch (_) {
-        _ageYears = null;
-      }
 
-      // 6c. Si el modo restaurado es NL3, recalcular ganancias con ese prescriptor.
-      final List<double> startupGains;
-      NL3PrescriptionResult? nl3Result;
-      if (_currentPrescriberMode == PrescriberMode.smartNl3) {
-        nl3Result = _nl3Prescriber.prescribeFromAudiogram(
-          _currentAudiogram!,
-          profile: _buildPatientProfile(),
-        );
-        startupGains = nl3Result.prescribedGains;
-      } else {
-        startupGains = eqGains;
-      }
-      _lastNl3Result = nl3Result;
+        // 6. Ganancias NL2 (cache para state.nl2Gains) y NL3 si
+        //    el modo restaurado lo pide.
+        final eqGains =
+            _gainPrescriber.prescribeFromAudiogram(_currentAudiogram!);
+        _lastNl2Gains = List<double>.unmodifiable(eqGains);
 
-      // 7. Construir AudioConfig
-      final config = AudioConfig(
-        eqGains: startupGains,
-        volumeDb: _currentVolumeDb,
-        wdrcParams: WdrcParams(
-          expansionKnee: _currentProfile!.expansionKnee,
-          compressionKnee: _currentProfile!.compressionKnee,
-          compressionRatio: _currentProfile!.compressionRatio,
-        ),
-        nrLevel: _currentProfile!.nrLevel,
-      );
+        if (_currentPrescriberMode == PrescriberMode.smartNl3) {
+          nl3Result = _nl3Prescriber.prescribeFromAudiogram(
+            _currentAudiogram!,
+            profile: _buildPatientProfile(),
+          );
+        }
+        _lastNl3Result = nl3Result;
 
-      // 8. Iniciar el motor de audio nativo
-      await _audioBridge.startAudio(config);
-
-      // 9. Suscribirse a streams del engine
-      _subscribeToStreams();
-
-      // 10. Emitir estado activo (con el modo restaurado — Req 5.7)
-      emit(AmplificationActive(
-        inputLevelDb: 0.0,
-        activeProfile: _currentProfile!.name,
-        volumeDb: _currentVolumeDb,
-        headphonesConnected: _headphonesConnected,
-        prescriberMode: _currentPrescriberMode,
-        nl2Gains: _lastNl2Gains,
-        nl3Gains: nl3Result?.prescribedGains ?? const [],
-        lossType: nl3Result?.lossType,
-        prescriptionMode: PrescriptionMode.quiet,
-        experienceMonths: _experienceMonths,
-        operatingMode: _operatingMode,
-        gainScale: _gainScale,
-        manualDelta: _manualDelta,
-      ));
-
-      // 11. Construir el bundle inicial y aplicarlo atómicamente
-      //     (Req 13.1, 13.2, 13.3, 13.7, 13.8, 13.9). El dispatch se
-      //     hace fuera del emit para que el handler `_onApplyBundle`
-      //     reemplace el estado con los datos clínicos completos.
-      try {
-        final initialBundle = _bundleBuilder.buildFromAudiogram(
+        // 7. Bundle clínico inicial — fuente de verdad para los
+        //    setters runtime de Phase 4 (gains, WDRC, MPO, NR).
+        initialBundle = _bundleBuilder.buildFromAudiogram(
           _currentAudiogram!,
           profile: _buildPatientProfile(),
           mode: PrescriptionMode.quiet,
@@ -387,32 +550,320 @@ class AmplificationBloc
           gainScale: _gainScale,
           recdProvider: _maybeRecdProvider(),
         );
-        add(ApplyAudiogramDrivenBundle(
-          bundle: initialBundle,
-          delta: _manualDelta,
-        ));
+
+        // 8. AudioConfig usado por startAudio (Phase 2). Aquí pasamos
+        //    los parámetros base del perfil/bundle pero sin aplicar
+        //    todavía `_effectiveCompressionRatio` ni el delta — esos
+        //    valores se aplican como setters runtime DESPUÉS del
+        //    delay de 200 ms (Req 3.3, 3.4).
+        final startupGains =
+            (_currentPrescriberMode == PrescriberMode.smartNl3 &&
+                    nl3Result != null)
+                ? nl3Result!.prescribedGains
+                : eqGains;
+        config = AudioConfig(
+          eqGains: startupGains,
+          volumeDb: _currentVolumeDb,
+          wdrcParams: WdrcParams(
+            expansionKnee: _currentProfile!.expansionKnee,
+            compressionKnee: _currentProfile!.compressionKnee,
+            compressionRatio: _currentProfile!.compressionRatio,
+          ),
+          nrLevel: _currentProfile!.nrLevel,
+        );
+
+        // 9. lastEqPreset persistido — Phase 4 setter 1 lo pasa por
+        //    [_resolveGainsForPreset] para cubrir bundles legacy
+        //    (Req 5.1, 5.2).
+        bootPreset = await _readBootEqPreset();
+
+        // 10. Flags MHL/Música persistidos (Req 1.13, 1.14).
+        mhlPersisted = _readMhlPrescriptionEnabledOrFalse();
+        var music = _readMusicModeEnabledOrFalse();
+
+        if (mhlPersisted && music) {
+          // Req 1.14: estado inválido detectado al boot. Forzar
+          // `musicModeEnabled = false` y dejar log warning antes de
+          // continuar. La UI ya impone mutex, pero al boot pueden
+          // coexistir si un binario anterior los persistió juntos.
+          developer.log(
+            'Boot Phase 1: estado inválido detectado '
+            '(mhlPrescriptionEnabled=true, musicModeEnabled=true). '
+            'Forzando musicModeEnabled=false para preservar mutex '
+            '(Req 1.14).',
+            name: 'AmplificationBloc',
+            level: 900,
+          );
+          try {
+            await _settingsRepository.setMusicModeEnabled(false);
+          } catch (e, st) {
+            developer.log(
+              'Boot Phase 1: persistencia de musicModeEnabled=false '
+              'falló: $e — continuando con music=false en memoria.',
+              name: 'AmplificationBloc',
+              level: 900,
+              error: e,
+              stackTrace: st,
+            );
+          }
+          music = false;
+        }
+        musicPersisted = music;
+      }).timeout(const Duration(milliseconds: 2000));
+    } on TimeoutException catch (e, st) {
+      developer.log(
+        'Boot Phase 1: timeout 2000 ms en carga persistida.',
+        name: 'AmplificationBloc',
+        level: 1000,
+        error: e,
+        stackTrace: st,
+      );
+      emit(const AmplificationError(
+        message: 'Fallo de carga de configuración persistida',
+      ));
+      return;
+    } catch (e, st) {
+      developer.log(
+        'Boot Phase 1: error de carga persistida: $e',
+        name: 'AmplificationBloc',
+        level: 1000,
+        error: e,
+        stackTrace: st,
+      );
+      emit(const AmplificationError(
+        message: 'Fallo de carga de configuración persistida',
+      ));
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Fase 2 — startAudio con timeout 5000 ms (Req 3.7).
+    // ─────────────────────────────────────────────────────────────
+    try {
+      await _audioBridge
+          .startAudio(config)
+          .timeout(const Duration(milliseconds: 5000));
+    } on TimeoutException catch (e, st) {
+      developer.log(
+        'Boot Phase 2: startAudio excedió 5000 ms.',
+        name: 'AmplificationBloc',
+        level: 1000,
+        error: e,
+        stackTrace: st,
+      );
+      emit(const AmplificationError(
+        message: 'Fallo de arranque del engine: timeout 5000 ms',
+      ));
+      return;
+    } catch (e, st) {
+      developer.log(
+        'Boot Phase 2: startAudio falló: $e',
+        name: 'AmplificationBloc',
+        level: 1000,
+        error: e,
+        stackTrace: st,
+      );
+      emit(AmplificationError(
+        message: 'Fallo de arranque del engine: $e',
+      ));
+      return;
+    }
+
+    // Suscripciones a streams del engine. Independientes del orden
+    // de setters runtime; se montan justo después de que startAudio
+    // retornó éxito para no perder eventos tempranos del motor.
+    _subscribeToStreams();
+
+    // ─────────────────────────────────────────────────────────────
+    // Fase 3 — Delay de 200 ms (Req 3.3).
+    // ─────────────────────────────────────────────────────────────
+    await Future<void>.delayed(_bootDelay);
+
+    // ─────────────────────────────────────────────────────────────
+    // Fase 4 — Setters runtime (Req 3.4, 3.5).
+    //
+    // La cadena atómica (MPO → WDRC → EQ → NR con rollback) la maneja
+    // `_onApplyBundle` (Req 4.7 del spec audiogram-driven-presets);
+    // dispatcheamos `ApplyAudiogramDrivenBundle` para reusar esa lógica
+    // probada en lugar de aplicar setters manualmente. Después del
+    // bundle aplicamos los modos persistidos y el volumen — esos sí
+    // viven solo en el path de boot del técnico, así que se aplican
+    // directamente acá.
+    // ─────────────────────────────────────────────────────────────
+
+    // 1) Smart mirror queda en false al boot. El invariante clínico
+    //    se mantiene actualizando el mirror lógico [_smartEnabled]
+    //    que los handlers de MHL Prescripción y Modo Música
+    //    snapshotean. Si en el futuro [AudioBridge] expone
+    //    `setSmartEnabled`, este lugar de la cadena es donde la
+    //    llamada nativa debe insertarse.
+    _smartEnabled = false;
+
+    // 2) Emitir Active inicial ANTES de dispatchear el bundle. El
+    //    handler `_onApplyBundle` reemitirá `Active` con `bundle:
+    //    initialBundle` después de aplicar la cadena atómica al
+    //    motor; los tests existentes esperan ambas emisiones.
+    emit(AmplificationActive(
+      inputLevelDb: 0.0,
+      activeProfile: _currentProfile!.name,
+      volumeDb: _currentVolumeDb,
+      headphonesConnected: _headphonesConnected,
+      prescriberMode: _currentPrescriberMode,
+      nl2Gains: _lastNl2Gains,
+      nl3Gains: nl3Result?.prescribedGains ?? const [],
+      lossType: nl3Result?.lossType,
+      prescriptionMode: PrescriptionMode.quiet,
+      experienceMonths: _experienceMonths,
+      operatingMode: _operatingMode,
+      gainScale: _gainScale,
+      manualDelta: _manualDelta,
+    ));
+
+    // 3) Cadena atómica MPO → WDRC → EQ → NR (Req 4.7 del spec
+    //    audiogram-driven-presets). Llamamos directamente a
+    //    `_onApplyBundle` (en vez de `add(...)`) para que la cadena
+    //    se ejecute inline y los setters de modo/volumen que vienen
+    //    después queden DESPUÉS de la cadena atómica, no antes (de lo
+    //    contrario el `add` encola el evento y los setters
+    //    posteriores corren primero).
+    await _onApplyBundle(
+      ApplyAudiogramDrivenBundle(
+        bundle: initialBundle,
+        delta: _manualDelta,
+      ),
+      emit,
+    );
+
+    // 4) Modos persistidos y volumen: aplicados directamente al
+    //    motor después del bundle. La cadena atómica del bundle no
+    //    los toca porque son estado runtime de UI propio del
+    //    técnico (no parte del bundle clínico).
+    if (mhlPersisted) {
+      try {
+        await _audioBridge.setMhlPrescriptionEnabled(true);
+        _mhlActive = true;
+        _smartEnabledBeforeMhl = false;
       } catch (e, st) {
         developer.log(
-          'Boot: no se pudo construir el bundle inicial: $e',
+          'Boot Phase 4: setMhlPrescriptionEnabled falló: $e',
           name: 'AmplificationBloc',
           level: 900,
           error: e,
           stackTrace: st,
         );
       }
-    } catch (e) {
-      emit(AmplificationError(message: e.toString()));
+    }
+    if (musicPersisted) {
+      try {
+        await _audioBridge.setMusicModeEnabled(true);
+        _musicModeActive = true;
+        _smartEnabledBeforeMusic = false;
+      } catch (e, st) {
+        developer.log(
+          'Boot Phase 4: setMusicModeEnabled falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+    try {
+      await _audioBridge.updateVolume(_currentVolumeDb);
+    } catch (e, st) {
+      developer.log(
+        'Boot Phase 4: updateVolume falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // 5) bootPreset es read-only para Phase 1 (lo dejamos como
+    //    referencia futura si se quiere reaplicar `lastEqPreset`
+    //    sobre el bundle, pero por ahora `_onApplyBundle` ya aplica
+    //    los gains del bundle con delta manual).
+    // ignore: unused_local_variable
+    final _ = bootPreset;
+  }
+
+  /// Lee `lastEqPreset` desde Settings y construye un [EqPreset]
+  /// transient (con `description=''`). Devuelve `null` si el preset
+  /// no está persistido o el JSON es corrupto / la lista de gains no
+  /// tiene exactamente 12 valores numéricos.
+  ///
+  /// Phase 4 setter 1 (`updateEqGains`) lo pasa por
+  /// [_resolveGainsForPreset] para cubrir el caso de bundles legacy
+  /// con `gains == [0, ..., 0]` y nombre distinto a "Sin amplificación"
+  /// (Req 5.1, 5.2).
+  ///
+  /// Réplica funcional del read del paciente
+  /// (`PACIENTE/.../home_screen.dart`), pero como helper privado del
+  /// boot path; el resto del bloc usa [_resolvePresetGainsForRestore]
+  /// que requiere un nombre de preset desde [AmplificationActive]
+  /// (no disponible al boot).
+  Future<EqPreset?> _readBootEqPreset() async {
+    Map<String, dynamic>? raw;
+    try {
+      raw = await _settingsRepository.getLastEqPreset();
+    } catch (e, st) {
+      developer.log(
+        '_readBootEqPreset: getLastEqPreset falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      return null;
+    }
+    if (raw == null) return null;
+    final rawName = raw['name'];
+    final rawGains = raw['gains'];
+    if (rawGains is! List || rawGains.length != 12) return null;
+    try {
+      final gains = rawGains
+          .map((e) => (e as num).toDouble())
+          .toList(growable: false);
+      final name = (rawName is String && rawName.isNotEmpty)
+          ? rawName
+          : 'Normal';
+      return EqPreset(name: name, description: '', gains: gains);
+    } catch (e, st) {
+      developer.log(
+        '_readBootEqPreset: parseo de lastEqPreset falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      return null;
     }
   }
 
   /// Detiene la amplificación y libera recursos.
   ///
-  /// Debe completarse en < 100 ms (Req 1.3).
+  /// **tecnico-paciente-feature-parity — task 5.2 (Req 3.6)**: las
+  /// suscripciones a `inputLevelStream` y `stateStream` se cancelan
+  /// **y se espera su finalización** antes de invocar
+  /// `audioBridge.stopAudio`. Esto evita el race donde un callback
+  /// pendiente del motor (nivel de entrada o transición de estado)
+  /// llega al bloc después de que el motor nativo ya cerró sus
+  /// recursos, lo que causaba `null pointer` esporádicos en JNI.
+  ///
+  /// Debe completarse en < 100 ms (Req 1.3). El `await` adicional
+  /// sobre los `cancel()` agrega solo el tiempo necesario para que
+  /// el stream subyacente termine de drenar (típicamente < 1 ms),
+  /// muy por debajo del presupuesto.
+  ///
+  /// Requisitos: 1.3, 3.6
   Future<void> _onStopAmplification(
     StopAmplification event,
     Emitter<AmplificationState> emit,
   ) async {
-    _cancelSubscriptions();
+    // Cancelar suscripciones y esperar su finalización ANTES de
+    // detener el motor (Req 3.6).
+    await _cancelSubscriptions();
 
     try {
       await _audioBridge.stopAudio();
@@ -724,7 +1175,8 @@ class AmplificationBloc
 
     if (!event.connected && currentState is AmplificationActive) {
       // Auriculares desconectados durante amplificación activa → pausar
-      _cancelSubscriptions();
+      // Req 3.6: esperar cancelación de streams antes de stopAudio.
+      await _cancelSubscriptions();
 
       try {
         await _audioBridge.stopAudio();
@@ -758,7 +1210,8 @@ class AmplificationBloc
 
     if (!event.hasFocus && currentState is AmplificationActive) {
       // Foco de audio perdido durante amplificación activa → pausar
-      _cancelSubscriptions();
+      // Req 3.6: esperar cancelación de streams antes de stopAudio.
+      await _cancelSubscriptions();
 
       try {
         await _audioBridge.stopAudio();
@@ -1231,92 +1684,1063 @@ class AmplificationBloc
     }
   }
 
-  /// Activa o desactiva el modo MHL (Minimal Hearing Loss).
+  /// Activa o desactiva MHL — handler legacy delegado a
+  /// [_onToggleMhlPrescription].
   ///
-  /// Al activar: guarda el modo de prescripción actual, prescribe ganancia
-  /// MHL flat y aplica al EQ. Si PTA > 25 dB HL, emite warning en el estado.
+  /// **tecnico-paciente-feature-parity — task 4.4 (Req 1.12)**:
+  /// Conserva la firma original del evento [ToggleMhlMode] (payload
+  /// `activate: bool`) sin cambios para no romper screens viejas que aún
+  /// despachan el evento legacy (p.ej. `main_screen.dart`). El cuerpo
+  /// reemplaza la semántica legacy previa (PTA warning,
+  /// `MhlModule.prescribe`, recálculo NL3 al desactivar) por la
+  /// semántica selectiva nueva: gains flat 8 dB en 12 bandas +
+  /// `compressionRatio = 1.0`, snapshot/restauración Smart, persistencia
+  /// de `mhlPrescriptionEnabled` y mutex con Modo Música.
   ///
-  /// Al desactivar: restaura el modo previo (quiet o CIN) recalculando
-  /// ganancias según el prescriptor activo, en ≤ 100 ms.
+  /// Garantiza Property 7 del design: para todo `activate ∈ {true, false}`
+  /// y todo estado inicial del bloc, despachar
+  /// `ToggleMhlMode(activate: v)` produce el mismo conjunto de
+  /// invocaciones al motor y la misma secuencia de escrituras a
+  /// SettingsRepository que despachar `ToggleMhlPrescription(activate: v)`.
   ///
-  /// Requisitos: 4.3, 4.5, 4.6
+  /// Requisitos: 1.12
   Future<void> _onToggleMhlMode(
     ToggleMhlMode event,
+    Emitter<AmplificationState> emit,
+  ) =>
+      _onToggleMhlPrescription(
+        ToggleMhlPrescription(activate: event.activate),
+        emit,
+      );
+
+  // ═════════════════════════════════════════════════════════════════════
+  // tecnico-paciente-feature-parity — task 4.2
+  // _onToggleMhlPrescription
+  // ═════════════════════════════════════════════════════════════════════
+
+  /// Activa o desactiva el modo "MHL Prescripción" como modo selectivo.
+  ///
+  /// **ON** (`event.activate == true`):
+  /// 1. Si Modo Música está ON, ejecuta primero el branch OFF de Música
+  ///    (persiste `musicModeEnabled=false`, llama a
+  ///    `_audioBridge.setMusicModeEnabled(false)` y reaplica `nrLevel`
+  ///    desde Settings) — Req 1.3, 1.7.
+  /// 2. Snapshot del Smart actual a [_smartEnabledBeforeMhl] (anidado:
+  ///    si Música había guardado un Smart previo, ese valor se respeta
+  ///    porque la rama OFF de Música ya restauró el mirror) — Req 1.5.
+  /// 3. Fuerza `_smartEnabled = false` (mirror lógico; el handler
+  ///    Kotlin `applyMhlPrescription` también invoca
+  ///    `setAutoClassifyEnabled(false)` defensivamente).
+  /// 4. Aplica MHL al motor vía
+  ///    `_audioBridge.setMhlPrescriptionEnabled(true)` — el handler
+  ///    Kotlin pone gains flat 8 dB en las 12 bandas + `compRatio = 1.0`
+  ///    sin tocar NR/DNN/knees/attack/release/volumen — Req 1.1.
+  /// 5. Persiste `mhlPrescriptionEnabled=true` ANTES de emitir el nuevo
+  ///    estado para garantizar que cualquier observador vea la
+  ///    persistencia consistente con el state — Req 1.10.
+  /// 6. Emite `AmplificationActive` con `mhlActive: true`.
+  ///
+  /// **OFF** (`event.activate == false`):
+  /// 1. Persiste `mhlPrescriptionEnabled=false` — Req 1.10.
+  /// 2. Llama a `_audioBridge.setMhlPrescriptionEnabled(false)` para que
+  ///    el motor restaure el EQ desde su cache nativo — Req 1.1.
+  /// 3. Restaura `_smartEnabled` desde [_smartEnabledBeforeMhl] (default
+  ///    `false` si no había snapshot) — Req 1.6.
+  /// 4. Reaplica `nrLevel` desde Settings vía `updateNrLevel`.
+  ///    Ante fallo de Settings: log warning, default `nrLevel=0` — Req
+  ///    1.7, 1.9.
+  /// 5. Reaplica los gains del preset activo usando
+  ///    [_resolveGainsForPreset] (re-derivación audiogram-driven para
+  ///    bundles legacy) — Req 5.1, 5.2.
+  /// 6. Reaplica WDRC al motor con `compressionRatio` calculado por
+  ///    [_effectiveCompressionRatio] sobre el último bundle aplicado
+  ///    ([_lastBundle]); preserva knees/attack/release del bundle — Req
+  ///    1.6, 4.4, 4.5.
+  /// 7. Emite `AmplificationActive` con `mhlActive: false` y
+  ///    `activeNrLevel` actualizado.
+  ///
+  /// **Réplica del paciente**: el flujo OFF/ON está mapeado bit-a-bit
+  /// con `_onMhlPrescriptionChanged` de
+  /// `PACIENTE/.../home_screen.dart` (líneas 444-487), salvo que en el
+  /// técnico la persistencia se hace ANTES del bridge call para
+  /// preservar el invariante "persistencia precede notificación"
+  /// (Req 1.10).
+  ///
+  /// **Tolerancia a fallos**: cualquier fallo de persistencia o del
+  /// bridge se loguea con `developer.log` nivel 900 (WARNING) y NO
+  /// aborta el flujo. El estado emitido refleja el resultado final
+  /// alcanzable con los recursos disponibles.
+  ///
+  /// **Mutex con Modo Música**: el branch OFF de Música embebido en la
+  /// rama ON cubre Req 1.3 (al activar MHL con Música ON, Música se
+  /// apaga primero). El branch simétrico — apagar MHL al activar Música
+  /// — vive en `_onToggleMusicMode` (task 4.3).
+  ///
+  /// Requisitos: 1.1, 1.3, 1.5, 1.6, 1.7, 1.9, 1.10
+  Future<void> _onToggleMhlPrescription(
+    ToggleMhlPrescription event,
     Emitter<AmplificationState> emit,
   ) async {
     final currentState = state;
     if (currentState is! AmplificationActive) return;
 
-    final audiogram = _currentAudiogram ?? Audiogram.defaultAudiogram();
-
     if (event.activate) {
-      // Guardar el modo previo para restaurar al desactivar (Req 4.6).
-      _previousPrescriptionMode = PrescriptionMode.quiet;
+      // ─── Rama ON ────────────────────────────────────────────────────
+
+      // Mutex (Req 1.3): si Modo Música está ON, ejecutar primero el
+      // branch OFF de Música. Leemos el flag persistido sincrónicamente.
+      final wasMusicOn = _readMusicModeEnabledOrFalse();
+
+      if (wasMusicOn) {
+        await _applyMusicOffBranchForMutex();
+      }
+
+      // Snapshot Smart (Req 1.5). Si Música había snapshot-eado Smart
+      // previamente, la rama OFF de Música ya restauró [_smartEnabled]
+      // al valor real; tomar la lectura actual preserva la semántica
+      // anidada del paciente (`_smartBeforeMhl = _smartBeforeMusic ??
+      // _smart`).
+      _smartEnabledBeforeMhl = _smartEnabled;
+
+      // Forzar Smart=false a nivel mirror lógico. El handler Kotlin
+      // `applyMhlPrescription(true)` también invoca
+      // `setAutoClassifyEnabled(false)` defensivamente.
+      _smartEnabled = false;
+
+      // Aplicar MHL al motor (gains flat 8 dB + compRatio=1.0 + Smart
+      // off vía Kotlin) — Req 1.1.
+      try {
+        await _audioBridge.setMhlPrescriptionEnabled(true);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMhlPrescription[ON]: bridge.setMhlPrescriptionEnabled '
+          'falló: $e — revirtiendo snapshot Smart.',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+        _smartEnabled = _smartEnabledBeforeMhl ?? false;
+        _smartEnabledBeforeMhl = null;
+        return;
+      }
+
+      // Persistencia ANTES de notificar (Req 1.10).
+      try {
+        await _settingsRepository.setMhlPrescriptionEnabled(true);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMhlPrescription[ON]: setMhlPrescriptionEnabled '
+          'persistencia falló: $e — el motor ya aplicó MHL, sesión '
+          'continúa pero el flag no quedó persistido.',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+
+      // Mantener el mirror legacy del modo MHL para que
+      // `_onSceneClassUpdated` lo respete (no aplica CIN mientras MHL
+      // está ON).
       _mhlActive = true;
 
+      emit(currentState.copyWith(
+        mhlActive: true,
+      ));
+      return;
+    }
+
+    // ─── Rama OFF ────────────────────────────────────────────────────
+
+    // Persistencia ANTES de notificar (Req 1.10).
+    try {
+      await _settingsRepository.setMhlPrescriptionEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMhlPrescription[OFF]: setMhlPrescriptionEnabled '
+        'persistencia falló: $e — continuando con la restauración.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Apagar MHL en motor (restaura EQ desde cache nativo) — Req 1.1.
+    try {
+      await _audioBridge.setMhlPrescriptionEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMhlPrescription[OFF]: bridge.setMhlPrescriptionEnabled '
+        'falló: $e — continuando con la restauración Dart.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Restaurar Smart al snapshot (Req 1.6).
+    final restoreSmart = _smartEnabledBeforeMhl ?? false;
+    _smartEnabledBeforeMhl = null;
+    _smartEnabled = restoreSmart;
+
+    // Leer nrLevel desde Settings con default tolerante (Req 1.7, 1.9).
+    int restoredNrLevel;
+    try {
+      restoredNrLevel = _settingsRepository.nrLevel;
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMhlPrescription[OFF]: SettingsRepository.nrLevel '
+        'falló: $e — usando default nrLevel=0.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      restoredNrLevel = 0;
+    }
+
+    // Reaplicar nrLevel al motor.
+    try {
+      await _audioBridge.updateNrLevel(restoredNrLevel);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMhlPrescription[OFF]: bridge.updateNrLevel falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Reaplicar gains del preset activo usando _resolveGainsForPreset
+    // (Req 5.1, 5.2). Se lee `lastEqPreset` desde Settings; si la
+    // entrada está vacía o corrupta, fallback al bundle activo.
+    final List<double> presetGains = await _resolvePresetGainsForRestore(
+      currentState.activeEqPreset,
+    );
+    if (presetGains.isNotEmpty) {
       try {
-        // Prescribir MHL (ganancia flat, compresión lineal, NR máximo).
-        final mhlResult = MhlModule.prescribe(audiogram);
-
-        // Aplicar ganancias MHL al engine.
-        await _audioBridge.updateEqGains(mhlResult.gains);
-
-        // Aplicar NR nivel máximo.
-        await _audioBridge.updateNrLevel(mhlResult.noiseReductionLevel);
-
-        // Emitir estado con MHL activo y flag de advertencia PTA.
-        emit(currentState.copyWith(
-          mhlActive: true,
-          ptaWarning: mhlResult.ptaWarning,
-          activeNrLevel: mhlResult.noiseReductionLevel,
-        ));
-      } catch (_) {
-        // Revertir si falla la activación.
-        _mhlActive = false;
-      }
-    } else {
-      // Desactivar MHL: restaurar modo previo en ≤ 100 ms (Req 4.6).
-      _mhlActive = false;
-
-      try {
-        final List<double> restoredGains;
-
-        if (_currentPrescriberMode == PrescriberMode.smartNl3) {
-          final result = _nl3Prescriber.prescribeFromAudiogram(
-            audiogram,
-            profile: _buildPatientProfile(),
-            mode: _previousPrescriptionMode,
-          );
-          restoredGains = result.prescribedGains;
-        } else {
-          restoredGains = _gainPrescriber.prescribeFromAudiogram(audiogram);
-        }
-
-        // Aplicar ganancias restauradas al engine.
-        await _audioBridge.updateEqGains(restoredGains);
-
-        // Restaurar nivel de NR del perfil activo.
-        final nrLevel = _currentProfile?.nrLevel ?? 0;
-        await _audioBridge.updateNrLevel(nrLevel);
-
-        // Emitir estado sin MHL.
-        emit(currentState.copyWith(
-          mhlActive: false,
-          ptaWarning: false,
-          activeNrLevel: nrLevel,
-        ));
-      } catch (_) {
-        // No interrumpir la amplificación por error de restauración.
+        await _audioBridge.updateEqGains(presetGains);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMhlPrescription[OFF]: bridge.updateEqGains falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
       }
     }
+
+    // Reaplicar WDRC con _effectiveCompressionRatio(bundle) — Req 1.6,
+    // 4.4, 4.5. Si no hay bundle activo (boot temprano o fallo previo),
+    // se omite la reaplicación de WDRC para no enviar parámetros
+    // arbitrarios al motor.
+    final bundle = _lastBundle;
+    if (bundle != null) {
+      try {
+        final wdrcParams = WdrcParams(
+          expansionKnee: bundle.expansionKneeDbSpl,
+          compressionKnee:
+              _resolveBridgeCompressionKnee(bundle, _manualDelta),
+          compressionRatio: _effectiveCompressionRatio(bundle),
+          attackMs: bundle.wdrcAttackMs,
+          releaseMs: bundle.wdrcReleaseMs,
+        );
+        await _audioBridge.updateWdrcParams(wdrcParams);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMhlPrescription[OFF]: bridge.updateWdrcParams '
+          'falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // Apagar el mirror legacy del modo MHL (Req 1.10).
+    _mhlActive = false;
+
+    emit(currentState.copyWith(
+      mhlActive: false,
+      ptaWarning: false,
+      activeNrLevel: restoredNrLevel,
+    ));
+  }
+
+  /// Lee `musicModeEnabled` desde [SettingsRepository] tolerando
+  /// excepciones (Req 1.9: ante fallo de Settings, defaults seguros).
+  /// Retorna `false` si la lectura lanza.
+  bool _readMusicModeEnabledOrFalse() {
+    try {
+      return _settingsRepository.musicModeEnabled;
+    } catch (e, st) {
+      developer.log(
+        '_readMusicModeEnabledOrFalse: lectura falló: $e — asumiendo false.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      return false;
+    }
+  }
+
+  /// Branch OFF de Modo Música ejecutado como mutex desde el handler
+  /// de MHL Prescripción (Req 1.3).
+  ///
+  /// - Persiste `musicModeEnabled=false` (Req 1.10).
+  /// - Apaga Música en el motor vía `_audioBridge.setMusicModeEnabled(false)`.
+  /// - Reaplica `nrLevel` desde Settings (default `0` ante fallo —
+  ///   Req 1.7, 1.9). El handler Kotlin `applyMusicMode(false)` es un
+  ///   no-op a nivel motor por contrato del paciente; la restauración
+  ///   real vive en Dart.
+  /// - Reaplica `dnnIntensity` desde Settings (default `0.6` ante fallo
+  ///   — Req 1.8, 1.9) vía `_audioBridge.setDnnIntensity`.
+  ///
+  /// Refleja el [_musicModeActive] en `false` para que la UI y los
+  /// dependientes (`_onSceneClassUpdated`) vean el cambio antes de que
+  /// el caller continúe con la rama ON del modo entrante.
+  Future<void> _applyMusicOffBranchForMutex() async {
+    try {
+      await _settingsRepository.setMusicModeEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_applyMusicOffBranchForMutex: setMusicModeEnabled persistencia '
+        'falló: $e — continuando con el branch OFF.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    try {
+      await _audioBridge.setMusicModeEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_applyMusicOffBranchForMutex: bridge.setMusicModeEnabled falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Restaurar nrLevel (Req 1.7, 1.9).
+    int restoredNrLevel;
+    try {
+      restoredNrLevel = _settingsRepository.nrLevel;
+    } catch (e, st) {
+      developer.log(
+        '_applyMusicOffBranchForMutex: SettingsRepository.nrLevel '
+        'falló: $e — usando default nrLevel=0.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      restoredNrLevel = 0;
+    }
+    try {
+      await _audioBridge.updateNrLevel(restoredNrLevel);
+    } catch (e, st) {
+      developer.log(
+        '_applyMusicOffBranchForMutex: bridge.updateNrLevel falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Restaurar dnnIntensity (Req 1.8, 1.9). Si Settings falla, default
+    // 0.6 (mismo default que el contrato del paciente).
+    double restoredDnnIntensity;
+    try {
+      restoredDnnIntensity = _settingsRepository.dnnIntensity;
+    } catch (e, st) {
+      developer.log(
+        '_applyMusicOffBranchForMutex: SettingsRepository.dnnIntensity '
+        'falló: $e — usando default dnnIntensity=0.6.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      restoredDnnIntensity = 0.6;
+    }
+    try {
+      await _audioBridge.setDnnIntensity(restoredDnnIntensity);
+    } catch (e, st) {
+      developer.log(
+        '_applyMusicOffBranchForMutex: bridge.setDnnIntensity falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Mirror lógico (Req 1.2, 1.4, 1.11). El caller (rama ON de MHL)
+    // toma el snapshot Smart después de esta restauración, así que el
+    // valor anidado se preserva.
+    _musicModeActive = false;
+  }
+
+  /// Resuelve los 12 gains a aplicar al motor cuando se restaura el
+  /// preset activo (rama OFF de MHL Prescripción).
+  ///
+  /// Estrategia:
+  /// 1. Lee `lastEqPreset` desde Settings (`{name, gains}`). Si está
+  ///    presente y `gains` tiene exactamente 12 valores numéricos,
+  ///    construye un [EqPreset] transient y lo pasa por
+  ///    [_resolveGainsForPreset] para cubrir el caso de bundles legacy
+  ///    (Req 5.1, 5.2).
+  /// 2. Si `lastEqPreset` no existe o está corrupto, intenta usar
+  ///    `_lastBundle.gainsDb` aplicando `_resolveFinalGains` para
+  ///    incluir el [_manualDelta] activo.
+  /// 3. Si tampoco hay bundle, retorna lista vacía y el caller omite
+  ///    la actualización del EQ.
+  ///
+  /// El nombre [activePresetNameFromState] es un fallback para
+  /// construir el [EqPreset] cuando `lastEqPreset` no incluye el
+  /// nombre (caso muy raro pero posible si el JSON está parcialmente
+  /// escrito).
+  Future<List<double>> _resolvePresetGainsForRestore(
+    String activePresetNameFromState,
+  ) async {
+    Map<String, dynamic>? presetData;
+    try {
+      presetData = await _settingsRepository.getLastEqPreset();
+    } catch (e, st) {
+      developer.log(
+        '_resolvePresetGainsForRestore: getLastEqPreset falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      presetData = null;
+    }
+
+    if (presetData != null) {
+      final rawName = presetData['name'];
+      final rawGains = presetData['gains'];
+      if (rawGains is List && rawGains.length == 12) {
+        try {
+          final gains = rawGains
+              .map((e) => (e as num).toDouble())
+              .toList(growable: false);
+          final name = (rawName is String && rawName.isNotEmpty)
+              ? rawName
+              : activePresetNameFromState;
+          final preset = EqPreset(
+            name: name,
+            description: '',
+            gains: gains,
+          );
+          return await _resolveGainsForPreset(preset, _currentAudiogram);
+        } catch (e, st) {
+          developer.log(
+            '_resolvePresetGainsForRestore: parseo de lastEqPreset '
+            'falló: $e — fallback al bundle activo.',
+            name: 'AmplificationBloc',
+            level: 900,
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }
+    }
+
+    // Fallback: usar gains del bundle activo (con delta manual aplicado).
+    final bundle = _lastBundle;
+    if (bundle != null) {
+      try {
+        return _resolveFinalGains(bundle, _manualDelta);
+      } catch (e, st) {
+        developer.log(
+          '_resolvePresetGainsForRestore: _resolveFinalGains '
+          'falló: $e — omitiendo update de gains.',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    return const <double>[];
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // tecnico-paciente-feature-parity — task 4.3
+  // _onToggleMusicMode + _applyMhlOffBranchForMutex + _readMhlPrescriptionEnabledOrFalse
+  // ═════════════════════════════════════════════════════════════════════
+
+  /// Lee `mhlPrescriptionEnabled` desde [SettingsRepository] tolerando
+  /// excepciones (Req 1.9: ante fallo de Settings, defaults seguros).
+  /// Retorna `false` si la lectura lanza.
+  ///
+  /// Réplica simétrica de [_readMusicModeEnabledOrFalse]; necesario para
+  /// la rama ON de [_onToggleMusicMode] (Req 1.4: si MHL está ON al
+  /// activar Música, ejecutar primero la rama OFF de MHL).
+  bool _readMhlPrescriptionEnabledOrFalse() {
+    try {
+      return _settingsRepository.mhlPrescriptionEnabled;
+    } catch (e, st) {
+      developer.log(
+        '_readMhlPrescriptionEnabledOrFalse: lectura falló: $e — '
+        'asumiendo false.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      return false;
+    }
+  }
+
+  /// Branch OFF de MHL Prescripción ejecutado como mutex desde el
+  /// handler de Modo Música (Req 1.4).
+  ///
+  /// Réplica simétrica de [_applyMusicOffBranchForMutex]:
+  /// - Persiste `mhlPrescriptionEnabled=false` (Req 1.10).
+  /// - Apaga MHL en el motor vía `_audioBridge.setMhlPrescriptionEnabled(false)`
+  ///   — el handler Kotlin restaura el EQ desde su cache nativo.
+  /// - Reaplica `nrLevel` desde Settings (default `0` ante fallo —
+  ///   Req 1.7, 1.9).
+  /// - Reaplica los gains del preset activo vía
+  ///   [_resolvePresetGainsForRestore] (re-derivación audiogram-driven
+  ///   para bundles legacy — Req 5.1, 5.2).
+  /// - Reaplica WDRC con [_effectiveCompressionRatio] sobre el último
+  ///   bundle activo, preservando knees/attack/release del bundle
+  ///   (Req 1.6, 4.4, 4.5).
+  ///
+  /// Refleja el [_mhlActive] en `false` para que el caller (rama ON de
+  /// Música) tome el snapshot Smart correcto: el handler Kotlin
+  /// `applyMhlPrescription(false)` no toca el clasificador automático,
+  /// así que [_smartEnabled] todavía representa el valor "real"
+  /// guardado al activar MHL — la rama ON de Música tomará un snapshot
+  /// limpio sobre ese valor.
+  ///
+  /// **Diferencia con `_applyMusicOffBranchForMutex`**: aquí sí se
+  /// reaplica el EQ y el WDRC porque el handler Kotlin de MHL OFF
+  /// restaura `lastEqGains` (cache nativo) pero el técnico mantiene la
+  /// invariante "Dart es la fuente de verdad clínica": el bundle
+  /// activo o el último preset persistido toman precedencia. La rama
+  /// OFF de Música no necesita reaplicar EQ/WDRC porque Música nunca
+  /// los modificó.
+  Future<void> _applyMhlOffBranchForMutex(
+    AmplificationActive currentState,
+  ) async {
+    try {
+      await _settingsRepository.setMhlPrescriptionEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_applyMhlOffBranchForMutex: setMhlPrescriptionEnabled '
+        'persistencia falló: $e — continuando con el branch OFF.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    try {
+      await _audioBridge.setMhlPrescriptionEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_applyMhlOffBranchForMutex: bridge.setMhlPrescriptionEnabled '
+        'falló: $e — continuando con la restauración Dart.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Restaurar nrLevel (Req 1.7, 1.9).
+    int restoredNrLevel;
+    try {
+      restoredNrLevel = _settingsRepository.nrLevel;
+    } catch (e, st) {
+      developer.log(
+        '_applyMhlOffBranchForMutex: SettingsRepository.nrLevel '
+        'falló: $e — usando default nrLevel=0.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      restoredNrLevel = 0;
+    }
+    try {
+      await _audioBridge.updateNrLevel(restoredNrLevel);
+    } catch (e, st) {
+      developer.log(
+        '_applyMhlOffBranchForMutex: bridge.updateNrLevel falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Reaplicar gains del preset activo (Req 5.1, 5.2).
+    final List<double> presetGains = await _resolvePresetGainsForRestore(
+      currentState.activeEqPreset,
+    );
+    if (presetGains.isNotEmpty) {
+      try {
+        await _audioBridge.updateEqGains(presetGains);
+      } catch (e, st) {
+        developer.log(
+          '_applyMhlOffBranchForMutex: bridge.updateEqGains falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // Reaplicar WDRC con _effectiveCompressionRatio(bundle) — Req 4.4,
+    // 4.5. Si no hay bundle activo, omitir la reaplicación.
+    final bundle = _lastBundle;
+    if (bundle != null) {
+      try {
+        final wdrcParams = WdrcParams(
+          expansionKnee: bundle.expansionKneeDbSpl,
+          compressionKnee:
+              _resolveBridgeCompressionKnee(bundle, _manualDelta),
+          compressionRatio: _effectiveCompressionRatio(bundle),
+          attackMs: bundle.wdrcAttackMs,
+          releaseMs: bundle.wdrcReleaseMs,
+        );
+        await _audioBridge.updateWdrcParams(wdrcParams);
+      } catch (e, st) {
+        developer.log(
+          '_applyMhlOffBranchForMutex: bridge.updateWdrcParams '
+          'falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // Mirror lógico (Req 1.10).
+    _mhlActive = false;
+  }
+
+  /// Activa o desactiva el modo "Música" como modo selectivo.
+  ///
+  /// **ON** (`event.activate == true`):
+  /// 1. Si MHL Prescripción está ON, ejecuta primero la rama OFF de MHL
+  ///    vía [_applyMhlOffBranchForMutex] (persiste
+  ///    `mhlPrescriptionEnabled=false`, apaga MHL en motor, restaura
+  ///    nrLevel y gains/WDRC del preset activo) — Req 1.4, 1.7.
+  /// 2. Snapshot del Smart actual a [_smartEnabledBeforeMusic] (anidado:
+  ///    si MHL había snapshot-eado Smart previamente, la rama OFF de
+  ///    MHL no toca [_smartEnabled], así que el valor "real" se
+  ///    preserva) — Req 1.5.
+  /// 3. Fuerza `_smartEnabled = false` (mirror lógico; el handler
+  ///    Kotlin `applyMusicMode(true)` también invoca
+  ///    `setAutoClassifyEnabled(false)` defensivamente).
+  /// 4. Aplica Música al motor vía
+  ///    `_audioBridge.setMusicModeEnabled(true)` — el handler Kotlin
+  ///    pone `nrLevel = 0` + `dnnIntensity = 0.0` sin tocar EQ/WDRC/
+  ///    knees/attack/release/volumen — Req 1.2.
+  /// 5. Persiste `musicModeEnabled=true` ANTES de emitir el nuevo
+  ///    estado (Req 1.11).
+  /// 6. Emite `AmplificationActive` con `musicModeActive: true` y
+  ///    `activeNrLevel: 0` para reflejar el estado runtime del NR.
+  ///
+  /// **OFF** (`event.activate == false`):
+  /// 1. Persiste `musicModeEnabled=false` (Req 1.11).
+  /// 2. Llama a `_audioBridge.setMusicModeEnabled(false)` (no-op a
+  ///    nivel motor por contrato del paciente; la restauración real
+  ///    vive en Dart) — Req 1.2.
+  /// 3. Restaura `_smartEnabled` desde [_smartEnabledBeforeMusic]
+  ///    (default `false` si no había snapshot) — Req 1.6.
+  /// 4. Reaplica `nrLevel` desde Settings vía `updateNrLevel`
+  ///    (default `0` ante fallo de Settings — Req 1.8, 1.9).
+  /// 5. Reaplica `dnnIntensity` desde Settings vía `setDnnIntensity`
+  ///    (default `0.6` ante fallo — Req 1.8, 1.9).
+  /// 6. Reaplica los gains del preset activo usando
+  ///    [_resolvePresetGainsForRestore] (re-derivación
+  ///    audiogram-driven para bundles legacy — Req 5.1, 5.2).
+  /// 7. Reaplica WDRC con `compressionRatio` calculado por
+  ///    [_effectiveCompressionRatio] sobre [_lastBundle], preservando
+  ///    knees/attack/release del bundle (Req 1.6, 4.4, 4.5).
+  /// 8. Emite `AmplificationActive` con `musicModeActive: false` y
+  ///    `activeNrLevel` actualizado.
+  ///
+  /// **Réplica del paciente**: el flujo OFF/ON está mapeado bit-a-bit
+  /// con `_onMusicModeChanged` de
+  /// `PACIENTE/.../home_screen.dart` (líneas 497-543), salvo que en el
+  /// técnico la persistencia se hace ANTES del bridge call para
+  /// preservar el invariante "persistencia precede notificación"
+  /// (Req 1.11).
+  ///
+  /// **Tolerancia a fallos**: cualquier fallo de persistencia o del
+  /// bridge se loguea con `developer.log` nivel 900 (WARNING) y NO
+  /// aborta el flujo. El estado emitido refleja el resultado final
+  /// alcanzable con los recursos disponibles.
+  ///
+  /// **Mutex con MHL Prescripción**: el branch OFF de MHL embebido en
+  /// la rama ON cubre Req 1.4 (al activar Música con MHL ON, MHL se
+  /// apaga primero). El branch simétrico — apagar Música al activar
+  /// MHL — vive en `_onToggleMhlPrescription` (task 4.2).
+  ///
+  /// Requisitos: 1.2, 1.4, 1.5, 1.6, 1.8, 1.9, 1.11
+  Future<void> _onToggleMusicMode(
+    ToggleMusicMode event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+
+    if (event.activate) {
+      // ─── Rama ON ────────────────────────────────────────────────────
+
+      // Mutex (Req 1.4): si MHL Prescripción está ON, ejecutar primero
+      // la rama OFF de MHL.
+      final wasMhlOn = _readMhlPrescriptionEnabledOrFalse();
+
+      AmplificationActive stateAfterMutex = currentState;
+      if (wasMhlOn) {
+        await _applyMhlOffBranchForMutex(currentState);
+        // Reflejar inmediatamente que MHL quedó OFF antes de continuar
+        // con la rama ON de Música. La emisión refleja el cambio
+        // ordenado: MHL OFF → Música ON (Req 1.4).
+        stateAfterMutex = currentState.copyWith(
+          mhlActive: false,
+          ptaWarning: false,
+        );
+      }
+
+      // Snapshot Smart (Req 1.5). Si MHL había snapshot-eado Smart
+      // previamente, su rama OFF NO toca [_smartEnabled] (el handler
+      // Kotlin tampoco), así que la lectura actual representa el
+      // valor "real". Esto preserva la semántica anidada del paciente
+      // (`_smartBeforeMusic = _smartBeforeMhl ?? _smart`).
+      _smartEnabledBeforeMusic = _smartEnabled;
+
+      // Forzar Smart=false a nivel mirror lógico. El handler Kotlin
+      // `applyMusicMode(true)` también invoca
+      // `setAutoClassifyEnabled(false)` defensivamente.
+      _smartEnabled = false;
+
+      // Aplicar Música al motor (NR=0 + dnnIntensity=0 + Smart off vía
+      // Kotlin) — Req 1.2.
+      try {
+        await _audioBridge.setMusicModeEnabled(true);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMusicMode[ON]: bridge.setMusicModeEnabled '
+          'falló: $e — revirtiendo snapshot Smart.',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+        _smartEnabled = _smartEnabledBeforeMusic ?? false;
+        _smartEnabledBeforeMusic = null;
+        // Aún si el bridge falló, refleja el estado del mutex (MHL OFF
+        // ya quedó persistido) en la UI.
+        if (wasMhlOn) emit(stateAfterMutex);
+        return;
+      }
+
+      // Persistencia ANTES de notificar (Req 1.11).
+      try {
+        await _settingsRepository.setMusicModeEnabled(true);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMusicMode[ON]: setMusicModeEnabled persistencia '
+          'falló: $e — el motor ya aplicó Música, sesión continúa '
+          'pero el flag no quedó persistido.',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+
+      // Mirror lógico (Req 1.2, 1.4, 1.11).
+      _musicModeActive = true;
+
+      emit(stateAfterMutex.copyWith(
+        musicModeActive: true,
+        // El handler Kotlin pone NR a 0 en el motor; reflejar en state
+        // para que la UI vea el cambio.
+        activeNrLevel: 0,
+      ));
+      return;
+    }
+
+    // ─── Rama OFF ────────────────────────────────────────────────────
+
+    // Persistencia ANTES de notificar (Req 1.11).
+    try {
+      await _settingsRepository.setMusicModeEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMusicMode[OFF]: setMusicModeEnabled persistencia '
+        'falló: $e — continuando con la restauración.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Apagar Música en motor (no-op a nivel motor por contrato del
+    // paciente; el handler Kotlin `applyMusicMode(false)` no toca
+    // nada — la restauración real vive en Dart) — Req 1.2.
+    try {
+      await _audioBridge.setMusicModeEnabled(false);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMusicMode[OFF]: bridge.setMusicModeEnabled '
+        'falló: $e — continuando con la restauración Dart.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Restaurar Smart al snapshot (Req 1.6).
+    final restoreSmart = _smartEnabledBeforeMusic ?? false;
+    _smartEnabledBeforeMusic = null;
+    _smartEnabled = restoreSmart;
+
+    // Leer nrLevel desde Settings con default tolerante (Req 1.8, 1.9).
+    int restoredNrLevel;
+    try {
+      restoredNrLevel = _settingsRepository.nrLevel;
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMusicMode[OFF]: SettingsRepository.nrLevel '
+        'falló: $e — usando default nrLevel=0.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      restoredNrLevel = 0;
+    }
+
+    // Reaplicar nrLevel al motor.
+    try {
+      await _audioBridge.updateNrLevel(restoredNrLevel);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMusicMode[OFF]: bridge.updateNrLevel falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Leer dnnIntensity desde Settings con default tolerante (Req 1.8,
+    // 1.9). Default 0.6 por contrato del paciente.
+    double restoredDnnIntensity;
+    try {
+      restoredDnnIntensity = _settingsRepository.dnnIntensity;
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMusicMode[OFF]: SettingsRepository.dnnIntensity '
+        'falló: $e — usando default dnnIntensity=0.6.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      restoredDnnIntensity = 0.6;
+    }
+
+    // Reaplicar dnnIntensity al motor.
+    try {
+      await _audioBridge.setDnnIntensity(restoredDnnIntensity);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleMusicMode[OFF]: bridge.setDnnIntensity falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // Reaplicar gains del preset activo usando _resolveGainsForPreset
+    // (Req 5.1, 5.2).
+    final List<double> presetGains = await _resolvePresetGainsForRestore(
+      currentState.activeEqPreset,
+    );
+    if (presetGains.isNotEmpty) {
+      try {
+        await _audioBridge.updateEqGains(presetGains);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMusicMode[OFF]: bridge.updateEqGains falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // Reaplicar WDRC con _effectiveCompressionRatio(bundle) — Req 1.6,
+    // 4.4, 4.5. Si no hay bundle activo, omitir.
+    final bundle = _lastBundle;
+    if (bundle != null) {
+      try {
+        final wdrcParams = WdrcParams(
+          expansionKnee: bundle.expansionKneeDbSpl,
+          compressionKnee:
+              _resolveBridgeCompressionKnee(bundle, _manualDelta),
+          compressionRatio: _effectiveCompressionRatio(bundle),
+          attackMs: bundle.wdrcAttackMs,
+          releaseMs: bundle.wdrcReleaseMs,
+        );
+        await _audioBridge.updateWdrcParams(wdrcParams);
+      } catch (e, st) {
+        developer.log(
+          '_onToggleMusicMode[OFF]: bridge.updateWdrcParams falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // Apagar el mirror lógico de Música (Req 1.11).
+    _musicModeActive = false;
+
+    emit(currentState.copyWith(
+      musicModeActive: false,
+      activeNrLevel: restoredNrLevel,
+    ));
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // tecnico-paciente-feature-parity — task 4.5
+  // _onChangeComfort
+  // ═════════════════════════════════════════════════════════════════════
+
+  /// Aplica un nuevo valor del slider "Comodidad" recalculando el
+  /// `compressionRatio` broadband del WDRC sobre el bundle activo.
+  ///
+  /// Réplica funcional del handler homónimo del paciente
+  /// (`PACIENTE/.../home_screen.dart::_onComfortChanged`). El paciente
+  /// persiste `comfort` en su `SettingsRepository` desde la UI ANTES
+  /// de despachar el evento, igual que el técnico
+  /// (`SimulatorScreen.onChangeEnd` — task 7.1). Por contrato, este
+  /// handler NO escribe `comfort` en Settings: solo lo lee (de forma
+  /// sincrónica) dentro de [_effectiveCompressionRatio].
+  ///
+  /// Comportamiento:
+  /// 1. Si el state actual no es [AmplificationActive], descarta el
+  ///    evento silenciosamente (no hay motor activo al que aplicarle
+  ///    nada).
+  /// 2. Si [_lastBundle] es `null` (boot temprano antes de la primera
+  ///    aplicación atómica), emite un log informativo y retorna sin
+  ///    tocar el motor — Req 4.4 exige que el ratio efectivo se
+  ///    derive del bundle, así que sin bundle no hay nada que
+  ///    recalcular.
+  /// 3. Construye un [WdrcParams] con:
+  ///    - `compressionRatio = _effectiveCompressionRatio(bundle)`
+  ///      (broadband con offset Comodidad — Req 4.4, 4.5).
+  ///    - `compressionKnee` resuelto vía
+  ///      [_resolveBridgeCompressionKnee] (preserva el delta manual).
+  ///    - `expansionKnee`, `attackMs`, `releaseMs` tomados del bundle
+  ///      sin modificar (Req 4.5: "sin modificar otros parámetros").
+  /// 4. Invoca `audioBridge.updateWdrcParams(...)` con try/catch: si
+  ///    la llamada nativa falla, deja el motor en su último estado
+  ///    consistente y emite un log de severidad media. NO emite
+  ///    [AmplificationError] para no interrumpir la sesión por un
+  ///    fallo aislado del bridge (consistente con [_onUpdateWdrcParams]
+  ///    y con los reapply de WDRC en los handlers de MHL/Música).
+  /// 5. Emite el state activo (vía `copyWith()`) para notificar a los
+  ///    observadores. Como `comfort` no es un campo de
+  ///    [AmplificationActive] y `_effectiveCompressionRatio` lo lee de
+  ///    Settings on-demand, el state derivado no cambia visualmente:
+  ///    la re-emisión es defensiva y mantiene la simetría con el resto
+  ///    de handlers.
+  ///
+  /// El parámetro `event.comfort` es informativo (la fuente de verdad
+  /// es `SettingsRepository.comfort` dentro del helper). Se mantiene
+  /// en la firma del evento para trazabilidad y para que los tests de
+  /// la UI puedan assertir el valor despachado.
+  ///
+  /// Requisitos: 4.4, 4.5
+  Future<void> _onChangeComfort(
+    ChangeComfort event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+
+    final bundle = _lastBundle;
+    if (bundle == null) {
+      developer.log(
+        '_onChangeComfort: _lastBundle == null; se omite el recálculo '
+        'WDRC (no hay bundle activo todavía).',
+        name: 'AmplificationBloc',
+        level: 800,
+      );
+      return;
+    }
+
+    final wdrcParams = WdrcParams(
+      expansionKnee: bundle.expansionKneeDbSpl,
+      compressionKnee: _resolveBridgeCompressionKnee(bundle, _manualDelta),
+      compressionRatio: _effectiveCompressionRatio(bundle),
+      attackMs: bundle.wdrcAttackMs,
+      releaseMs: bundle.wdrcReleaseMs,
+    );
+
+    try {
+      await _audioBridge.updateWdrcParams(wdrcParams);
+    } catch (e, st) {
+      developer.log(
+        '_onChangeComfort: bridge.updateWdrcParams falló: $e — el motor '
+        'mantiene el último ratio aplicado, sesión continúa.',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      return;
+    }
+
+    emit(currentState.copyWith());
   }
 
   /// Procesa una nueva clasificación del Smart Scene Engine y, si el
   /// modo activo es NL3, aplica/desactiva el módulo CIN respetando la
   /// histéresis del [ScenePrescriptionController].
   ///
-  /// Si el modo activo es NL2 o el modo MHL está habilitado, el evento
-  /// se ignora silenciosamente.
+  /// Si el modo activo es NL2, MHL Prescripción está habilitado, o
+  /// Modo Música está habilitado, el evento se ignora silenciosamente.
+  /// Música y MHL son ortogonales al Smart Scene Engine: ambos fuerzan
+  /// `_smartEnabled = false` en el bloc, pero el evento de clasificación
+  /// puede llegar de un polling pre-existente, por lo que el guard
+  /// adicional es defensivo (Req 1.5, 1.6).
   ///
   /// Requisitos: 6.1, 6.2, 6.3, 6.4, 6.5
   Future<void> _onSceneClassUpdated(
@@ -1327,6 +2751,10 @@ class AmplificationBloc
     if (currentState is! AmplificationActive) return;
     if (_currentPrescriberMode != PrescriberMode.smartNl3) return;
     if (_mhlActive) return;
+    // tecnico-paciente-feature-parity — task 4.3: bloquear CIN
+    // mientras Modo Música está activo. Mirror de la guardia análoga
+    // sobre `_mhlActive`.
+    if (_musicModeActive) return;
 
     final previousMode = _sceneController.currentMode;
     _sceneController.onSceneChanged(event.sceneClass);
@@ -1970,6 +3398,163 @@ class AmplificationBloc
         .toDouble();
   }
 
+  /// Ratio de compresión broadband efectivo enviado al motor DSP,
+  /// aplicando el offset del slider "Comodidad" sobre el ratio base
+  /// del [bundle].
+  ///
+  /// Réplica funcional del `_effectiveCompressionRatio` del paciente
+  /// (`PACIENTE/.../home_screen.dart`). El paciente expone un escalar
+  /// `b.wdrc.compressionRatio`; en el técnico el bundle es
+  /// [AudiogramDrivenBundle] con 12 ratios por banda
+  /// ([AudiogramDrivenBundle.compressionRatios]), por lo que la base
+  /// se reduce primero al escalar broadband que sería enviado al
+  /// bridge (PTA-weighted average con [_manualDelta] y clamp a
+  /// `[1.0, 3.0]`) vía [_resolveBridgeCompressionRatio]. Sobre ese
+  /// escalar se aplica la fórmula del paciente:
+  ///
+  /// ```
+  /// result = base + (1 - base) * comfort
+  /// ```
+  ///
+  /// con:
+  /// - `comfort = 0` → result = base (lo que el técnico fijó).
+  /// - `comfort = 1` → result = 1.0 (sin compresión, "natural").
+  /// - `base = 1.0` → result = 1.0 para cualquier comfort.
+  ///
+  /// `comfort` se lee sincrónicamente de [SettingsRepository.comfort]
+  /// (sin `await`). El getter del repositorio ya retorna `0.5` cuando
+  /// la key está ausente, es no numérica o `NaN`, y clampea a
+  /// `[0.0, 1.0]`. Igualmente, este helper sanitiza defensivamente
+  /// `NaN`/`±Infinity` → `0.5` y aplica un clamp final a `[0.0, 1.0]`
+  /// antes de la fórmula, para tolerar boxes corruptos o lecturas
+  /// inesperadas (Req 4.7).
+  ///
+  /// **Operación read-only sobre [bundle]**: nunca modifica
+  /// `bundle.compressionRatios` ni ningún otro campo del bundle.
+  ///
+  /// Requisitos: 4.4, 4.5, 4.7, 4.8, 4.11
+  double _effectiveCompressionRatio(AudiogramDrivenBundle bundle) {
+    // Base broadband: PTA-weighted average con delta manual y clamp
+    // a [1.0, 3.0] aplicados (read-only sobre el bundle).
+    final base = _resolveBridgeCompressionRatio(bundle, _manualDelta);
+
+    // Comfort sincrónico desde Settings. Defensivo contra NaN/Infinity
+    // a pesar de que el getter del repo ya saneé estos casos: si la
+    // lectura lanza, default a 0.5; si es no finita, también 0.5.
+    double comfort;
+    try {
+      final raw = _settingsRepository.comfort;
+      comfort = (raw.isNaN || raw.isInfinite) ? 0.5 : raw;
+    } catch (_) {
+      comfort = 0.5;
+    }
+    comfort = comfort.clamp(0.0, 1.0).toDouble();
+
+    return base + (1.0 - base) * comfort;
+  }
+
+  /// Resuelve las 12 ganancias EQ a aplicar al motor para [preset],
+  /// re-derivándolas desde el audiograma cuando el preset trae
+  /// `gains == [0, ..., 0]` y NO se llama "Sin amplificación".
+  ///
+  /// Réplica funcional del helper homónimo del paciente
+  /// (`PACIENTE/.../home_screen.dart`). Cubre el caso de bundles
+  /// legacy donde un preset con todos los gains a cero (con
+  /// tolerancia `1e-6`) indica un bundle malformado en lugar de un
+  /// bypass intencional. El único preset legítimo con gains-cero es
+  /// "Sin amplificación" (comparación case-sensitive, sin `trim`).
+  ///
+  /// Reglas (Req 5.1, 5.2, 5.3, 5.4, 5.5):
+  ///
+  /// 1. Si `preset.gains` no es todo-cero (con tolerancia `1e-6`) o
+  ///    `preset.name == 'Sin amplificación'`, retorna `preset.gains`
+  ///    sin tocar nada.
+  /// 2. Si todo-cero y el nombre es distinto, intenta re-derivar:
+  ///    - Si [audiogram] es `null` → warning "audiograma nulo" y
+  ///      retorna `preset.gains` como fallback (Req 5.3).
+  ///    - Si [audiogram] está incompleto en alguna frecuencia NAL-NL2
+  ///      (vía [_isAudiogramComplete]) → warning "audiograma
+  ///      incompleto" y retorna `preset.gains` (Req 5.3).
+  ///    - Si el prescriptor lanza → warning "prescriptor falló" y
+  ///      retorna `preset.gains` (Req 5.4).
+  ///    - En éxito: log informativo con el nombre del preset y las
+  ///      12 ganancias re-derivadas, retorna esas ganancias (Req 5.5).
+  ///
+  /// **Nota de mapeo Dart**: el campo se llama `gains` en
+  /// [EqPreset] (técnico) pero `gainsDb` en `BundlePreset`
+  /// (paciente). La semántica es idéntica — ganancias en dB para las
+  /// 12 bandas estándar. El docstring del design.md usa `gainsDb`
+  /// porque traza con la app del paciente; esta implementación lee
+  /// `preset.gains` que es el nombre real del campo en el técnico.
+  ///
+  /// La firma es `Future` para permitir prescriptores asíncronos en
+  /// el futuro; la implementación actual del [GainPrescriber] del
+  /// técnico es sincrónica, así que el `Future` se completa en el
+  /// mismo frame.
+  ///
+  /// Requisitos: 5.1, 5.2, 5.3, 5.4, 5.5
+  Future<List<double>> _resolveGainsForPreset(
+    EqPreset preset,
+    Audiogram? audiogram,
+  ) async {
+    const tolerance = 1e-6;
+    final allZero = preset.gains.every((g) => g.abs() <= tolerance);
+
+    // Req 5.1, 5.2: comparación case-sensitive, sin trim, contra el
+    // string canónico "Sin amplificación".
+    if (!allZero || preset.name == 'Sin amplificación') {
+      return preset.gains;
+    }
+
+    // Req 5.3: audiograma nulo → warning con causa específica.
+    if (audiogram == null) {
+      developer.log(
+        '_resolveGainsForPreset: re-derivación omitida para preset='
+        '"${preset.name}": audiograma nulo. Usando gains del preset.',
+        name: 'AmplificationBloc',
+        level: 900, // WARNING
+      );
+      return preset.gains;
+    }
+
+    // Req 5.3: audiograma incompleto en alguna freq NAL-NL2 →
+    // warning con causa específica.
+    if (!_isAudiogramComplete(audiogram)) {
+      developer.log(
+        '_resolveGainsForPreset: re-derivación omitida para preset='
+        '"${preset.name}": audiograma incompleto (faltan bandas o '
+        'umbrales fuera de rango). Usando gains del preset.',
+        name: 'AmplificationBloc',
+        level: 900, // WARNING
+      );
+      return preset.gains;
+    }
+
+    // Req 5.4: excepción del prescriptor → warning, fallback a gains
+    // originales del preset.
+    try {
+      final derived = _gainPrescriber.prescribeFromAudiogram(audiogram);
+      // Req 5.5: log informativo en re-derivación exitosa.
+      developer.log(
+        '_resolveGainsForPreset: re-derivación exitosa para preset='
+        '"${preset.name}". Gains=$derived',
+        name: 'AmplificationBloc',
+        level: 800, // INFO
+      );
+      return derived;
+    } catch (e, st) {
+      developer.log(
+        '_resolveGainsForPreset: prescriptor falló para preset='
+        '"${preset.name}": $e. Usando gains del preset.',
+        name: 'AmplificationBloc',
+        level: 900, // WARNING
+        error: e,
+        stackTrace: st,
+      );
+      return preset.gains;
+    }
+  }
+
   /// Promedia los 12 knees de compresión por banda y aplica el delta
   /// para producir el knee broadband enviado al bridge. Clampa al
   /// rango `[35, 65] dB SPL`.
@@ -2152,17 +3737,41 @@ class AmplificationBloc
     }
   }
 
-  /// Cancela suscripciones a streams.
-  void _cancelSubscriptions() {
-    _inputLevelSubscription?.cancel();
+  /// Cancela todas las suscripciones a streams del engine y espera
+  /// que cada cancelación se complete antes de retornar.
+  ///
+  /// **tecnico-paciente-feature-parity — task 5.2 (Req 3.6)**:
+  /// `StreamSubscription.cancel()` retorna un `Future<void>` que se
+  /// completa cuando el stream subyacente liberó sus recursos. Para
+  /// garantizar que `audioBridge.stopAudio` no compita con callbacks
+  /// pendientes (`InputLevelUpdated`, `AudioEngineState`) que el
+  /// motor pudo haber emitido justo antes del stop, esperamos cada
+  /// `.cancel()` secuencialmente antes de devolver el control al
+  /// caller. El orden secuencial mantiene el contrato simple y es
+  /// equivalente al usado en el paciente.
+  ///
+  /// Nullea cada referencia tras cancelar para que un segundo
+  /// `_cancelSubscriptions()` (por ejemplo desde `close()` tras un
+  /// `_onStopAmplification`) sea idempotente.
+  ///
+  /// Requisitos: 3.6
+  Future<void> _cancelSubscriptions() async {
+    final inputSub = _inputLevelSubscription;
     _inputLevelSubscription = null;
-    _engineStateSubscription?.cancel();
+    if (inputSub != null) {
+      await inputSub.cancel();
+    }
+
+    final engineSub = _engineStateSubscription;
     _engineStateSubscription = null;
+    if (engineSub != null) {
+      await engineSub.cancel();
+    }
   }
 
   @override
-  Future<void> close() {
-    _cancelSubscriptions();
+  Future<void> close() async {
+    await _cancelSubscriptions();
     return super.close();
   }
 }

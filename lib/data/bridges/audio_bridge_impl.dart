@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/services.dart';
 
@@ -134,6 +135,32 @@ class AudioBridgeImpl implements AudioBridge {
   }
 
   @override
+  Future<void> setDnnIntensity(double intensity) async {
+    // Tolerar NaN/Infinity como no-op para no romper la rama OFF de
+    // Modo Música ante una persistencia corrupta de Settings (Req 1.9).
+    if (intensity.isNaN || intensity.isInfinite) {
+      developer.log(
+        'setDnnIntensity: valor no finito ($intensity) — operación '
+        'omitida. El valor se mantiene en el motor.',
+        name: _logName,
+        level: 900,
+      );
+      return;
+    }
+    final clamped = intensity.clamp(0.0, 1.0);
+    // El handler Kotlin existente lee el argumento `intensity` (no
+    // `value` como el paciente) — ver
+    // `AudioMethodChannel.kt#setDnnIntensity`. El comportamiento JNI
+    // subyacente (`nativeBridge.nativeSetDnnIntensity`) es idéntico al
+    // del paciente, así que la única diferencia es el nombre del
+    // argumento dentro del payload del MethodChannel.
+    await _safeInvokeVoid(
+      'setDnnIntensity',
+      <String, dynamic>{'intensity': clamped},
+    );
+  }
+
+  @override
   Future<void> updateTnrEnabled(bool enabled) async {
     await _methodChannel.invokeMethod<void>('updateTnrEnabled', {
       'enabled': enabled,
@@ -156,6 +183,188 @@ class AudioBridgeImpl implements AudioBridge {
     await _methodChannel.invokeMethod<void>('setMpoThresholdDbSpl', {
       'thresholdDbSpl': thresholdDbSpl,
     });
+  }
+
+  // ─── MHL Prescripción & Modo Música ─────────────────────────────────────
+  //
+  // Replica las firmas y nombres wire-level del paciente
+  // (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart` →
+  // `setMhlPrescriptionEnabled` y `setMusicModeEnabled`). Los handlers
+  // Kotlin equivalentes en `AudioMethodChannelPatient.kt` aceptan el
+  // argumento `{enabled: Boolean}` y no devuelven payload (`result.success(null)`).
+  //
+  // En `MissingPluginException` o `PlatformException` se registra warning
+  // vía `dart:developer.log` y se retorna sin propagar el error: el caller
+  // (bloc) trata estos modos como best-effort sobre el motor nativo.
+  //
+  // Requisitos: 1.1 (MHL Prescripción), 1.2 (Modo Música), 6.2/6.3/6.4
+  // (Diagnostic Recording, abajo).
+
+  @override
+  Future<void> setMhlPrescriptionEnabled(bool enabled) async {
+    await _safeInvokeVoid(
+      'setMhlPrescriptionEnabled',
+      <String, dynamic>{'enabled': enabled},
+    );
+  }
+
+  @override
+  Future<void> setMusicModeEnabled(bool enabled) async {
+    await _safeInvokeVoid(
+      'setMusicModeEnabled',
+      <String, dynamic>{'enabled': enabled},
+    );
+  }
+
+  // ─── Diagnostic Recording (DSP Verification) ────────────────────────────
+
+  @override
+  Future<bool> startDiagnosticRecording(String filePath) async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>(
+        'startDiagnosticRecording',
+        <String, dynamic>{'filePath': filePath},
+      );
+      return result ?? false;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'startDiagnosticRecording: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return false;
+    } on PlatformException catch (e) {
+      developer.log(
+        'startDiagnosticRecording PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return false;
+    }
+  }
+
+  @override
+  Future<int> stopDiagnosticRecording() async {
+    try {
+      final result =
+          await _methodChannel.invokeMethod<int>('stopDiagnosticRecording');
+      return result ?? -1;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'stopDiagnosticRecording: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return -1;
+    } on PlatformException catch (e) {
+      developer.log(
+        'stopDiagnosticRecording PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return -1;
+    }
+  }
+
+  @override
+  Future<int> getDiagnosticRecordingProgress() async {
+    try {
+      final result = await _methodChannel
+          .invokeMethod<int>('getDiagnosticRecordingProgress');
+      return result ?? -1;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'getDiagnosticRecordingProgress: handler nativo no implementado: '
+        '${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return -1;
+    } on PlatformException catch (e) {
+      developer.log(
+        'getDiagnosticRecordingProgress PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return -1;
+    }
+  }
+
+  // ─── DSP Stage Metrics (Smart Scene polling + diagnóstico) ──────────────
+  //
+  // Replica el patrón del paciente (`AudioBridge.getDspStageMetrics`):
+  // invoca el handler Kotlin `getDspStageMetrics`, que ya está cableado en
+  // `AudioMethodChannel.kt` y delega en
+  // `NativeAudioBridge.getDspStageMetrics()` para construir el mapa
+  // `Map<String, Any>?` con las claves de pipeline (incluyendo
+  // `environmentClass`).
+  //
+  // El handler nativo retorna `null` cuando el motor no está corriendo;
+  // este wrapper preserva ese contrato y, en `MissingPluginException` /
+  // `PlatformException` / cualquier otro `catch`, también retorna `null`
+  // tras emitir un warning vía `dart:developer.log`. El polling de
+  // `SmartSceneScreen` trata `null` como tick fallido (no actualiza
+  // `_lastEnvClass`, no despacha) — Req 2.12.
+
+  @override
+  Future<Map<String, dynamic>?> getDspStageMetrics() async {
+    try {
+      final result = await _methodChannel.invokeMethod('getDspStageMetrics');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return null;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'getDspStageMetrics: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return null;
+    } on PlatformException catch (e) {
+      developer.log(
+        'getDspStageMetrics PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return null;
+    } catch (e) {
+      developer.log(
+        'getDspStageMetrics unexpected error: $e',
+        name: _logName,
+        level: 900,
+      );
+      return null;
+    }
+  }
+
+  /// Identificador de logger usado en los métodos del bridge que toleran
+  /// fallos nativos sin propagar excepción (MHL Prescripción, Modo Música,
+  /// Diagnostic Recording).
+  static const String _logName = 'AudioBridgeImpl';
+
+  /// Helper interno para setters void que no deben propagar errores del
+  /// handler nativo. Replica el patrón `_safeInvoke` del paciente
+  /// (`AudioBridge._safeInvoke`).
+  Future<void> _safeInvokeVoid(
+    String method, [
+    Map<String, dynamic>? args,
+  ]) async {
+    try {
+      await _methodChannel.invokeMethod<void>(method, args);
+    } on MissingPluginException catch (e) {
+      developer.log(
+        '$method: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+    } on PlatformException catch (e) {
+      developer.log(
+        '$method PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+    }
   }
 
   @override

@@ -75,6 +75,16 @@ class AmplificationActive extends AmplificationState {
   /// Requisito 4.5: acción explícita del usuario para activar/desactivar.
   final bool mhlActive;
 
+  /// Indica si el "Modo Música" está activo (NR=0 + DNN=0).
+  ///
+  /// Mirror del flag `musicModeEnabled` persistido en `SettingsRepository`.
+  /// La UI lo usa para reflejar el toggle y para que `SmartSceneScreen`
+  /// cancele su polling (Req 2.10) — el polling se detiene cuando MHL
+  /// Prescripción O Modo Música están activos.
+  ///
+  /// Requisitos: 1.2, 1.4, 1.11
+  final bool musicModeActive;
+
   /// Indica si el PTA del paciente supera 25 dB HL.
   /// Cuando true, la UI muestra una advertencia recomendando
   /// el modo de prescripción estándar. Requisito 4.3.
@@ -167,6 +177,7 @@ class AmplificationActive extends AmplificationState {
     this.activeNrLevel = 0,
     this.prescriberMode = PrescriberMode.smartNl2,
     this.mhlActive = false,
+    this.musicModeActive = false,
     this.ptaWarning = false,
     this.nl2Gains = const [],
     this.nl3Gains = const [],
@@ -191,6 +202,7 @@ class AmplificationActive extends AmplificationState {
     int? activeNrLevel,
     PrescriberMode? prescriberMode,
     bool? mhlActive,
+    bool? musicModeActive,
     bool? ptaWarning,
     List<double>? nl2Gains,
     List<double>? nl3Gains,
@@ -217,6 +229,7 @@ class AmplificationActive extends AmplificationState {
       activeNrLevel: activeNrLevel ?? this.activeNrLevel,
       prescriberMode: prescriberMode ?? this.prescriberMode,
       mhlActive: mhlActive ?? this.mhlActive,
+      musicModeActive: musicModeActive ?? this.musicModeActive,
       ptaWarning: ptaWarning ?? this.ptaWarning,
       nl2Gains: nl2Gains ?? this.nl2Gains,
       nl3Gains: nl3Gains ?? this.nl3Gains,
@@ -245,6 +258,7 @@ class AmplificationActive extends AmplificationState {
         activeNrLevel,
         prescriberMode,
         mhlActive,
+        musicModeActive,
         ptaWarning,
         nl2Gains,
         nl3Gains,
