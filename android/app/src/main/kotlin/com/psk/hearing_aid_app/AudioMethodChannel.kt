@@ -419,6 +419,9 @@ class AudioMethodChannel(
         context.startForegroundService(serviceIntent)
 
         // Also start via the direct bridge for level polling
+        // CRÍTICO: setear el flag de Modo Conversación ANTES de start() para
+        // que el motor abra los streams con Usage::VoiceCommunication (SCO).
+        nativeBridge.nativeSetConversationMode(conversationMode)
         nativeBridge.start(
             sampleRate = sampleRate,
             bufferSize = bufferSize,
@@ -516,6 +519,8 @@ class AudioMethodChannel(
         // Restart con SR/buffer adecuados al modo actual.
         val sampleRate = if (conversationMode) 16_000 else 48_000
         val bufferSize = if (conversationMode) 64 else 256
+        // CRÍTICO: flag de Modo Conversación ANTES de start() (ruteo SCO).
+        nativeBridge.nativeSetConversationMode(conversationMode)
         nativeBridge.start(
             sampleRate = sampleRate,
             bufferSize = bufferSize,

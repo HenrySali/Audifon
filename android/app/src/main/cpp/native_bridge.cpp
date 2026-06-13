@@ -52,6 +52,13 @@ std::unique_ptr<AudioEngine> g_engine;
 /// Flag atómico que indica si el engine está activo.
 std::atomic<bool> g_running{false};
 
+/// Flag del "Modo Conversación" (SCO + baja latencia). Lo setea
+/// `nativeSetConversationMode` ANTES de `nativeStart`, y `nativeStart` lo
+/// copia a `AudioEngineConfig.conversationMode` para que los streams Oboe
+/// se abran con Usage::VoiceCommunication (ruteo al canal SCO). Spec:
+/// modo-conversacion-sco.
+std::atomic<bool> g_conversationMode{false};
+
 } // namespace anónimo
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -275,6 +282,9 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     engineConfig.channels = 1;
     engineConfig.mpoThresholdDbSpl = mpoThresholdDbSpl;
     engineConfig.splOffset = splOffset;
+    // Modo Conversación: leído del flag global que setea
+    // nativeSetConversationMode() antes de este start.
+    engineConfig.conversationMode = g_conversationMode.load(std::memory_order_acquire);
 
     // Iniciar el AudioEngine (crea Oboe streams + hilo de audio)
     if (!g_engine->start(engineConfig)) {
@@ -548,6 +558,29 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetOutputDeviceId(
     }
 
     return g_engine->getOutputDeviceId();
+}
+
+/// Setea el flag del "Modo Conversación" (SCO + baja latencia).
+///
+/// IMPORTANTE: debe llamarse ANTES de `nativeStart` (o antes de reiniciar
+/// el motor con stop+start). `nativeStart` copia este flag a
+/// `AudioEngineConfig.conversationMode`, que decide si los streams Oboe se
+/// abren con Usage::VoiceCommunication (ruteo SCO) o Usage::Media (A2DP).
+///
+/// Llamarlo con el motor ya corriendo NO cambia los streams en caliente:
+/// el caller (handler Kotlin) debe hacer stop → setConversationMode → start.
+///
+/// Spec: modo-conversacion-sco.
+///
+/// @param enabled true para Modo Conversación (SCO), false para normal (A2DP).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetConversationMode(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    g_conversationMode.store(enabled == JNI_TRUE, std::memory_order_release);
+    LOGI("nativeSetConversationMode: %s", (enabled == JNI_TRUE) ? "ON" : "OFF");
 }
 
 /// Obtiene la clase de entorno actual detectada por el clasificador automático.

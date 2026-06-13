@@ -28,6 +28,15 @@ struct AudioEngineConfig {
     float mpoThresholdDbSpl = 110.0f;   ///< Threshold del MPO en dB SPL (FDA OTC: 111)
     float splOffset = 93.0f;             ///< Offset dBFS → dB SPL (93 para mic celular con AGC)
     int builtInMicDeviceId = 0;          ///< Device ID for built-in mic (from Kotlin)
+    /// Modo Conversación (SCO + baja latencia). Cuando es true, los streams
+    /// Oboe se abren con Usage::VoiceCommunication + InputPreset::VoiceCommunication
+    /// + SharingMode::Shared para que el sistema rutee el audio al canal SCO
+    /// Bluetooth (que el lado Kotlin activó con MODE_IN_COMMUNICATION +
+    /// setCommunicationDevice/startBluetoothSco). Sin esto, el output usa
+    /// Usage::Media que se rutea a A2DP — y A2DP queda mudo cuando SCO toma
+    /// el enlace BT (son perfiles mutuamente excluyentes). Spec:
+    /// modo-conversacion-sco.
+    bool conversationMode = false;
 };
 
 /// Snapshot de métricas de latencia del motor de audio.

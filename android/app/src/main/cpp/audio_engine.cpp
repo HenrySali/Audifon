@@ -74,8 +74,16 @@ oboe::Result AudioEngine::openInputStream() {
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
 
-    // Use VoicePerformance on API 29+, fallback to Generic on older devices
-    if (android_get_device_api_level() >= 29) {
+    // Input preset:
+    //  - Modo Conversación (SCO): VoiceCommunication enruta al mic del canal
+    //    de comunicación (SCO) y habilita el AEC/NS del modem para baja
+    //    latencia. Es lo que usan las apps de llamada.
+    //  - Modo normal: VoicePerformance (API 29+) prioriza fidelidad sobre
+    //    procesamiento del modem, ideal para amplificación de ambiente.
+    if (config_.conversationMode) {
+        builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
+        LOGI("Input preset: VoiceCommunication (conversation mode / SCO)");
+    } else if (android_get_device_api_level() >= 29) {
         builder.setInputPreset(oboe::InputPreset::VoicePerformance);
     } else {
         builder.setInputPreset(oboe::InputPreset::Generic);
@@ -114,8 +122,21 @@ oboe::Result AudioEngine::openOutputStream() {
     builder.setChannelCount(1);
     builder.setFormat(oboe::AudioFormat::Float);
     builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-    builder.setSharingMode(oboe::SharingMode::Exclusive);
-    builder.setUsage(oboe::Usage::Media);
+    if (config_.conversationMode) {
+        // Modo Conversación (SCO): el sistema sólo enruta al canal SCO los
+        // streams con Usage::VoiceCommunication. Con Usage::Media el audio
+        // iría a A2DP — que queda MUDO cuando SCO toma el enlace Bluetooth
+        // (A2DP y SCO son mutuamente excluyentes). SharingMode::Shared
+        // porque SCO no soporta Exclusive (devuelve silencio si se le pide).
+        builder.setUsage(oboe::Usage::VoiceCommunication);
+        builder.setContentType(oboe::ContentType::Speech);
+        builder.setSharingMode(oboe::SharingMode::Shared);
+        LOGI("Output: Usage::VoiceCommunication + Shared (conversation mode / SCO)");
+    } else {
+        // Modo normal: música/ambiente por A2DP a máxima calidad.
+        builder.setUsage(oboe::Usage::Media);
+        builder.setSharingMode(oboe::SharingMode::Exclusive);
+    }
     builder.setAudioApi(oboe::AudioApi::Unspecified);
     // FullDuplexStream IS an AudioStreamDataCallback. Setting it as the
     // output stream's data callback means onAudioReady() fires on the output

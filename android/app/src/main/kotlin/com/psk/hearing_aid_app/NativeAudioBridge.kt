@@ -303,6 +303,14 @@ class NativeAudioBridge {
 
     private external fun nativeGetOutputDeviceId(): Int
 
+    /**
+     * Setea el flag del "Modo Conversación" (SCO + baja latencia). Debe
+     * llamarse ANTES de [start] (o antes de un stop→start) para que el
+     * motor abra los streams Oboe con Usage::VoiceCommunication y rutee el
+     * audio al canal SCO Bluetooth. Spec: modo-conversacion-sco.
+     */
+    external fun nativeSetConversationMode(enabled: Boolean)
+
     // ─── Spectrum Analyzer (implementados en native_bridge.cpp) ──────────
 
     external fun nativeStartSpectrumAnalysis()
