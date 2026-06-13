@@ -216,6 +216,31 @@ class AudioBridgeImpl implements AudioBridge {
     );
   }
 
+  @override
+  Future<String> setConversationMode(bool enabled) async {
+    try {
+      final res = await _methodChannel.invokeMethod<String>(
+        'setConversationMode',
+        <String, dynamic>{'enabled': enabled},
+      );
+      return res ?? 'failed';
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'setConversationMode: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return 'failed';
+    } on PlatformException catch (e) {
+      developer.log(
+        'setConversationMode PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return 'failed';
+    }
+  }
+
   // ─── Diagnostic Recording (DSP Verification) ────────────────────────────
 
   @override

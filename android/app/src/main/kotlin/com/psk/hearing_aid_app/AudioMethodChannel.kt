@@ -67,6 +67,13 @@ class AudioMethodChannel(
 
     private val nativeBridge = NativeAudioBridge()
 
+    // ─── Modo Conversación (SCO + 16 kHz) ─────────────────────────────────
+    // Si el toggle está ON, el motor arranca a 16 kHz / 64 frames y el audio
+    // se rutea por SCO (BT) o builtin con MODE_IN_COMMUNICATION. Si está OFF
+    // (default), se mantiene el comportamiento histórico: A2DP @ 48 kHz.
+    private val scoController = BluetoothScoController(context)
+    @Volatile private var conversationMode: Boolean = false
+
     /** Sink para emitir nivel de entrada a Flutter. */
     private var levelEventSink: EventChannel.EventSink? = null
 
@@ -308,6 +315,10 @@ class AudioMethodChannel(
                 "getInputLevel" -> handleGetInputLevel(call, result)
                 "calibrateMicrophone" -> handleCalibrateMicrophone(call, result)
                 "calibrateHeadphones" -> handleCalibrateHeadphones(call, result)
+                "setConversationMode" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    handleSetConversationMode(enabled, result)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
@@ -342,8 +353,16 @@ class AudioMethodChannel(
      * Inicia el foreground service para mantener el audio en segundo plano.
      */
     private fun handleStartAudio(call: MethodCall, result: MethodChannel.Result) {
-        val sampleRate = call.argument<Int>("sampleRate") ?: 48000
-        val bufferSize = call.argument<Int>("bufferSize") ?: 256
+        val argSampleRate = call.argument<Int>("sampleRate") ?: 48000
+        val argBufferSize = call.argument<Int>("bufferSize") ?: 256
+
+        // Si el toggle "Modo Conversación" está ON, ignoramos los valores
+        // que pasó Dart y forzamos 16 kHz / 64 frames para correr el pipeline
+        // en modo voz a baja latencia. Si está OFF, respetamos el SR/buffer
+        // que viene en los args (default 48 kHz / 256).
+        val sampleRate = if (conversationMode) 16_000 else argSampleRate
+        val bufferSize = if (conversationMode) 64 else argBufferSize
+
         val eqGainsList = call.argument<List<Double>>("eqGains") ?: List(12) { 0.0 }
         val volumeDb = call.argument<Double>("volumeDb") ?: 0.0
         val expansionKnee = call.argument<Double>("expansionKnee") ?: 35.0
@@ -372,6 +391,13 @@ class AudioMethodChannel(
         lastMpoDbSpl = mpoThresholdDbSpl.toFloat()
 
         emitState("starting")
+
+        // Si Modo Conversación está activo, levantar SCO + MODE_IN_COMMUNICATION
+        // ANTES de abrir los streams Oboe.
+        if (conversationMode && !scoController.isActive()) {
+            val r = scoController.start()
+            Log.i(TAG, "handleStartAudio: conversationMode=true → SCO start=$r")
+        }
 
         // Start the foreground service to keep audio alive in background
         val serviceIntent = Intent(context, AudioForegroundService::class.java).apply {
@@ -419,6 +445,12 @@ class AudioMethodChannel(
     private fun handleStopAudio(result: MethodChannel.Result) {
         nativeBridge.stop()
 
+        // Si el modo conversación estaba ON, liberar SCO también para no
+        // dejar el sistema en MODE_IN_COMMUNICATION sin streams encima.
+        if (conversationMode) {
+            scoController.stop()
+        }
+
         // Stop the foreground service
         val serviceIntent = Intent(context, AudioForegroundService::class.java).apply {
             action = AudioForegroundService.ACTION_STOP
@@ -427,6 +459,87 @@ class AudioMethodChannel(
 
         emitState("idle")
         result.success(null)
+    }
+
+    /**
+     * Activa o desactiva el "Modo Conversación".
+     *
+     * ON  → si el motor está corriendo, lo detiene, levanta SCO con
+     *       [BluetoothScoController] y vuelve a iniciar a 16 kHz / 64
+     *       frames con MODE_IN_COMMUNICATION. Si el motor no está
+     *       corriendo, sólo guarda el flag y el próximo `startAudio`
+     *       arrancará con el SR adecuado.
+     * OFF → libera SCO + restaura modo NORMAL. Si el motor está corriendo,
+     *       lo reinicia a 48 kHz / 256 frames (A2DP por default).
+     *
+     * Devuelve un string al lado Dart con el resultado del SCO:
+     *   - "connected" / "fallback_builtin" / "failed" / "engine_idle" /
+     *     "disabled".
+     */
+    private fun handleSetConversationMode(
+        enabled: Boolean,
+        result: MethodChannel.Result
+    ) {
+        if (conversationMode == enabled) {
+            result.success(if (scoController.isActive()) "connected" else "engine_idle")
+            return
+        }
+        conversationMode = enabled
+
+        val engineRunning = nativeBridge.getOutputDeviceId() >= 0
+        if (!engineRunning) {
+            if (!enabled) {
+                scoController.stop()
+            }
+            Log.i(TAG, "setConversationMode($enabled) — engine idle, flag stored")
+            result.success("engine_idle")
+            return
+        }
+
+        // Engine corriendo → reiniciar.
+        nativeBridge.stop()
+
+        val scoStatus: String
+        if (enabled) {
+            val r = scoController.start()
+            scoStatus = when (r) {
+                BluetoothScoController.Result.Connected -> "connected"
+                BluetoothScoController.Result.NoBtFallbackBuiltin -> "fallback_builtin"
+                BluetoothScoController.Result.Failed -> "failed"
+            }
+            Log.i(TAG, "setConversationMode(true) → SCO start result=$scoStatus")
+        } else {
+            scoController.stop()
+            scoStatus = "disabled"
+        }
+
+        // Restart con SR/buffer adecuados al modo actual.
+        val sampleRate = if (conversationMode) 16_000 else 48_000
+        val bufferSize = if (conversationMode) 64 else 256
+        nativeBridge.start(
+            sampleRate = sampleRate,
+            bufferSize = bufferSize,
+            eqGains = lastEqGains,
+            volumeDb = lastVolumeDb,
+            expansionKnee = lastExpKnee,
+            expansionRatio = lastExpRatio,
+            compressionKnee = lastCompKnee,
+            compressionRatio = lastCompRatio,
+            attackMs = lastAttackMs,
+            releaseMs = lastReleaseMs,
+            nrLevel = 0,
+            mpoThresholdDbSpl = lastMpoDbSpl
+        )
+
+        // Re-init DNN: el motor anterior se destruyó, así que el .onnx hay
+        // que cargarlo en el nuevo `g_engine`.
+        try {
+            nativeBridge.nativeInitDnnDenoiser(context.assets)
+        } catch (t: Throwable) {
+            Log.w(TAG, "setConversationMode: re-initDnnDenoiser failed: ${t.message}")
+        }
+
+        result.success(scoStatus)
     }
 
     /**

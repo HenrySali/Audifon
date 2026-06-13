@@ -148,4 +148,11 @@ abstract class SettingsRepository {
   ///
   /// Requisitos: 6.8
   Future<void> setNrLevel(int value);
+
+  /// Estado del toggle "Modo Conversación" (SCO + 16 kHz a baja latencia).
+  /// Default `false` cuando la key está ausente.
+  bool get conversationModeEnabled;
+
+  /// Persiste el estado del toggle "Modo Conversación".
+  Future<void> setConversationModeEnabled(bool value);
 }

@@ -32,6 +32,9 @@ class _SettingsKeys {
   /// constantes; el valor en disco (`'nrLevel'`) coincide con el del
   /// paciente.
   static const String nrLevelV2 = 'nrLevel';
+
+  /// Modo Conversación (SCO + 16 kHz). Default false.
+  static const String conversationModeEnabled = 'conversationModeEnabled';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -237,6 +240,15 @@ class SettingsRepositoryImpl implements SettingsRepository {
     // correcto a cualquier consumidor antiguo.
     await _box.put(_SettingsKeys.nrLevelV2, clamped);
     await _box.put(_SettingsKeys.lastNrLevel, clamped);
+  }
+
+  @override
+  bool get conversationModeEnabled =>
+      _box.get(_SettingsKeys.conversationModeEnabled) == true;
+
+  @override
+  Future<void> setConversationModeEnabled(bool value) async {
+    await _box.put(_SettingsKeys.conversationModeEnabled, value);
   }
 
   /// Lee una key con un valor numérico esperado en `[0.0, 1.0]`. Trata

@@ -24,6 +24,8 @@ import '../widgets/manual_eq_overlay.dart';
 import '../widgets/safety_warning_widget.dart';
 import '../widgets/stale_preset_list.dart';
 import '../../domain/entities/prescription_mode.dart';
+import '../../data/bridges/audio_bridge_impl.dart';
+import '../../data/repositories/settings_repository_impl.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
@@ -603,6 +605,13 @@ class _ActiveView extends StatelessWidget {
                   .add(ToggleMusicMode(activate: activate));
             },
           ),
+          const SizedBox(height: 12),
+          // Modo Conversación (SCO + 16 kHz a baja latencia). NO pasa por
+          // el AmplificationBloc — es un toggle del motor (ruteo + SR), no
+          // una decisión clínica de prescripción. El widget self-contained
+          // persiste en `settings_box` (key `conversationModeEnabled`) y
+          // delega al MethodChannel del lado nativo.
+          const _ConversationModeToggleCard(),
           // Comparación visual NL2 vs NL3 (solo cuando hay datos NL3 y el
           // modo activo es Smart-NL3). Tap → bottom sheet con detalle por banda.
           if (state.prescriberMode == PrescriberMode.smartNl3 &&
@@ -2538,6 +2547,127 @@ class _SmartSceneButton extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+// =============================================================================
+// MODO CONVERSACIÓN — toggle local (no pasa por el AmplificationBloc)
+// =============================================================================
+
+/// Toggle "Modo Conversación" — rutea audio por SCO Bluetooth (o builtin si
+/// no hay BT) con `MODE_IN_COMMUNICATION` y baja el sample rate del pipeline
+/// a 16 kHz / 64 frames. Latencia BT cae de ~200 ms a ~25 ms.
+///
+/// El toggle es **local** al widget: persiste en el Hive box
+/// `settings_box` (key `conversationModeEnabled`, ver
+/// [SettingsRepositoryImpl]) y delega al MethodChannel del lado nativo
+/// vía [AudioBridgeImpl.setConversationMode]. NO emite ningún evento del
+/// [AmplificationBloc] porque no es una decisión clínica de prescripción
+/// (no toca EQ/WDRC/MPO/NR/DNN); es un control del motor (ruteo + SR).
+class _ConversationModeToggleCard extends StatefulWidget {
+  const _ConversationModeToggleCard();
+
+  @override
+  State<_ConversationModeToggleCard> createState() =>
+      _ConversationModeToggleCardState();
+}
+
+class _ConversationModeToggleCardState
+    extends State<_ConversationModeToggleCard> {
+  final AudioBridgeImpl _bridge = AudioBridgeImpl();
+  bool _enabled = false;
+  String _status = '';
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPersisted();
+  }
+
+  void _loadPersisted() {
+    if (!Hive.isBoxOpen(settingsBoxName)) return;
+    final box = Hive.box<dynamic>(settingsBoxName);
+    final v = box.get('conversationModeEnabled') == true;
+    if (mounted) setState(() => _enabled = v);
+  }
+
+  Future<void> _onChanged(bool v) async {
+    if (_busy) return;
+    setState(() {
+      _enabled = v;
+      _busy = true;
+    });
+    try {
+      if (Hive.isBoxOpen(settingsBoxName)) {
+        await Hive.box<dynamic>(settingsBoxName)
+            .put('conversationModeEnabled', v);
+      }
+      final res = await _bridge.setConversationMode(v);
+      if (mounted) setState(() => _status = res);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _subtitle() {
+    if (!_enabled) {
+      return 'Latencia BT alta — A2DP @ 48 kHz (default)';
+    }
+    switch (_status) {
+      case 'connected':
+        return 'SCO Bluetooth activo · ~25 ms de latencia';
+      case 'fallback_builtin':
+        return 'BT no conectado · corriendo por parlante interno';
+      case 'failed':
+        return 'No se pudo activar — el sistema bloqueó el modo';
+      case 'engine_idle':
+        return 'Se aplicará al iniciar la amplificación';
+      default:
+        return 'Baja latencia para conversaciones cara-a-cara';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213e),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _enabled
+              ? const Color(0x9900BCD4) // Colors.cyan @ alpha 0.6
+              : Colors.white12,
+        ),
+      ),
+      child: SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Row(
+          children: [
+            Icon(Icons.record_voice_over, size: 20, color: Colors.cyanAccent),
+            SizedBox(width: 8),
+            Text(
+              'Modo Conversación',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+              ),
+            ),
+          ],
+        ),
+        subtitle: Text(
+          _subtitle(),
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+        value: _enabled,
+        activeThumbColor: Colors.cyanAccent,
+        onChanged: _busy ? null : (v) => _onChanged(v),
       ),
     );
   }

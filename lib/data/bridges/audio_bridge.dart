@@ -118,6 +118,22 @@ abstract class AudioBridge {
   /// Requisitos: 1.2
   Future<void> setMusicModeEnabled(bool enabled);
 
+  /// Activa/desactiva "Modo Conversación": rutea audio por SCO Bluetooth
+  /// (o builtin si no hay BT) con `MODE_IN_COMMUNICATION`, y baja el
+  /// sample rate del pipeline a 16 kHz / 64 frames. Latencia BT cae
+  /// de ~200 ms a ~25 ms.
+  ///
+  /// Devuelve un string con el resultado de la activación SCO:
+  ///   - "connected"          → SCO BT activo, ruteado al auricular.
+  ///   - "fallback_builtin"   → no hay BT, queda en speaker/mic builtin
+  ///                            (igual con MODE_IN_COMMUNICATION → menor
+  ///                            latencia que A2DP).
+  ///   - "failed"             → no se pudo cambiar de modo.
+  ///   - "engine_idle"        → motor todavía no arrancó; el flag queda
+  ///                            registrado y se aplica en el próximo start.
+  ///   - "disabled"           → toggle OFF, vuelve a A2DP @ 48 kHz.
+  Future<String> setConversationMode(bool enabled);
+
   /// Stream del nivel de entrada del micrófono en dB SPL.
   ///
   /// Emitido aproximadamente 10 veces por segundo (~10 Hz).
