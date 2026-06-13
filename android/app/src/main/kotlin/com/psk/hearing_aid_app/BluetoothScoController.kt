@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.util.Log
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 /**
@@ -71,12 +72,12 @@ class BluetoothScoController(private val context: Context) {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            return startWithCommunicationDevice()
+            return startWithCommunicationDevice(timeoutMs)
         }
         return startLegacySco(timeoutMs)
     }
 
-    private fun startWithCommunicationDevice(): Result {
+    private fun startWithCommunicationDevice(timeoutMs: Long): Result {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return Result.Failed
 
         val devices = audioManager.availableCommunicationDevices
@@ -93,19 +94,68 @@ class BluetoothScoController(private val context: Context) {
             return Result.NoBtFallbackBuiltin
         }
 
+        // FIX bug "Modo Conversación engancha a veces sí, a veces no":
+        // setCommunicationDevice() devolver `true` solo significa que el PEDIDO
+        // de ruteo fue ACEPTADO. El enlace SCO/BLE real se aplica de forma
+        // ASÍNCRONA (~1-2 s después). Si el caller arranca el motor antes de que
+        // el ruteo esté vivo, a veces toma el SCO y a veces queda en builtin/mute.
+        // Por eso esperamos la confirmación con un OnCommunicationDeviceChangedListener
+        // + CountDownLatch (timeout = timeoutMs), igual que el camino legacy espera
+        // SCO_AUDIO_STATE_CONNECTED, antes de devolver Connected.
+        // Fuente: developer.android.com — "Audio Manager self-managed call guide"
+        // (escuchar el cambio de communication device permite saber cuándo el
+        // ruteo fue aplicado y el device elegido está activo) +
+        // AudioManager.OnCommunicationDeviceChangedListener (API 31+, API pública).
+        val confirmLatch = CountDownLatch(1)
+        val listener = AudioManager.OnCommunicationDeviceChangedListener { device ->
+            if (device != null && device.id == candidate.id) {
+                confirmLatch.countDown()
+            }
+        }
+        // Direct executor: el callback solo hace countDown, no requiere hilo propio.
+        val directExecutor = Executor { it.run() }
+        audioManager.addOnCommunicationDeviceChangedListener(directExecutor, listener)
+
         val ok = try {
             audioManager.setCommunicationDevice(candidate)
         } catch (e: Exception) {
             Log.w(TAG, "setCommunicationDevice threw: ${e.message}")
             false
         }
-        return if (ok) {
+
+        if (!ok) {
+            Log.w(TAG, "setCommunicationDevice returned false — fallback builtin")
+            audioManager.removeOnCommunicationDeviceChangedListener(listener)
+            try { audioManager.clearCommunicationDevice() } catch (_: Exception) { /* ignore */ }
+            active = true
+            activeScoDeviceId = -1
+            return Result.NoBtFallbackBuiltin
+        }
+
+        // Evitar perder el evento si el ruteo ya quedó aplicado antes de que el
+        // listener estuviera escuchando (race): chequear el estado actual.
+        if (audioManager.communicationDevice?.id == candidate.id) {
+            confirmLatch.countDown()
+        }
+
+        val confirmed = try {
+            confirmLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            false
+        }
+        audioManager.removeOnCommunicationDeviceChangedListener(listener)
+
+        // Doble chequeo final por si el listener no disparó pero el ruteo ya está vivo.
+        val routed = confirmed || audioManager.communicationDevice?.id == candidate.id
+
+        return if (routed) {
             active = true
             activeScoDeviceId = candidate.id
-            Log.i(TAG, "setCommunicationDevice OK — device=${candidate.productName} id=${candidate.id}")
+            Log.i(TAG, "setCommunicationDevice CONFIRMED — device=${candidate.productName} id=${candidate.id}")
             Result.Connected
         } else {
-            Log.w(TAG, "setCommunicationDevice returned false — fallback builtin")
+            Log.w(TAG, "setCommunicationDevice: timeout (${timeoutMs}ms) sin confirmar ruteo — liberando, fallback builtin")
+            try { audioManager.clearCommunicationDevice() } catch (_: Exception) { /* ignore */ }
             active = true
             activeScoDeviceId = -1
             Result.NoBtFallbackBuiltin
