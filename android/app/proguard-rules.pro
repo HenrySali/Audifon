@@ -45,6 +45,12 @@
 # url_launcher
 -keep class io.flutter.plugins.urllauncher.** { *; }
 
+# share_plus (export del diagnóstico DSP vía share sheet). Sin este keep,
+# R8 en release recorta/renombra el plugin y su ShareFileProvider, y
+# Share.shareXFiles lanza excepción en runtime → "Error al exportar".
+# (En debug no se nota porque R8 no corre.)
+-keep class dev.fluttercommunity.plus.share.** { *; }
+
 # flutter_tts
 -keep class com.tundralabs.fluttertts.** { *; }
 
