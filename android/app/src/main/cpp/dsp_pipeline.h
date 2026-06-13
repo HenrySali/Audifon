@@ -287,7 +287,9 @@ private:
     // --- Analizador de espectro ---
     SpectrumAnalyzer spectrumAnalyzer_;  ///< FFT 128-point para visualización
 
-    // --- High-pass filter state (2nd order Butterworth @ 150 Hz) ---
+    // --- High-pass filter state (2nd order Butterworth @ 100 Hz) ---
+    // NOTA: el cutoff real es 100 Hz (ver init() → computeHighPassCoeffs(.., 100.0f)).
+    // El comentario decía 150 Hz por error histórico; corregido (auditoría sim_v3).
     float hpX1_ = 0.0f, hpX2_ = 0.0f;
     float hpY1_ = 0.0f, hpY2_ = 0.0f;
     // Precomputed coefficients (computed in init() for actual sample rate)

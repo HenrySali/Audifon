@@ -57,15 +57,36 @@ static constexpr float kGainFloors[4] = {
 
 NoiseReduction::NoiseReduction() {
     // Inicializar coeficientes de filtro bandpass para cada sub-banda
+    // usando el sample rate por defecto (kNrSampleRate). DspPipeline::init()
+    // debe llamar init(sampleRate) para fijar la fs real (ver fix sim_v3).
     for (int i = 0; i < kNrSubBands; ++i) {
         bandCoeffs_[i] = computeBandpassCoeffs(
             kBandCenterFreqs[i],
             kNrBandWidthHz,
-            static_cast<float>(kNrSampleRate)
+            static_cast<float>(sampleRate_)
         );
     }
 
     // Inicializar estado
+    reset();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inicialización con sample rate real (FIX sim_v3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void NoiseReduction::init(int sampleRate) {
+    // Guardar la fs real y recomputar los bandpass para que los centros de las
+    // 8 sub-bandas (500..7500 Hz) queden bien ubicados. A 48 kHz el resultado
+    // es idéntico al del constructor (cambio behavior-neutral en runtime común).
+    sampleRate_ = (sampleRate > 0) ? sampleRate : kNrSampleRate;
+    for (int i = 0; i < kNrSubBands; ++i) {
+        bandCoeffs_[i] = computeBandpassCoeffs(
+            kBandCenterFreqs[i],
+            kNrBandWidthHz,
+            static_cast<float>(sampleRate_)
+        );
+    }
     reset();
 }
 

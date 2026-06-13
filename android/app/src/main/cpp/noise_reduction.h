@@ -41,6 +41,21 @@ public:
     NoiseReduction();
     ~NoiseReduction() = default;
 
+    /// Inicializa el NR con el sample rate real del sistema y recalcula los
+    /// coeficientes de los bandpass por sub-banda.
+    ///
+    /// FIX (auditoría sim_v3): antes los coeficientes se calculaban SOLO en el
+    /// constructor usando kNrSampleRate=48000 HARDCODEADO. Si el engine corría
+    /// a una fs distinta (p.ej. 16000), cada sub-banda quedaba mal ubicada
+    /// (centro_real = centro_nominal × fs/48000 → 3× abajo a 16 kHz), de modo
+    /// que el análisis Wiener por banda operaba sobre frecuencias equivocadas.
+    /// A 48 kHz el resultado es idéntico al anterior (cambio behavior-neutral
+    /// en el runtime habitual). Debe llamarse desde DspPipeline::init().
+    /// El NR sigue siendo solo-atenuante (ganancia ≤ 1.0), así que el cambio
+    /// no introduce riesgo de clipping.
+    /// @param sampleRate Frecuencia de muestreo real en Hz (típicamente 48000)
+    void init(int sampleRate);
+
     /// Procesa un bloque de audio aplicando reducción de ruido in-place.
     /// @param buffer Puntero al buffer de audio float32 [-1.0, +1.0]
     /// @param blockSize Número de muestras en el buffer
@@ -100,6 +115,10 @@ private:
 
     // --- Parámetros atómicos ---
     std::atomic<int> level_{1};  ///< Nivel NR: 0=off, 1=bajo, 2=medio, 3=alto
+
+    /// Sample rate real con el que se calcularon los bandpass (Hz).
+    /// Default kNrSampleRate (48000); sobrescrito por init() desde el pipeline.
+    int sampleRate_ = kNrSampleRate;
 
     // --- Estado por sub-banda ---
     BiquadCoeffs bandCoeffs_[kNrSubBands];  ///< Coeficientes de filtro por banda

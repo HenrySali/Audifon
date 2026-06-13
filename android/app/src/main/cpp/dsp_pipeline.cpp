@@ -60,6 +60,11 @@ void DspPipeline::init(const AudioConfig& config) {
     // Inicializar EQ con sample rate
     eq_.init(config.sampleRate);
 
+    // Inicializar NR con el sample rate real (FIX sim_v3): recalcula los
+    // bandpass de las 8 sub-bandas a la fs efectiva en vez de asumir 48 kHz.
+    // El NR solo atenúa, así que esto no introduce riesgo de clipping.
+    nr_.init(config.sampleRate);
+
     // Inicializar TNR (Transient Noise Reducer) — para impulsos abruptos
     tnr_.init(config.sampleRate);
     tnr_.setEnabled(true); // Activado por default
@@ -273,10 +278,16 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
         lastClipCount_.store(clips, std::memory_order_relaxed);
     }
 
-    // Métrica WDRC: determinar región basada en inputLevelDb
+    // Métrica WDRC: determinar región basada en inputLevelDb.
+    // FIX (auditoría sim_v3): antes usaba compKnee=55 hardcodeado, lo que
+    // reportaba la región equivocada cuando el clasificador de entorno había
+    // rampado el knee a otro valor (p.ej. 40 dB SPL en NOISE). Ahora usa el
+    // valor SUAVIZADO real (wdrcKneeRamp_) para que el diagnóstico coincida
+    // con la compresión efectivamente aplicada. Solo afecta la métrica de
+    // diagnóstico; no altera el audio.
     {
-        float expKnee = 35.0f;  // default
-        float compKnee = 55.0f; // default
+        const float expKnee = 35.0f;          // knee de expansión (default WdrcParams)
+        const float compKnee = wdrcKneeRamp_;  // knee de compresión REAL (rampado)
         int region = 1; // linear
         if (inputLevelDb < expKnee) region = 0; // expansion
         else if (inputLevelDb > compKnee) region = 2; // compression
