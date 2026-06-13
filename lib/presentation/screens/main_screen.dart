@@ -2666,7 +2666,7 @@ class _ConversationModeToggleCardState
           style: const TextStyle(color: Colors.white70, fontSize: 12),
         ),
         value: _enabled,
-        activeThumbColor: Colors.cyanAccent,
+        activeColor: Colors.cyanAccent,
         onChanged: _busy ? null : (v) => _onChanged(v),
       ),
     );
