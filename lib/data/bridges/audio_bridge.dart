@@ -198,7 +198,7 @@ abstract class AudioBridge {
 
   // ─── Diagnostic Recording (DSP Verification) ────────────────────────────
 
-  /// Inicia una grabación de diagnóstico DSP de 60 segundos.
+  /// Inicia una grabación de diagnóstico DSP de 15 segundos.
   ///
   /// [filePath] es el nombre del archivo WAV (se resuelve en el lado nativo).
   /// El nombre debe seguir el formato `diag_YYYYMMDD_HHMMSS.wav`.

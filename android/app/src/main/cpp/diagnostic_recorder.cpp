@@ -327,7 +327,7 @@ void DiagnosticRecorder::writerLoop() {
     // Hilo escritor dedicado:
     //   - Drena continuamente el ring buffer SPSC
     //   - Escribe datos PCM16 intercalados a disco
-    //   - Detecta auto-stop al alcanzar targetSamples (2,880,000)
+    //   - Detecta auto-stop al alcanzar targetSamples (720,000)
     //   - Finaliza encabezado WAV con tamaños reales
     //   - Maneja errores de I/O y overflow del ring buffer
 

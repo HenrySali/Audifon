@@ -93,7 +93,7 @@ static bool feedUntilComplete(DiagnosticRecorder& recorder,
     std::uniform_real_distribution<float> sampleDist(-1.0f, 1.0f);
 
     // Maximum iterations to prevent infinite loop
-    // At minimum 256 frames per block, need ~11250 blocks for 2,880,000 frames
+    // At minimum 256 frames per block, need ~2813 blocks for 720,000 frames
     const int maxIterations = 20000;
     int iteration = 0;
 

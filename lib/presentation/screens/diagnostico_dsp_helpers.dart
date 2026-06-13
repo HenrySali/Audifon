@@ -12,28 +12,28 @@
 /// Calcula los segundos restantes de la grabación de Diagnóstico DSP a partir
 /// del tiempo transcurrido en milisegundos.
 ///
-/// La grabación nominal dura 60 s (60 000 ms). El countdown decrece de 60 a 0
+/// La grabación nominal dura 15 s (15 000 ms). El countdown decrece de 15 a 0
 /// con resolución de 1 s, y queda saturado en 0 una vez alcanzados o
-/// sobrepasados los 60 000 ms (incluye el caso `elapsedMs == 60000`).
+/// sobrepasados los 15 000 ms (incluye el caso `elapsedMs == 15000`).
 ///
 /// Fórmula equivalente al paciente (Property 7 del diagnóstico):
 ///
 /// ```
-/// elapsedMs >= 60000 ? 0 : 60 - (elapsedMs ~/ 1000)
+/// elapsedMs >= 15000 ? 0 : 15 - (elapsedMs ~/ 1000)
 /// ```
 ///
 /// Garantías:
-/// - Total para todo `int` no negativo en `[0, 60000)` retorna un valor en
-///   `[1, 60]`.
-/// - Para todo `elapsedMs >= 60000` retorna exactamente `0` (sin valores
+/// - Total para todo `int` no negativo en `[0, 15000)` retorna un valor en
+///   `[1, 15]`.
+/// - Para todo `elapsedMs >= 15000` retorna exactamente `0` (sin valores
 ///   negativos).
-/// - `elapsedMs == 0` retorna `60`.
+/// - `elapsedMs == 0` retorna `15`.
 /// - Función pura: sin efectos secundarios y sin dependencias externas.
 ///
 /// Cubre los Acceptance Criteria 6.1 y 6.3 del spec
-/// `tecnico-paciente-feature-parity` (duración 60 s y polling de progreso a
+/// `tecnico-paciente-feature-parity` (duración 15 s y polling de progreso a
 /// 1 Hz cuyo display usa este countdown).
 int computeCountdown(int elapsedMs) {
-  if (elapsedMs >= 60000) return 0;
-  return 60 - (elapsedMs ~/ 1000);
+  if (elapsedMs >= 15000) return 0;
+  return 15 - (elapsedMs ~/ 1000);
 }

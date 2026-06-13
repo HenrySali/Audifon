@@ -10,13 +10,13 @@
 /// **Validates: Requirements 3.2, 3.3**
 ///
 /// Test strategy:
-///   - 10 iterations of full 60-second recordings (2,880,000 frames each)
+///   - 10 iterations of full 15-second recordings (720,000 frames each)
 ///   - Each iteration uses unique random float32 audio content in [-1.0, 1.0]
 ///   - After recording completes, read back the WAV file and verify a random
 ///     subset of 1000 sample positions per iteration
-///   - This is a pragmatic tradeoff: verifying all 2.88M frames × 10 iterations
+///   - This is a pragmatic tradeoff: verifying all 720K frames × 10 iterations
 ///     would be extremely slow; random sampling provides high confidence with
-///     bounded execution time (~60s per iteration for the recording itself)
+///     bounded execution time (~15s per iteration for the recording itself)
 ///
 /// Uses Google Test with a custom PRNG-based generator.
 
@@ -111,13 +111,13 @@ static std::vector<size_t> randomSubset(std::mt19937& rng, size_t maxIndex, size
 /// For any pair of audio buffers, left channel = int16(pre-DSP),
 /// right channel = int16(post-DSP), preserving temporal order.
 ///
-/// 10 iterations (full 60s recording each) with random audio content.
+/// 10 iterations (full 15s recording each) with random audio content.
 /// Verify 1000 random sample positions per iteration.
 TEST(DiagnosticRecorderPBT, Property3_ChannelAssignment) {
     // Configuration
     constexpr int NUM_ITERATIONS = 10;
     constexpr int SAMPLES_TO_VERIFY = 1000;
-    constexpr int64_t TARGET_FRAMES = 2880000; // 60s @ 48kHz
+    constexpr int64_t TARGET_FRAMES = 720000; // 15s @ 48kHz
     constexpr int BLOCK_SIZE = 256;            // Typical Oboe callback size
 
     // Use a fixed seed per iteration for reproducibility, but different per iteration
@@ -135,7 +135,7 @@ TEST(DiagnosticRecorderPBT, Property3_ChannelAssignment) {
 
         // ─── Generate random audio for entire recording ─────────────────
         // For memory efficiency, generate and feed in blocks rather than
-        // storing all 2.88M samples. We'll regenerate with the same seed
+        // storing all 720K samples. We'll regenerate with the same seed
         // later for verification.
         DiagnosticRecorder recorder;
         ASSERT_TRUE(recorder.start(filePath))
@@ -278,7 +278,7 @@ TEST(DiagnosticRecorderPBT, Property3_ChannelAssignment) {
 /// generator might not hit frequently (exactly -1.0, 0.0, 1.0, and values outside
 /// the [-1, 1] range that should be clamped).
 TEST(DiagnosticRecorderPBT, Property3_ChannelAssignment_EdgeCases) {
-    constexpr int64_t TARGET_FRAMES = 2880000;
+    constexpr int64_t TARGET_FRAMES = 720000;
     constexpr int BLOCK_SIZE = 256;
 
     std::string tempDir = std::filesystem::temp_directory_path().string();

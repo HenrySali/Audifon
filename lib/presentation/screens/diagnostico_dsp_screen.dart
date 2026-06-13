@@ -5,7 +5,7 @@
 // Esta pantalla es la versión técnica de la `DiagnosticoDspScreen` del
 // paciente (`PACIENTE/oir_pro_patient_app/lib/presentation/
 // diagnostico_dsp_screen.dart`). El comportamiento — máquina de estados,
-// duración nominal de 60 s, polling 1 Hz, generación de WAV+JSON,
+// duración nominal de 15 s, polling 1 Hz, generación de WAV+JSON,
 // share sheet — replica al paciente bit a bit. La paleta de colores y
 // el nombre del archivo (`diag_YYYYMMDD_HHMMSS.wav`, sin el prefijo
 // `dsp_` que usa el paciente) son propios del técnico:
@@ -65,7 +65,7 @@ const Color _kTechAmber = Color(0xFFFFB300);
 ///   Idle → PreCheck → Recording → Completed → Sharing → Completed
 ///                  ↘  Error                  ↗
 ///   Recording → Idle (early stop, descartar)
-///   Recording → Error (getProgress=-1 antes de 60 s)
+///   Recording → Error (getProgress=-1 antes de 15 s)
 ///   Error → Idle (Aceptar)
 ///   Completed → Idle (Nueva grabación)
 enum DiagnosticoScreenState {
@@ -79,7 +79,7 @@ enum DiagnosticoScreenState {
 
 /// Pantalla de diagnóstico DSP del técnico.
 ///
-/// Captura 60 s de audio dual-channel (left=pre-DSP, right=post-DSP) y
+/// Captura 15 s de audio dual-channel (left=pre-DSP, right=post-DSP) y
 /// produce un par WAV+JSON exportable. Todos los textos están en español.
 class DiagnosticoDspScreen extends StatefulWidget {
   const DiagnosticoDspScreen({super.key});
@@ -93,7 +93,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     with SingleTickerProviderStateMixin {
   // ─── State machine ──────────────────────────────────────────────────────
   DiagnosticoScreenState _screenState = DiagnosticoScreenState.idle;
-  int _countdownSeconds = 60;
+  int _countdownSeconds = 15;
   String _errorMessage = '';
 
   // ─── Polling ────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     // PreCheck → Recording.
     setState(() {
       _screenState = DiagnosticoScreenState.recording;
-      _countdownSeconds = 60;
+      _countdownSeconds = 15;
     });
     _pulseController.repeat(reverse: true);
     _startProgressPolling();
@@ -249,7 +249,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
   }
 
   /// Tick de polling: lee el progreso, actualiza el countdown y dispara la
-  /// transición Completed cuando se alcanzan los 60 s.
+  /// transición Completed cuando se alcanzan los 15 s.
   Future<void> _pollProgress() async {
     if (!mounted || _screenState != DiagnosticoScreenState.recording) {
       _progressTimer?.cancel();
@@ -269,7 +269,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     if (!mounted || _screenState != DiagnosticoScreenState.recording) return;
 
     if (elapsedMs < 0) {
-      // Req 6.12: getProgress=-1 antes de 60 s → ruta de error.
+      // Req 6.12: getProgress=-1 antes de 15 s → ruta de error.
       // Borramos el WAV parcial e intentamos un stop best-effort para
       // que el handler nativo libere el archivo, pero NO generamos JSON.
       _progressTimer?.cancel();
@@ -278,7 +278,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
       await _bestEffortStopAndDeletePartial();
       _transitionToError(
         'Error interno de grabación. '
-        'La grabación se interrumpió antes de los 60 segundos. '
+        'La grabación se interrumpió antes de los 15 segundos. '
         'Intente nuevamente.',
       );
       return;
@@ -286,7 +286,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
 
     final newCountdown = computeCountdown(elapsedMs);
     if (newCountdown <= 0) {
-      // 60 s alcanzados — finalizar la grabación.
+      // 15 s alcanzados — finalizar la grabación.
       await _finalizeRecording();
       return;
     }
@@ -294,7 +294,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     setState(() => _countdownSeconds = newCountdown);
   }
 
-  /// Stop manual antes de los 60 s. Descarta la grabación (Req 6.4).
+  /// Stop manual antes de los 15 s. Descarta la grabación (Req 6.4).
   ///
   /// Llama a `stopDiagnosticRecording()` y, sin importar el código de
   /// retorno (0/1/-1), borra el WAV parcial y vuelve a Idle. NO genera
@@ -321,7 +321,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
 
     setState(() {
       _screenState = DiagnosticoScreenState.idle;
-      _countdownSeconds = 60;
+      _countdownSeconds = 15;
       _errorMessage = '';
     });
     // Después de descartar, el archivo no debería ser exportable.
@@ -333,7 +333,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     final _ = result;
   }
 
-  /// Finaliza la grabación cuando se alcanzan los 60 s exactos.
+  /// Finaliza la grabación cuando se alcanzan los 15 s exactos.
   ///
   /// 1. Cancela el timer de polling.
   /// 2. Invoca `stopDiagnosticRecording()`.
@@ -372,7 +372,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
       await _deletePartialWavSafe();
       setState(() {
         _screenState = DiagnosticoScreenState.idle;
-        _countdownSeconds = 60;
+        _countdownSeconds = 15;
       });
       return;
     }
@@ -534,7 +534,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     setState(() {
       _screenState = DiagnosticoScreenState.idle;
       _errorMessage = '';
-      _countdownSeconds = 60;
+      _countdownSeconds = 15;
     });
   }
 
@@ -542,7 +542,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
   void onNewRecording() {
     setState(() {
       _screenState = DiagnosticoScreenState.idle;
-      _countdownSeconds = 60;
+      _countdownSeconds = 15;
     });
   }
 
@@ -575,7 +575,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
 
   /// Llama a `stopDiagnosticRecording()` ignorando el resultado y luego
   /// borra el WAV parcial. Usado en la ruta de error por
-  /// `getProgress=-1` antes de los 60 s.
+  /// `getProgress=-1` antes de los 15 s.
   Future<void> _bestEffortStopAndDeletePartial() async {
     try {
       await context.read<AmplificationBloc>().audioBridge
@@ -789,7 +789,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     final showLive = _screenState == DiagnosticoScreenState.recording ||
         _screenState == DiagnosticoScreenState.completed;
     return Text(
-      showLive ? '$_countdownSeconds' : '60',
+      showLive ? '$_countdownSeconds' : '15',
       style: TextStyle(
         color: _screenState == DiagnosticoScreenState.recording
             ? _kTechRed
@@ -806,7 +806,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     Color color;
     switch (_screenState) {
       case DiagnosticoScreenState.idle:
-        text = 'Presione para grabar 60 s';
+        text = 'Presione para grabar 15 s';
         color = Colors.white70;
         break;
       case DiagnosticoScreenState.preCheck:

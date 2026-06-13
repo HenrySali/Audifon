@@ -707,7 +707,7 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
 bool AudioEngine::startDiagnosticRecording(const std::string& filePath) {
     DiagRecorderConfig cfg;
     cfg.sampleRate = config_.sampleRate;
-    cfg.durationSeconds = 60;
+    cfg.durationSeconds = 15;
     return diagnosticRecorder_.start(filePath);
 }
 
@@ -720,7 +720,7 @@ double AudioEngine::getDiagnosticRecordingProgress() const {
     auto state = diagnosticRecorder_.getState();
     if (state == DiagRecorderState::COMPLETED || state == DiagRecorderState::FINALIZING) {
         // Recording finished — return full duration so Dart triggers completion
-        return 60000.0;
+        return 15000.0;
     }
     if (state != DiagRecorderState::RECORDING) {
         return -1.0;

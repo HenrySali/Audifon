@@ -98,8 +98,8 @@ class DiagnosticMetadata {
   static const int defaultSampleRate = 48000;
   static const int defaultBitDepth = 16;
   static const int defaultChannelCount = 2;
-  static const double defaultDurationSeconds = 60.0;
-  static const int defaultTotalSamplesPerChannel = 2880000;
+  static const double defaultDurationSeconds = 15.0;
+  static const int defaultTotalSamplesPerChannel = 720000;
 
   final int sampleRate;
   final int bitDepth;

@@ -1,13 +1,13 @@
 /// @file diagnostic_recorder_p8_test.cpp
 /// @brief Property 8: Early Stop Discards
 ///
-/// For any recording stopped before reaching 2,880,000 samples per channel,
+/// For any recording stopped before reaching 720,000 samples per channel,
 /// the DiagnosticRecorder SHALL transition to IDLE state and the partial WAV
 /// file SHALL be deleted from disk (no orphaned files).
 ///
 /// **Validates: Requirements 2.4**
 ///
-/// Generator strategy: Random stop times (1–59 seconds worth of samples fed),
+/// Generator strategy: Random stop times (1–14 seconds worth of samples fed),
 /// random block sizes (128–512 frames). 100 iterations with unique seeds.
 /// Supports both Google Test (when HAS_GTEST defined) and standalone execution.
 
@@ -73,8 +73,8 @@ static bool runProperty8Iteration(unsigned int seed) {
     std::mt19937 rng(seed);
 
     // ─── Generator: random stop time ────────────────────────────────────
-    // Stop time: 1–59 seconds worth of frames (never reach 60s = 2,880,000)
-    std::uniform_int_distribution<int> secondsDist(1, 59);
+    // Stop time: 1–14 seconds worth of frames (never reach 15s = 720,000)
+    std::uniform_int_distribution<int> secondsDist(1, 14);
     int stopAfterSeconds = secondsDist(rng);
 
     // For test efficiency, feed a proportional number of frames rather than
@@ -152,7 +152,7 @@ static bool runProperty8Iteration(unsigned int seed) {
         framesFed += blockSize;
     }
 
-    // ─── Early stop: call stop() before 60s completes ────────────────────
+    // ─── Early stop: call stop() before 15s completes ────────────────────
     recorder.stop();
 
     // ─── Property Verification ───────────────────────────────────────────
@@ -307,7 +307,7 @@ static bool runProperty8_EarlyStopDiscards(int numIterations = 100) {
 #include <gtest/gtest.h>
 
 /// Property 8: Early Stop Discards (100 iterations + edge cases)
-/// For any recording stopped before 60s, state=IDLE and partial file deleted.
+/// For any recording stopped before 15s, state=IDLE and partial file deleted.
 ///
 /// **Validates: Requirements 2.4**
 TEST(DiagnosticRecorderPBT, Property8_EarlyStopDiscards) {

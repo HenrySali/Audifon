@@ -2,9 +2,9 @@
 /// @brief Property 2: Exact Sample Count Invariant
 ///
 /// For any sequence of random block sizes (64–512 frames), when the total frames
-/// reach or exceed 2,880,000, the recorder SHALL capture exactly 2,880,000 samples
+/// reach or exceed 720,000, the recorder SHALL capture exactly 720,000 samples
 /// per channel (no more, no less), transition to COMPLETED state, and produce a
-/// WAV data section of exactly 11,520,000 bytes.
+/// WAV data section of exactly 2,880,000 bytes.
 ///
 /// **Validates: Requirements 1.3, 1.4, 2.2, 8.1**
 ///
@@ -104,10 +104,10 @@ static bool runProperty2Iteration(unsigned int seed) {
     // Random float sample distribution: [-1.0, 1.0]
     std::uniform_real_distribution<float> sampleDist(-1.0f, 1.0f);
 
-    // Target: 2,880,000 samples per channel (60s @ 48kHz)
-    static constexpr int64_t TARGET_SAMPLES = 2880000;
-    // Expected data section: 2,880,000 samples × 2 channels × 2 bytes = 11,520,000
-    static constexpr int64_t EXPECTED_DATA_SIZE = 11520000;
+    // Target: 720,000 samples per channel (15s @ 48kHz)
+    static constexpr int64_t TARGET_SAMPLES = 720000;
+    // Expected data section: 720,000 samples × 2 channels × 2 bytes = 2,880,000
+    static constexpr int64_t EXPECTED_DATA_SIZE = 2880000;
 
     // Create recorder and start
     DiagnosticRecorder recorder;
@@ -173,7 +173,7 @@ static bool runProperty2Iteration(unsigned int seed) {
         return false;
     }
 
-    // Check 2: Exactly 2,880,000 samples per channel written
+    // Check 2: Exactly 720,000 samples per channel written
     int64_t samplesWritten = recorder.getSamplesWritten();
     if (samplesWritten != TARGET_SAMPLES) {
         std::cerr << "[P2] Iteration " << seed << ": Expected " << TARGET_SAMPLES
@@ -182,7 +182,7 @@ static bool runProperty2Iteration(unsigned int seed) {
         return false;
     }
 
-    // Check 3: WAV data section size == 11,520,000 bytes
+    // Check 3: WAV data section size == 2,880,000 bytes
     int64_t dataSectionSize = readWavDataSectionSize(wavPath);
     if (dataSectionSize != EXPECTED_DATA_SIZE) {
         std::cerr << "[P2] Iteration " << seed << ": Expected data section "
@@ -191,7 +191,7 @@ static bool runProperty2Iteration(unsigned int seed) {
         return false;
     }
 
-    // Check 4: Verify total file size = header (44) + data (11,520,000)
+    // Check 4: Verify total file size = header (44) + data (2,880,000)
     int64_t fileSize = getFileSize(wavPath);
     int64_t expectedFileSize = 44 + EXPECTED_DATA_SIZE;
     if (fileSize != expectedFileSize) {
@@ -215,7 +215,7 @@ static bool runProperty2Iteration(unsigned int seed) {
 
 /// Property 2: Exact Sample Count Invariant (100 iterations)
 /// For any sequence of random block sizes, the recorder captures exactly
-/// 2,880,000 samples per channel and produces 11,520,000 bytes of data.
+/// 720,000 samples per channel and produces 2,880,000 bytes of data.
 TEST(DiagnosticRecorderPBT, Property2_ExactSampleCount) {
     static constexpr int NUM_ITERATIONS = 100;
 
@@ -235,7 +235,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== Property 2: Exact Sample Count Invariant ===" << std::endl;
     std::cout << "Running " << NUM_ITERATIONS << " iterations..." << std::endl;
-    std::cout << "Target: 2,880,000 samples/channel, 11,520,000 bytes data section" << std::endl;
+    std::cout << "Target: 720,000 samples/channel, 2,880,000 bytes data section" << std::endl;
     std::cout << "Block sizes: random 64-512 frames per block" << std::endl;
     std::cout << std::endl;
 

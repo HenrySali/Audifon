@@ -28,8 +28,8 @@ struct DiagRecorderConfig {
     int sampleRate      = 48000;
     int bitsPerSample   = 16;
     int channels        = 2;       ///< Estéreo: L=pre-DSP, R=post-DSP
-    int durationSeconds = 60;
-    int64_t targetSamples = 2880000; ///< 60 × 48000
+    int durationSeconds = 15;
+    int64_t targetSamples = 720000; ///< 15 × 48000
 };
 
 /// Grabador de diagnóstico DSP con ring buffer SPSC y hilo escritor dedicado.
@@ -37,7 +37,7 @@ struct DiagRecorderConfig {
 /// Uso:
 ///   1. Llamar start(filePath) para iniciar grabación.
 ///   2. En el callback de audio, llamar feedPreDsp() y feedPostDsp() cada bloque.
-///   3. La grabación termina automáticamente a los 60s, o con stop() (descarta).
+///   3. La grabación termina automáticamente a los 15s, o con stop() (descarta).
 class DiagnosticRecorder {
 public:
     DiagnosticRecorder();
@@ -53,7 +53,7 @@ public:
     /// @return true si la grabación inició correctamente.
     bool start(const std::string& filePath);
 
-    /// Detiene la grabación. Si no se completaron 60s, descarta y borra el archivo.
+    /// Detiene la grabación. Si no se completaron 15s, descarta y borra el archivo.
     void stop();
 
     /// Alimenta muestras pre-DSP desde el callback de audio (float32 mono).

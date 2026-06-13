@@ -97,8 +97,8 @@ void feedUntilComplete(DiagnosticRecorder& recorder, std::mt19937& rng,
 ///
 /// For any completed recording with random audio content:
 /// 1. RIFF ChunkSize (offset 4) == (actual file size - 8)
-/// 2. data Subchunk2Size (offset 40) == (2,880,000 × 2 channels × 2 bytes) == 11,520,000
-/// 3. actual file size == 11,520,044 (11,520,000 data + 44 header bytes)
+/// 2. data Subchunk2Size (offset 40) == (720,000 × 2 channels × 2 bytes) == 2,880,000
+/// 3. actual file size == 2,880,044 (2,880,000 data + 44 header bytes)
 ///
 /// **Validates: Requirements 3.6, 8.2**
 TEST(DiagnosticRecorderPBT, Property4_WavHeaderConsistency) {
@@ -110,12 +110,12 @@ TEST(DiagnosticRecorderPBT, Property4_WavHeaderConsistency) {
     std::uniform_int_distribution<int> blockSizeDist(256, 1024);
 
     constexpr int NUM_ITERATIONS = 100;
-    constexpr int64_t TARGET_SAMPLES = 2880000;     // 60s × 48kHz
+    constexpr int64_t TARGET_SAMPLES = 720000;      // 15s × 48kHz
     constexpr int CHANNELS = 2;
     constexpr int BYTES_PER_SAMPLE = 2;             // 16-bit
-    constexpr uint32_t EXPECTED_DATA_SIZE = TARGET_SAMPLES * CHANNELS * BYTES_PER_SAMPLE; // 11,520,000
-    constexpr uint32_t EXPECTED_FILE_SIZE = EXPECTED_DATA_SIZE + 44;  // 11,520,044
-    constexpr uint32_t EXPECTED_RIFF_SIZE = EXPECTED_FILE_SIZE - 8;   // 11,520,036
+    constexpr uint32_t EXPECTED_DATA_SIZE = TARGET_SAMPLES * CHANNELS * BYTES_PER_SAMPLE; // 2,880,000
+    constexpr uint32_t EXPECTED_FILE_SIZE = EXPECTED_DATA_SIZE + 44;  // 2,880,044
+    constexpr uint32_t EXPECTED_RIFF_SIZE = EXPECTED_FILE_SIZE - 8;   // 2,880,036
 
     for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
         // Generate random block size bounds for this iteration
@@ -149,7 +149,7 @@ TEST(DiagnosticRecorderPBT, Property4_WavHeaderConsistency) {
         // 1. Verify actual file size matches expected
         std::uintmax_t actualFileSize = getFileSize(wavPath);
         EXPECT_EQ(actualFileSize, EXPECTED_FILE_SIZE)
-            << "Iteration " << iter << ": File size should be 11,520,044 bytes"
+            << "Iteration " << iter << ": File size should be 2,880,044 bytes"
             << " (got " << actualFileSize << ")";
 
         // 2. Verify RIFF ChunkSize (offset 4) == (fileSize - 8)
@@ -160,13 +160,13 @@ TEST(DiagnosticRecorderPBT, Property4_WavHeaderConsistency) {
 
         // Also verify against the computed expected value
         EXPECT_EQ(riffChunkSize, EXPECTED_RIFF_SIZE)
-            << "Iteration " << iter << ": RIFF ChunkSize should be 11,520,036"
+            << "Iteration " << iter << ": RIFF ChunkSize should be 2,880,036"
             << " (got " << riffChunkSize << ")";
 
         // 3. Verify data Subchunk2Size (offset 40) == (samplesWritten × channels × bytesPerSample)
         uint32_t dataSubchunk2Size = readUint32At(wavPath, 40);
         EXPECT_EQ(dataSubchunk2Size, EXPECTED_DATA_SIZE)
-            << "Iteration " << iter << ": data Subchunk2Size at offset 40 should be 11,520,000"
+            << "Iteration " << iter << ": data Subchunk2Size at offset 40 should be 2,880,000"
             << " (got " << dataSubchunk2Size << ")";
 
         // 4. Cross-check: data Subchunk2Size should equal (actualFileSize - 44)
@@ -176,7 +176,7 @@ TEST(DiagnosticRecorderPBT, Property4_WavHeaderConsistency) {
 
         // 5. Verify samplesWritten matches target
         EXPECT_EQ(recorder.getSamplesWritten(), TARGET_SAMPLES)
-            << "Iteration " << iter << ": samplesWritten should be exactly 2,880,000"
+            << "Iteration " << iter << ": samplesWritten should be exactly 720,000"
             << " (got " << recorder.getSamplesWritten() << ")";
 
         // Clean up test file
