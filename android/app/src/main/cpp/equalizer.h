@@ -10,8 +10,20 @@
 /// - Los coeficientes se recalculan en el hilo de audio al detectar cambio.
 /// - No se usan locks — operación completamente lock-free.
 ///
-/// NOTA: Los cambios de preset EQ se manejan con reinicio rápido del engine
-/// desde Dart (stop+start ~50ms). Esto garantiza filtros con estado limpio.
+/// CAMBIO DE GANANCIAS EN CALIENTE (FIX ruido sostenido al cambiar EQ):
+/// Las ganancias objetivo (gains_) se suavizan por bloque hacia un valor
+/// actual (rampGains_) con una rampa exponencial. Los coeficientes biquad se
+/// recalculan a partir del valor SUAVIZADO, no del target crudo. Esto evita
+/// el "zipper noise" / transitorio que produce el hard-swap de coeficientes
+/// en filtros Direct Form I bajo modulación de parámetros.
+/// Ref: DSP.SE "Avoiding clicks with changing biquad coefficients" y la
+/// práctica de parameter smoothing (JUCE SmoothedValue, Max biquad~/filtercoeff~).
+/// Misma filosofía que la rampa de WDRC/NR ya presente en dsp_pipeline.cpp.
+///
+/// SANITIZACIÓN: processBiquadSample() detecta estados/salidas no finitas
+/// (NaN/Inf) — que en un IIR recursivo se auto-propagan indefinidamente — y
+/// resetea el estado de la banda, cortando el ruido sostenido sin necesidad
+/// de reiniciar el engine.
 
 #ifndef HEARING_AID_EQUALIZER_H
 #define HEARING_AID_EQUALIZER_H
@@ -116,26 +128,41 @@ private:
     /// Calcula coeficientes biquad peaking EQ usando Audio EQ Cookbook.
     BiquadCoeffs computePeakingCoeffs(float frequencyHz, float gainDb, float q) const;
 
-    /// Recalcula coeficientes para todas las bandas que cambiaron.
-    void updateCoefficients();
+    /// Avanza la rampa de ganancias un paso (un bloque) hacia el target y
+    /// recalcula los coeficientes de las bandas cuyo valor suavizado cambió.
+    /// Se ejecuta CADA bloque desde el hilo de audio.
+    void stepGainRamp();
 
     /// Procesa una muestra a través de un filtro biquad (Direct Form I).
+    /// Sanitiza NaN/Inf: si la salida no es finita, resetea el estado y deja
+    /// pasar la muestra de entrada (corta la auto-propagación del IIR).
     static float processBiquadSample(float sample, const BiquadCoeffs& coeffs,
                                      BiquadState& state);
 
     // --- Configuración ---
     int sampleRate_ = 16000;
 
-    // --- Ganancias atómicas (actualizables desde hilo de UI) ---
+    // --- Ganancias atómicas (TARGET, actualizables desde hilo de UI) ---
     std::atomic<float> gains_[kEqBandCount];
 
     // --- Coeficientes y estado (solo accedidos desde hilo de audio) ---
     BiquadCoeffs coeffs_[kEqBandCount];   ///< Coeficientes actuales por banda
     BiquadState states_[kEqBandCount];    ///< Estado de filtro por banda
     float appliedGains_[kEqBandCount];    ///< Ganancias con las que se calcularon los coeficientes
+    float rampGains_[kEqBandCount];       ///< Ganancia SUAVIZADA actual por banda (audio thread)
 
     // --- Flag de cambio pendiente ---
     std::atomic<bool> gainsChanged_{false};
+
+    /// Coeficiente de la rampa exponencial de ganancias del EQ.
+    /// y[n] = y[n-1] + alpha * (target - y[n-1]) → tau ≈ 1/alpha bloques.
+    /// 0.02 ≈ 50 bloques ≈ 200 ms a 64 muestras/16 kHz (≈4 ms/bloque),
+    /// alineado con kWdrcRampAlpha del pipeline.
+    static constexpr float kEqRampAlpha = 0.02f;
+    /// Si |target - ramp| < esto, se hace snap al target (evita recálculo perpetuo).
+    static constexpr float kEqGainSnapEps = 0.01f;
+    /// Umbral de diferencia para recalcular coeficientes (en dB).
+    static constexpr float kEqCoeffRecalcEps = 0.01f;
 };
 
 #endif // HEARING_AID_EQUALIZER_H
