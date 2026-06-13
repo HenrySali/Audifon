@@ -82,7 +82,18 @@ oboe::Result AudioEngine::openInputStream() {
     //    procesamiento del modem, ideal para amplificación de ambiente.
     if (config_.conversationMode) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
-        LOGI("Input preset: VoiceCommunication (conversation mode / SCO)");
+        // FIX "SCO mudo": forzar el backend legacy OpenSL ES + PerformanceMode::None.
+        // El SCO ya queda activado por BluetoothScoController (setCommunicationDevice /
+        // startBluetoothSco + MODE_IN_COMMUNICATION), que es el paso que la doc oficial
+        // marca como obligatorio. Pero AAudio en LowLatency pide el fast/MMAP track
+        // (AUDIO_INPUT_FLAG_FAST) y ese path NO se adjunta al endpoint de telefonía SCO,
+        // así que el stream queda mudo aun con SCO conectado. OpenSL ES abre un AudioRecord
+        // clásico con preset VoiceCommunication que SÍ respeta el ruteo a SCO.
+        // Refs: Oboe wiki TechNote_BluetoothAudio (activación SCO) e issue google/oboe#155
+        // (philburk/dturner: el MMAP no se soporta en BT y cae al path legacy).
+        builder.setAudioApi(oboe::AudioApi::OpenSLES);
+        builder.setPerformanceMode(oboe::PerformanceMode::None);
+        LOGI("Input: VoiceCommunication + OpenSL ES + PerformanceMode::None (conversation mode / SCO)");
     } else if (android_get_device_api_level() >= 29) {
         builder.setInputPreset(oboe::InputPreset::VoicePerformance);
     } else {
@@ -131,13 +142,23 @@ oboe::Result AudioEngine::openOutputStream() {
         builder.setUsage(oboe::Usage::VoiceCommunication);
         builder.setContentType(oboe::ContentType::Speech);
         builder.setSharingMode(oboe::SharingMode::Shared);
-        LOGI("Output: Usage::VoiceCommunication + Shared (conversation mode / SCO)");
+        // FIX "SCO mudo": forzar OpenSL ES + PerformanceMode::None (mismo motivo que en
+        // openInputStream). AAudio en LowLatency pide el fast track (AUDIO_OUTPUT_FLAG_FAST),
+        // que se adjunta al mixer primario y NO al endpoint SCO de telefonía, por eso el
+        // audio sale mudo aunque BluetoothScoController ya haya activado SCO y puesto
+        // MODE_IN_COMMUNICATION. OpenSL ES abre un AudioTrack clásico que, con
+        // Usage::VoiceCommunication, mapea a STREAM_VOICE_CALL → ruteo a SCO confiable.
+        // Refs: Oboe wiki TechNote_BluetoothAudio; issue google/oboe#155 (philburk/dturner).
+        builder.setAudioApi(oboe::AudioApi::OpenSLES);
+        builder.setPerformanceMode(oboe::PerformanceMode::None);
+        LOGI("Output: VoiceCommunication + OpenSL ES + PerformanceMode::None (conversation mode / SCO)");
     } else {
         // Modo normal: música/ambiente por A2DP a máxima calidad.
         builder.setUsage(oboe::Usage::Media);
         builder.setSharingMode(oboe::SharingMode::Exclusive);
+        // Modo normal sin cambios: AAudio (Unspecified) para el fast-path de baja latencia.
+        builder.setAudioApi(oboe::AudioApi::Unspecified);
     }
-    builder.setAudioApi(oboe::AudioApi::Unspecified);
     // FullDuplexStream IS an AudioStreamDataCallback. Setting it as the
     // output stream's data callback means onAudioReady() fires on the output
     // stream, which internally reads from the input stream and calls
