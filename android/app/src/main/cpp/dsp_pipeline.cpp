@@ -76,12 +76,15 @@ void DspPipeline::init(const AudioConfig& config) {
 
     // Inicializar MPO con sample rate y threshold
     mpo_.init(config.sampleRate);
-    // MPO threshold: usar valor lineal directo de 0.85 (-1.4 dBFS).
-    // Con offset 93, el máximo digital (0 dBFS) equivale a 93 dB SPL,
-    // así que un threshold en dB SPL > 93 nunca se alcanzaría.
-    // Usamos threshold lineal directo para garantizar protección contra clipping.
-    // 0.85 deja ~1.4 dB de headroom bajo el clip point digital.
-    mpo_.setThresholdLinear(0.85f);
+    // MPO clínico reconciliado (decisión B audifono-v3): el threshold se
+    // deriva del MPO en dB SPL con kMpoSplOffset=120 (calibración acústica de
+    // SALIDA, en el oído), NO con splOffset (93, mic de ENTRADA). Así el MPO
+    // clínico del audiograma [80, ~118.6] dB SPL es OPERATIVO y distinguible,
+    // manteniendo 0.85 lineal (-1.4 dBFS) como red de seguridad dura.
+    // Validado en tools/sim_v3/validate_mpo.py (Property 1: |y| ≤ techo).
+    // Persistir el dB SPL inicial para re-derivar si cambia la calibración.
+    mpoThresholdDbSpl_.store(config.mpoThresholdDbSpl, std::memory_order_relaxed);
+    applyMpoThresholdFromDbSpl(config.mpoThresholdDbSpl);
 
     // Volumen inicial: 0 dB (ganancia unitaria)
     volumeDb_.store(0.0f, std::memory_order_relaxed);
@@ -338,23 +341,12 @@ void DspPipeline::setNrLevel(int level) {
 
 void DspPipeline::setSplOffset(float offset) {
     splOffset_.store(offset, std::memory_order_relaxed);
-    // MPO threshold lineal fijo a 0.85 (-1.4 dBFS) — independiente del offset.
-    // El offset solo afecta la interpretación del nivel de entrada para WDRC,
-    // no el threshold de protección de salida del MPO.
-    mpo_.setThresholdLinear(0.85f);
-
-    // Si el caller fijó un MPO en dB SPL via setMpoThresholdDbSpl(), re-derivar
-    // el valor lineal con el nuevo offset para mantener el techo clínico
-    // consistente cuando cambia la calibración del micrófono.
-    const float dbSpl = mpoThresholdDbSpl_.load(std::memory_order_relaxed);
-    if (std::isfinite(dbSpl)) {
-        const float linear = std::pow(10.0f, (dbSpl - offset) / 20.0f);
-        // Clamp por seguridad digital: nunca permitir > 0.85 lineal (≈ -1.4 dBFS).
-        const float safeLinear = (linear > 0.85f) ? 0.85f : linear;
-        if (safeLinear > 0.0f) {
-            mpo_.setThresholdLinear(safeLinear);
-        }
-    }
+    // El MPO clínico se deriva con kMpoSplOffset (calibración de SALIDA),
+    // NO con el offset de entrada del mic. Por lo tanto, cambiar la
+    // calibración del micrófono NO altera el techo de protección del MPO.
+    // Reaplicamos el threshold (idempotente) para cubrir el caso de que el
+    // MPO clínico se hubiera fijado antes de este cambio de offset.
+    applyMpoThresholdFromDbSpl(mpoThresholdDbSpl_.load(std::memory_order_relaxed));
 }
 
 void DspPipeline::setMpoThresholdDbSpl(float thresholdDbSpl) {
@@ -364,19 +356,29 @@ void DspPipeline::setMpoThresholdDbSpl(float thresholdDbSpl) {
         return;
     }
 
-    // Persistir el valor en dB SPL para que setSplOffset() pueda re-derivar
-    // el lineal cuando cambie la calibración.
+    // Persistir el valor en dB SPL (permite re-derivar en setSplOffset).
     mpoThresholdDbSpl_.store(thresholdDbSpl, std::memory_order_relaxed);
 
-    // Conversión dB SPL → lineal usando el offset de calibración actual.
-    //   dBFS = dB_SPL - splOffset
-    //   linear = 10^(dBFS / 20)
-    const float offset = splOffset_.load(std::memory_order_relaxed);
-    const float linear = std::pow(10.0f, (thresholdDbSpl - offset) / 20.0f);
+    // Aplicar usando la calibración de SALIDA dedicada (kMpoSplOffset),
+    // manteniendo el clamp a la red de seguridad digital (kMpoDigitalCeiling).
+    applyMpoThresholdFromDbSpl(thresholdDbSpl);
+}
 
-    // Clamp al techo de seguridad digital (0.85 ≈ -1.4 dBFS) para preservar
-    // la protección anti-clipping del pipeline.
-    const float safeLinear = (linear > 0.85f) ? 0.85f : linear;
+void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
+    // MPO clínico no seteado (NaN) → techo digital puro (comportamiento legacy).
+    if (!std::isfinite(dbSpl)) {
+        mpo_.setThresholdLinear(kMpoDigitalCeiling);
+        return;
+    }
+
+    // Reconciliación decisión B (audifono-v3): conversión dB SPL → lineal con
+    // la calibración de SALIDA (oído), NO con el offset de entrada del mic.
+    //   linear = 10^((dbSpl - kMpoSplOffset) / 20)
+    const float linear = std::pow(10.0f, (dbSpl - kMpoSplOffset) / 20.0f);
+
+    // Clamp al techo de seguridad digital (≈ -1.4 dBFS) para preservar la
+    // protección anti-clipping del pipeline (garantía |y| ≤ kMpoDigitalCeiling).
+    const float safeLinear = (linear > kMpoDigitalCeiling) ? kMpoDigitalCeiling : linear;
     if (safeLinear > 0.0f) {
         mpo_.setThresholdLinear(safeLinear);
     }
@@ -406,6 +408,9 @@ DspPipeline::StageMetrics DspPipeline::getStageMetrics() const {
     // preDnnLevelDb. Si fue medición local, dejamos el sentinel -1.0f.
     m.wdrcUsesExternalLevel = wdrcUsesExternalLevel_.load(std::memory_order_relaxed);
     m.preDnnLevelDb = m.wdrcUsesExternalLevel ? m.inputLevel : -1.0f;
+    // Aviso de limitación sostenida del MPO (R9.2 audifono-v3).
+    m.mpoLimitingFraction = mpo_.getLimitingFraction();
+    m.mpoLimitingSustained = mpo_.isLimitingSustained();
     return m;
 }
 

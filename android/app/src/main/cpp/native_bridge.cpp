@@ -705,13 +705,22 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetCurrentSpectrum(
 /// Retorna métricas de todas las etapas del pipeline DSP como float array.
 /// Orden: [inputLevel, postNrLevel, postEqLevel, postWdrcLevel, postVolumeLevel,
 ///         outputLevel, peakSample, clipCount, wdrcGainFactor, wdrcRegion,
-///         eqMaxGain, environmentClass, preDnnLevelDb, wdrcUsesExternalLevel]
-/// Total: 14 floats.
+///         eqMaxGain, environmentClass, preDnnLevelDb, wdrcUsesExternalLevel,
+///         mpoLimitingFraction, mpoLimitingSustained]
+/// Total: 16 floats.
 ///
-/// Los dos últimos campos (preDnnLevelDb, wdrcUsesExternalLevel) se agregaron
-/// en la spec dsp-chain-optimization (task 4.4) para que el JSON de
-/// diagnóstico pueda registrar el origen del nivel WDRC y verificar el ratio
-/// efectivo de compresión (Property 8 del design).
+/// Los dos últimos campos (mpoLimitingFraction, mpoLimitingSustained) se
+/// agregaron en la spec audifono-v3 (task 10.2, decisión B — MPO clínico real)
+/// para exponer a la app el aviso de limitación sostenida (Requirement 9.2):
+///
+///   - mpoLimitingFraction: fracción [0,1] de muestras del último bloque en
+///     las que el MPO estuvo limitando.
+///   - mpoLimitingSustained: 1.0f si la limitación fue sostenida (≥ ~200 ms
+///     cuasi-continuos) en el último bloque, 0.0f si no.
+///
+/// Los campos previos (preDnnLevelDb, wdrcUsesExternalLevel) vienen de la spec
+/// dsp-chain-optimization (task 4.4) para registrar el origen del nivel WDRC
+/// y verificar el ratio efectivo de compresión (Property 8 del design).
 ///
 ///   - preDnnLevelDb: nivel pre-DNN en dB SPL pasado al WDRC (-1.0f si no
 ///     hay nivel externo y se midió localmente).
@@ -728,9 +737,9 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
 
     auto m = g_engine->getStageMetrics();
 
-    jfloatArray result = env->NewFloatArray(14);
+    jfloatArray result = env->NewFloatArray(16);
     if (result != nullptr) {
-        float data[14] = {
+        float data[16] = {
             m.inputLevel,
             m.postNrLevel,
             m.postEqLevel,
@@ -745,8 +754,10 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDspStageMetrics(
             static_cast<float>(m.environmentClass),
             m.preDnnLevelDb,
             m.wdrcUsesExternalLevel ? 1.0f : 0.0f,
+            m.mpoLimitingFraction,
+            m.mpoLimitingSustained ? 1.0f : 0.0f,
         };
-        env->SetFloatArrayRegion(result, 0, 14, data);
+        env->SetFloatArrayRegion(result, 0, 16, data);
     }
     return result;
 }

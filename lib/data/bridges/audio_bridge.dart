@@ -245,9 +245,17 @@ abstract class AudioBridge {
   /// `wdrcRegion`, `eqMaxGain`, `inputLevel`, `postNrLevel`,
   /// `postEqLevel`, `postWdrcLevel`, `postVolumeLevel`, `outputLevel`,
   /// `peakSample`, `clipCount`, `wdrcGainFactor`, `preDnnLevelDb`,
-  /// `wdrcLevelSource` y — clave clave para Smart Scene polling —
+  /// `wdrcLevelSource`, `mpoLimitingFraction`, `mpoLimitingSustained`
+  /// y — clave clave para Smart Scene polling —
   /// **`environmentClass`** (int en `[0, 7]` correspondiente al enum C++
   /// `smart_scene::SceneClass`; valores fuera de rango se tratan como 0).
+  ///
+  /// `mpoLimitingFraction` (double `[0,1]`) y `mpoLimitingSustained` (bool)
+  /// exponen el aviso de limitación sostenida del MPO clínico (spec
+  /// audifono-v3 task 10.2, decisión B): `mpoLimitingSustained == true`
+  /// indica que la salida está pegada al límite de seguridad de forma
+  /// sostenida (Requirement 9.2). Motores nativos viejos que no exponen
+  /// estos campos devuelven `0.0` / `false` por defecto.
   ///
   /// Retorna `null` cuando:
   /// - el motor de audio no está corriendo (`getDspStageMetrics()`

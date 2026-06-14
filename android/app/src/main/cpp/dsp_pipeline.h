@@ -179,6 +179,14 @@ public:
         /// true si el último processBlock usó el nivel externo (pre-DNN);
         /// false si midió RMS localmente desde el buffer post-DNN.
         bool wdrcUsesExternalLevel = false;
+        /// Fracción [0,1] de muestras del último bloque en las que el MPO
+        /// estuvo limitando (decisión B audifono-v3). La app la usa para el
+        /// aviso de nivel cercano al límite de seguridad (R9.2).
+        float mpoLimitingFraction = 0.0f;
+        /// true si el MPO estuvo limitando de forma SOSTENIDA (≥ ~200 ms
+        /// cuasi-continuos) en el último bloque. Señal del aviso visible
+        /// de R9.2 (audifono-v3).
+        bool mpoLimitingSustained = false;
     };
     StageMetrics getStageMetrics() const;
 
@@ -214,6 +222,36 @@ private:
     /// @param inputLevelDb Nivel de entrada en dB SPL
     /// @return SNR estimado en dB, clampeado a [-20, 40]
     float estimateSnrSimple(float inputLevelDb) const;
+
+    /// Aplica al limitador MPO el threshold derivado de un valor en dB SPL,
+    /// usando la calibración de SALIDA dedicada (kMpoSplOffset), NO el offset
+    /// de entrada del micrófono (splOffset_).
+    ///
+    /// Reconciliación de la decisión B (audifono-v3): el MPO clínico (UCL del
+    /// paciente, un SPL en el OÍDO) pertenece a la cadena de salida, no a la
+    /// de entrada. Convertirlo con el offset de entrada (93) lo volvía no-op
+    /// (todo MPO ≥ ~92 dB SPL saturaba en el techo digital 0.85). Con
+    /// kMpoSplOffset=120, el MPO clínico [80, ~118.6] dB SPL mapea a
+    /// thresholds lineales operativos y distinguibles; 0.85 queda como red
+    /// de seguridad dura. Validado en tools/sim_v3/validate_mpo.py (Property 1).
+    ///
+    ///   linear     = 10^((dbSpl - kMpoSplOffset) / 20)
+    ///   threshold  = min(linear, kMpoDigitalCeiling)
+    ///
+    /// Si @p dbSpl no es finito (MPO clínico no seteado), aplica el techo
+    /// digital puro (kMpoDigitalCeiling) preservando el comportamiento legacy.
+    /// @param dbSpl Threshold del MPO en dB SPL (o NaN para techo digital).
+    void applyMpoThresholdFromDbSpl(float dbSpl);
+
+    /// Offset de calibración acústica de SALIDA (oído) para convertir el MPO
+    /// clínico (dB SPL) a amplitud lineal. DISTINTO de splOffset_ (93 dB,
+    /// calibración del mic de ENTRADA que sirve a WDRC/escena). Referencia
+    /// "mic real"/salida ya usada en mpo_limiter.h y spectrum_analyzer.h.
+    static constexpr float kMpoSplOffset = 120.0f;
+
+    /// Techo de seguridad digital del MPO (hard-clamp lineal, ≈ -1.4 dBFS).
+    /// Red de seguridad dura anti-clipping: el threshold nunca lo supera.
+    static constexpr float kMpoDigitalCeiling = 0.85f;
 
     // --- Módulos del pipeline ---
     NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)

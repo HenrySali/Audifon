@@ -442,6 +442,12 @@ class NativeAudioBridge {
      *     indica "no hay nivel externo" (medición local).
      *   - `wdrcLevelSource`: "pre-dnn" si el WDRC usó el nivel externo
      *     pre-DNN del AudioEngine, "local" si midió RMS desde el buffer.
+     *
+     * Campos extra (spec audifono-v3 task 10.2 — MPO clínico real, decisión B):
+     *   - `mpoLimitingFraction`: fracción [0,1] de muestras del último bloque
+     *     en las que el MPO estuvo limitando.
+     *   - `mpoLimitingSustained`: true si la limitación fue sostenida
+     *     (≥ ~200 ms cuasi-continuos). Señal del aviso visible R9.2.
      */
     fun getDspStageMetrics(): Map<String, Any>? {
         val data = try { nativeGetDspStageMetrics() } catch (_: Exception) { return null }
@@ -452,6 +458,11 @@ class NativeAudioBridge {
         // valores por defecto para no romper a los callers.
         val preDnnLevelDb = if (data.size >= 13) data[12] else -1.0f
         val wdrcUsesExternal = if (data.size >= 14) data[13] != 0.0f else false
+        // Aviso de limitación sostenida del MPO (spec audifono-v3 task 10.2,
+        // decisión B). Compatibilidad: un .so viejo (≤14 floats) no expone
+        // estos campos → defaults seguros (sin aviso).
+        val mpoLimitingFraction = if (data.size >= 15) data[14] else 0.0f
+        val mpoLimitingSustained = if (data.size >= 16) data[15] != 0.0f else false
         return mapOf(
             "inputLevel" to data[0],
             "postNrLevel" to data[1],
@@ -467,6 +478,8 @@ class NativeAudioBridge {
             "environmentClass" to data[11].toInt(),
             "preDnnLevelDb" to preDnnLevelDb,
             "wdrcLevelSource" to if (wdrcUsesExternal) "pre-dnn" else "local",
+            "mpoLimitingFraction" to mpoLimitingFraction,
+            "mpoLimitingSustained" to mpoLimitingSustained,
         )
     }
 

@@ -5,21 +5,28 @@
 /// Su función es garantizar que ninguna muestra de salida exceda el threshold
 /// configurado, protegiendo la audición del usuario.
 ///
-/// Algoritmo por muestra:
+/// Algoritmo por muestra (detector de envolvente):
 /// 1. Calcular |sample|
-/// 2. Si |sample| > threshold → calcular ganancia objetivo y aplicar attack rápido
-/// 3. Si |sample| ≤ threshold → release lento hacia ganancia unitaria
-/// 4. Aplicar ganancia suavizada: output = sample * gain
+/// 2. Seguir la envolvente de pico con attack rápido (sube) / release lento (baja)
+/// 3. Ganancia = threshold / envolvente (si envolvente > threshold; si no, 1.0)
+/// 4. Aplicar ganancia: output = sample * gain
 /// 5. Hard-clamp de seguridad: si |output| > threshold → saturar a threshold
 ///
-/// El hard-clamp en paso 5 es la garantía absoluta. Incluso si el attack
-/// suavizado no ha convergido completamente (transitorio), la salida NUNCA
-/// excede el threshold.
+/// El hard-clamp en paso 5 es la garantía absoluta e instantánea. Incluso si la
+/// envolvente no convergió (transitorio de attack de un sonido fuerte
+/// repentino), la salida NUNCA excede el threshold.
+///
+/// Por qué la envolvente y no el |sample| instantáneo: derivar la ganancia del
+/// pico instantáneo recortaba muestra-a-muestra y hacía oscilar la ganancia
+/// dentro de cada ciclo → armónicos (THD alto) en sonidos fuertes sostenidos.
+/// La envolvente es suave, así que un tono sostenido se escala de forma
+/// uniforme (sigue siendo sinusoidal) → THD bajo. (decisión D, tarea 12.2;
+/// validado en tools/sim_v3/validate_antidistortion.py: 18.9% → 4.4% @ 1 kHz.)
 ///
 /// Parámetros por defecto:
 /// - Threshold: 100 dB SPL con offset 120 → -20 dBFS → 0.1 lineal
-/// - Attack: 0.5 ms → attackCoeff ≈ 0.1175 @ 16 kHz
-/// - Release: 10 ms → releaseCoeff ≈ 0.00625 @ 16 kHz
+/// - Envolvente attack: 3 ms → attackCoeff ≈ 0.0205 @ 16 kHz
+/// - Envolvente release: 50 ms → releaseCoeff ≈ 0.00125 @ 16 kHz
 ///
 /// Requisitos validados: 2.6, 7.3, 9.1, 9.5
 
@@ -63,33 +70,29 @@ void MpoLimiter::process(float* buffer, int blockSize) {
         return;
     }
 
+    // Umbral de "sostenido" en muestras, derivado del sample rate actual.
+    // Al menos 1 muestra para evitar degenerados con sampleRate inválido.
+    const int sustainedThreshSamples = std::max(
+        1, static_cast<int>(kSustainedLimitMs * static_cast<float>(sampleRate_) / 1000.0f));
+    int limitedInBlock = 0;
+    bool sustainedHit = false;
+
     // Procesar muestra por muestra
     for (int i = 0; i < blockSize; ++i) {
         const float sample = buffer[i];
         const float absSample = std::fabs(sample);
 
-        if (absSample > threshold) {
-            // --- ATTACK: la muestra excede el threshold ---
-            // Calcular ganancia objetivo para que output = threshold
-            const float targetGain = threshold / absSample;
+        // --- Detector de envolvente de pico (decisión D, tarea 12.2) ---
+        // La envolvente sigue |sample| con attack rápido (sube) / release lento
+        // (baja). Derivar la ganancia de la ENVOLVENTE (no del |sample|
+        // instantáneo) evita que la ganancia oscile dentro de cada ciclo, que
+        // era la fuente de THD en sonidos fuertes sostenidos.
+        const float envCoeff = (absSample > env_) ? attackCoeff_ : releaseCoeff_;
+        env_ += envCoeff * (absSample - env_);
 
-            // Ataque ADAPTATIVO: coeficiente proporcional al overshoot².
-            // Picos pequeños (6 dB sobre threshold) → ataque normal.
-            // Picos enormes (20 dB sobre threshold) → ataque hasta 16× más rápido.
-            // Referencia: técnica usada en Oticon Real y web-simulator MPO.
-            const float overshootRatio = absSample / threshold;
-            const float adaptiveCoeff = std::fmin(
-                attackCoeff_ * std::fmin(overshootRatio * overshootRatio, 16.0f),
-                1.0f);
-
-            // Suavizar hacia ganancia objetivo con attack adaptativo
-            gain_ += adaptiveCoeff * (targetGain - gain_);
-        } else {
-            // --- RELEASE: la muestra está dentro del threshold ---
-            // Recuperar lentamente hacia ganancia unitaria (1.0)
-            // gain += releaseCoeff * (1.0 - gain)
-            gain_ += releaseCoeff_ * (1.0f - gain_);
-        }
+        // Ganancia objetivo = threshold / envolvente (compresiva). Si la
+        // envolvente no supera el threshold, ganancia unitaria (no limita).
+        gain_ = (env_ > threshold) ? (threshold / env_) : 1.0f;
 
         // Asegurar que la ganancia nunca excede 1.0 (MPO nunca amplifica)
         if (gain_ > 1.0f) {
@@ -99,6 +102,21 @@ void MpoLimiter::process(float* buffer, int blockSize) {
         // Asegurar que la ganancia nunca es negativa (protección numérica)
         if (gain_ < 0.0f) {
             gain_ = 0.0f;
+        }
+
+        // --- Tracking de limitación sostenida (aviso R9.2 audifono-v3) ---
+        // Una muestra cuenta como "limitada" cuando la ganancia del limitador
+        // está deprimida por debajo de kLimitingGainThreshold. Con señal
+        // fuerte sostenida la ganancia se mantiene baja de forma continua, así
+        // que las consecutivas se acumulan a través de bloques.
+        if (gain_ < kLimitingGainThreshold) {
+            ++consecutiveLimitedSamples_;
+            ++limitedInBlock;
+            if (consecutiveLimitedSamples_ >= sustainedThreshSamples) {
+                sustainedHit = true;
+            }
+        } else {
+            consecutiveLimitedSamples_ = 0;
         }
 
         // Aplicar ganancia suavizada
@@ -115,6 +133,12 @@ void MpoLimiter::process(float* buffer, int blockSize) {
 
         buffer[i] = output;
     }
+
+    // Publicar snapshots de limitación para el polling de métricas (UI thread).
+    lastLimitingFraction_.store(
+        static_cast<float>(limitedInBlock) / static_cast<float>(blockSize),
+        std::memory_order_relaxed);
+    limitingSustained_.store(sustainedHit, std::memory_order_relaxed);
 }
 
 // ============================================================================
@@ -152,12 +176,24 @@ float MpoLimiter::getCurrentGain() const {
     return gain_;
 }
 
+float MpoLimiter::getLimitingFraction() const {
+    return lastLimitingFraction_.load(std::memory_order_relaxed);
+}
+
+bool MpoLimiter::isLimitingSustained() const {
+    return limitingSustained_.load(std::memory_order_relaxed);
+}
+
 // ============================================================================
 // Reset
 // ============================================================================
 
 void MpoLimiter::reset() {
     gain_ = 1.0f;
+    env_ = 0.0f;
+    consecutiveLimitedSamples_ = 0;
+    lastLimitingFraction_.store(0.0f, std::memory_order_relaxed);
+    limitingSustained_.store(false, std::memory_order_relaxed);
 }
 
 // ============================================================================
@@ -165,12 +201,12 @@ void MpoLimiter::reset() {
 // ============================================================================
 
 void MpoLimiter::computeCoefficients() {
+    // Coeficientes del DETECTOR DE ENVOLVENTE (peak-follower).
     // attackCoeff = 1 - exp(-1 / (attackTime_sec * sampleRate))
-    // Para 0.5 ms @ 16 kHz: 1 - exp(-1 / (0.0005 * 16000))
-    //                      = 1 - exp(-1 / 8)
-    //                      = 1 - exp(-0.125)
-    //                      ≈ 1 - 0.8825
-    //                      ≈ 0.1175
+    // Para 3 ms @ 16 kHz: 1 - exp(-1 / (0.003 * 16000))
+    //                    = 1 - exp(-1 / 48)
+    //                    ≈ 1 - 0.97947
+    //                    ≈ 0.02053
     const float attackSamples = kAttackTimeSec * static_cast<float>(sampleRate_);
     if (attackSamples > 0.0f) {
         attackCoeff_ = 1.0f - std::exp(-1.0f / attackSamples);
@@ -179,11 +215,10 @@ void MpoLimiter::computeCoefficients() {
     }
 
     // releaseCoeff = 1 - exp(-1 / (releaseTime_sec * sampleRate))
-    // Para 10 ms @ 16 kHz: 1 - exp(-1 / (0.01 * 16000))
-    //                     = 1 - exp(-1 / 160)
-    //                     = 1 - exp(-0.00625)
-    //                     ≈ 1 - 0.99377
-    //                     ≈ 0.00623
+    // Para 50 ms @ 16 kHz: 1 - exp(-1 / (0.05 * 16000))
+    //                     = 1 - exp(-1 / 800)
+    //                     ≈ 1 - 0.99875
+    //                     ≈ 0.00125
     const float releaseSamples = kReleaseTimeSec * static_cast<float>(sampleRate_);
     if (releaseSamples > 0.0f) {
         releaseCoeff_ = 1.0f - std::exp(-1.0f / releaseSamples);
