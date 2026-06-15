@@ -48,6 +48,7 @@ class LocalDownloadsChannel(
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "saveJsonToDownloads" -> handleSaveJson(call, result)
+                "saveFileToDownloads" -> handleSaveFile(call, result)
                 else -> result.notImplemented()
             }
         }
@@ -138,6 +139,115 @@ class LocalDownloadsChannel(
         }
         val target = File(downloads, filename)
         target.writeText(content, Charsets.UTF_8)
+        return target.absolutePath
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Copia de archivos existentes (binarios) a Descargas
+    //
+    // Usado por la pantalla Diagnóstico DSP del técnico para el par
+    // WAV+JSON ya escrito en `getExternalFilesDir`. A diferencia de
+    // `saveJsonToDownloads`, NO recibe el contenido como String (el WAV es
+    // binario) sino la ruta origen + mimeType, y copia byte a byte.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private fun handleSaveFile(
+        call: io.flutter.plugin.common.MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val sourcePath = call.argument<String>("sourcePath")
+        val filename = call.argument<String>("filename")
+        val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+        if (sourcePath.isNullOrBlank() || filename.isNullOrBlank()) {
+            result.error(
+                "INVALID_ARGS",
+                "sourcePath y filename son requeridos",
+                null,
+            )
+            return
+        }
+
+        val source = File(sourcePath)
+        if (!source.exists() || !source.isFile) {
+            result.error(
+                "SOURCE_NOT_FOUND",
+                "El archivo origen no existe: $sourcePath",
+                null,
+            )
+            return
+        }
+
+        try {
+            val savedPath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                saveFileViaMediaStore(source, filename, mimeType)
+            } else {
+                saveFileDirectToDownloads(source, filename)
+            }
+            Log.i(TAG, "Archivo guardado: $savedPath")
+            result.success(savedPath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error guardando archivo: ${e.message}", e)
+            result.error("SAVE_FAILED", e.message ?: "Error desconocido", null)
+        }
+    }
+
+    /**
+     * Android 10+: copia el archivo origen a `MediaStore.Downloads`.
+     * No requiere permisos. Si ya existe un archivo con el mismo nombre,
+     * MediaStore agrega sufijo numérico automáticamente.
+     */
+    @android.annotation.TargetApi(Build.VERSION_CODES.Q)
+    private fun saveFileViaMediaStore(
+        source: File,
+        filename: String,
+        mimeType: String,
+    ): String {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(MediaStore.Downloads.MIME_TYPE, mimeType)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val uri = resolver.insert(collection, values)
+            ?: throw java.io.IOException("MediaStore.insert devolvió null")
+
+        try {
+            resolver.openOutputStream(uri)?.use { out ->
+                source.inputStream().use { input ->
+                    input.copyTo(out)
+                }
+            } ?: throw java.io.IOException("openOutputStream devolvió null")
+
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return "Descargas/$filename"
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    /**
+     * Android 9 y anteriores: copia el archivo origen directo al
+     * directorio público Downloads. Requiere `WRITE_EXTERNAL_STORAGE`
+     * con `maxSdkVersion="28"` ya concedido.
+     */
+    @Suppress("DEPRECATION")
+    private fun saveFileDirectToDownloads(source: File, filename: String): String {
+        val downloads = Environment
+            .getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!downloads.exists() && !downloads.mkdirs()) {
+            throw java.io.IOException("No se pudo crear ${downloads.absolutePath}")
+        }
+        val target = File(downloads, filename)
+        source.inputStream().use { input ->
+            target.outputStream().use { out ->
+                input.copyTo(out)
+            }
+        }
         return target.absolutePath
     }
 }

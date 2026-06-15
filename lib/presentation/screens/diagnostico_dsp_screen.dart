@@ -29,6 +29,7 @@
 //     vía `bloc.computeBroadbandMpo(bundle)`.
 
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -37,6 +38,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/diagnostic_metadata.dart';
 import '../../data/services/diagnostic_export_service.dart';
+import '../../data/services/local_downloads_service.dart';
 import '../../domain/entities/audiogram.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_state.dart';
@@ -112,6 +114,13 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
 
   // ─── Servicio de exportación ────────────────────────────────────────────
   final DiagnosticExportService _exportService = DiagnosticExportService();
+
+  // ─── Servicio de guardado local (Descargas) ──────────────────────────────
+  // Reusa el canal nativo `com.psk.hearing_aid/local_downloads`
+  // (`LocalDownloadsChannel.kt`), ya registrado en `MainActivity`. NO depende
+  // del share sheet de `share_plus`, así que es una vía de escape cuando el
+  // share falla.
+  final LocalDownloadsService _downloadsService = LocalDownloadsService();
 
   // ─── Animación pulsante del botón de grabar ─────────────────────────────
   late final AnimationController _pulseController;
@@ -500,7 +509,17 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
         wdrcLevelSource: wdrcLevelSource,
       );
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      // Logueamos la causa real para diagnóstico (Req: no tragar errores).
+      // El llamador (`_finalizeRecording`) sigue tratando `false` como
+      // "no se pudo generar el JSON" → borra el WAV y va a Error.
+      developer.log(
+        'generación de metadatos JSON falló: $e',
+        name: 'DiagnosticoDsp',
+        error: e,
+        stackTrace: st,
+        level: 1000,
+      );
       return false;
     }
   }
@@ -521,12 +540,79 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
       await _exportService.export(wav, json);
     } on FileSystemException catch (e) {
       _showSnackBar(e.message);
-    } catch (_) {
-      _showSnackBar('Error al exportar. Intente nuevamente.');
+    } catch (e, st) {
+      // Antes este catch tragaba la excepción y mostraba un mensaje
+      // genérico. Ahora logueamos la causa real y la mostramos en el
+      // snackbar para poder diagnosticar fallos del share sheet
+      // (ej: FileProvider, plugin no registrado, intent sin handler).
+      developer.log(
+        'onExportPressed: share falló: $e',
+        name: 'DiagnosticoDsp',
+        error: e,
+        stackTrace: st,
+        level: 1000,
+      );
+      _showSnackBar('Error al exportar: $e');
     }
 
     if (!mounted) return;
     setState(() => _screenState = DiagnosticoScreenState.completed);
+  }
+
+  /// Pulsación del botón "Descargar" en estado Completed.
+  ///
+  /// Copia el WAV y el JSON de la última grabación a la carpeta pública
+  /// **Descargas** del teléfono vía el canal nativo
+  /// `com.psk.hearing_aid/local_downloads` (`LocalDownloadsChannel.kt`).
+  /// A diferencia de [onExportPressed], NO depende del share sheet de
+  /// `share_plus`, así que sirve como vía de escape cuando el share falla.
+  ///
+  /// Tolerante a fallos: si la copia falla, muestra el error real en el
+  /// snackbar y loguea la causa.
+  Future<void> onDownloadPressed() async {
+    if (_screenState != DiagnosticoScreenState.completed) return;
+    final wav = _lastWavPath;
+    final json = _lastJsonPath;
+    final base = _lastBaseName;
+    if (wav == null || json == null || base == null) {
+      _showSnackBar(DiagnosticExportService.fileNotFoundError);
+      return;
+    }
+
+    try {
+      final wavSaved = await _downloadsService.saveFileToDownloads(
+        sourcePath: wav,
+        filename: '$base.wav',
+        mimeType: 'audio/wav',
+      );
+      final jsonSaved = await _downloadsService.saveFileToDownloads(
+        sourcePath: json,
+        filename: '$base.json',
+        mimeType: 'application/json',
+      );
+      if (!mounted) return;
+      _showSnackBar('Guardado en $wavSaved y $jsonSaved');
+    } on LocalDownloadsException catch (e, st) {
+      developer.log(
+        'onDownloadPressed: guardado local falló: ${e.message}',
+        name: 'DiagnosticoDsp',
+        error: e,
+        stackTrace: st,
+        level: 1000,
+      );
+      if (!mounted) return;
+      _showSnackBar('Error al descargar: ${e.message}');
+    } catch (e, st) {
+      developer.log(
+        'onDownloadPressed: error inesperado: $e',
+        name: 'DiagnosticoDsp',
+        error: e,
+        stackTrace: st,
+        level: 1000,
+      );
+      if (!mounted) return;
+      _showSnackBar('Error al descargar: $e');
+    }
   }
 
   /// Vuelve a Idle desde el estado Error.
@@ -644,7 +730,7 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
                     if (_screenState == DiagnosticoScreenState.error)
                       _buildErrorDisplay(),
                     if (_screenState == DiagnosticoScreenState.completed)
-                      _buildExportButton(),
+                      _buildExportActions(),
                     if (_screenState == DiagnosticoScreenState.completed)
                       _buildNewRecordingButton(),
                   ],
@@ -876,25 +962,44 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     );
   }
 
-  Widget _buildExportButton() {
+  Widget _buildExportActions() {
     final sharing = _screenState == DiagnosticoScreenState.sharing;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: SizedBox(
-        width: double.infinity,
-        child: ElevatedButton.icon(
-          onPressed: sharing ? null : onExportPressed,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _kTechCyan,
-            foregroundColor: _kTechBg,
-            padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: sharing ? null : onExportPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kTechCyan,
+                foregroundColor: _kTechBg,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              icon: const Icon(Icons.share),
+              label: const Text(
+                'Exportar',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+            ),
           ),
-          icon: const Icon(Icons.share),
-          label: const Text(
-            'Exportar',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: sharing ? null : onDownloadPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kTechAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              icon: const Icon(Icons.download),
+              label: const Text(
+                'Descargar',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

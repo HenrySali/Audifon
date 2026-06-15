@@ -85,4 +85,70 @@ class LocalDownloadsService {
       );
     }
   }
+
+  /// Copia un archivo existente (binario o texto) a `Download/` del
+  /// dispositivo. Pensado para archivos ya escritos en disco (ej. el
+  /// par WAV+JSON de diagnóstico DSP) que no se pueden pasar como
+  /// `String content`.
+  ///
+  /// [sourcePath] es la ruta absoluta del archivo origen (típicamente en
+  /// `getExternalFilesDir`). [filename] es el nombre destino dentro de
+  /// `Download/`. [mimeType] es el tipo MIME usado por `MediaStore`
+  /// (ej. `audio/wav`, `application/json`).
+  ///
+  /// Devuelve la ruta o URI mostrable al usuario (ej.
+  /// `"Descargas/diag_20260612_101500.wav"`).
+  ///
+  /// Comportamiento por versión de Android idéntico a
+  /// [saveJsonToDownloads]:
+  /// - Android 10+ (API 29+): `MediaStore.Downloads`, sin permisos.
+  /// - Android 9 y anteriores: escritura directa, requiere
+  ///   `WRITE_EXTERNAL_STORAGE` ya concedido.
+  ///
+  /// Lanza [LocalDownloadsException] si el origen no existe, el método
+  /// nativo falla, o la plataforma no es Android.
+  Future<String> saveFileToDownloads({
+    required String sourcePath,
+    required String filename,
+    required String mimeType,
+  }) async {
+    try {
+      final result = await _channel.invokeMethod<String>(
+        'saveFileToDownloads',
+        <String, dynamic>{
+          'sourcePath': sourcePath,
+          'filename': filename,
+          'mimeType': mimeType,
+        },
+      );
+      if (result == null || result.isEmpty) {
+        throw LocalDownloadsException(
+          'El canal nativo retornó null/empty.',
+        );
+      }
+      return result;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'LocalDownloadsService: canal nativo no disponible: $e',
+        name: 'LocalDownloadsService',
+        level: 1000,
+      );
+      throw LocalDownloadsException(
+        'El canal nativo no está disponible en esta plataforma.',
+        e,
+      );
+    } on PlatformException catch (e) {
+      developer.log(
+        'LocalDownloadsService.saveFile: PlatformException ${e.code}: '
+        '${e.message}',
+        name: 'LocalDownloadsService',
+        level: 1000,
+        error: e,
+      );
+      throw LocalDownloadsException(
+        e.message ?? e.code,
+        e,
+      );
+    }
+  }
 }

@@ -55,6 +55,10 @@ class DiagnosticExportService {
         XFile(wavPath),
         XFile(jsonPath),
       ],
+      // Declarar los MIME explícitamente robustece el intent de share en
+      // Android (algunos targets filtran por tipo). El orden coincide con
+      // el de los XFile: WAV primero, JSON después.
+      mimeTypes: const <String>['audio/wav', 'application/json'],
       subject: 'Diagnóstico DSP',
     );
 
