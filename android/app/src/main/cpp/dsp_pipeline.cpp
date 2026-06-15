@@ -152,6 +152,11 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // antes (en el AudioEngine), así que evitamos doble NR.
     if (!nrBypassed_.load(std::memory_order_acquire)) {
         nr_.process(buffer, blockSize);
+    } else {
+        // NR Wiener bypasseado (un denoiser DNN externo ya procesó el buffer).
+        // Aun así actualizamos las estimaciones de potencia por banda del NR
+        // para que el SNR del clasificador de entorno siga vivo (no congelado).
+        nr_.analyzeOnly(buffer, blockSize);
     }
 
     // Métrica: nivel post-NR
@@ -183,7 +188,16 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
 
     // ─── 3. Environment Classifier (actualiza NR + WDRC en transición) ──
     if (autoClassifyEnabled_.load(std::memory_order_relaxed)) {
-        float estimatedSnr = estimateSnrSimple(inputLevelDb);
+        // FIX clasificador: SNR REAL desde las estimaciones por banda del NR
+        // (potencias de señal y ruido), en vez del SNR falso (nivel − 30) que
+        // nunca permitía alcanzar NOISE/Ruidoso (colapsaba a QUIET/SPEECH).
+        // Validado en tools/sim_v3/validate_classifier.py.
+        float sigEst[kNrSubBands];
+        float noiEst[kNrSubBands];
+        nr_.getSignalEstimate(sigEst, kNrSubBands);
+        nr_.getNoiseEstimate(noiEst, kNrSubBands);
+        float estimatedSnr = EnvironmentClassifier::estimateSnrFromNr(
+            sigEst, noiEst, kNrSubBands);
 
         EnvironmentClass envClass = envClassifier_.update(inputLevelDb, estimatedSnr);
         int envClassInt = static_cast<int>(envClass);
@@ -452,22 +466,6 @@ void DspPipeline::applyVolume(float* buffer, int blockSize, float volumeLinear) 
     for (int i = 0; i < blockSize; ++i) {
         buffer[i] *= volumeLinear;
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Estimación simplificada de SNR
-// ─────────────────────────────────────────────────────────────────────────────
-
-float DspPipeline::estimateSnrSimple(float inputLevelDb) const {
-    // Estimación heurística de SNR basada en el nivel de entrada.
-    // En un sistema completo, el NR expondría sus noise estimates por banda.
-    // Aquí usamos una aproximación: el piso de ruido del micrófono es ~26 dB SPL.
-    // SNR ≈ inputLevel - noiseFloor.
-    // Clampeamos al rango práctico [-20, 40] dB.
-    static constexpr float kNoiseFloorDbSpl = 30.0f;
-    float snr = inputLevelDb - kNoiseFloorDbSpl;
-    snr = std::max(kEnvSnrMin, std::min(kEnvSnrMax, snr));
-    return snr;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

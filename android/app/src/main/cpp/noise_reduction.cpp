@@ -99,6 +99,7 @@ void NoiseReduction::reset() {
         bandStates_[i] = BiquadState{};
         noisePower_[i] = kMinPower;
         signalPower_[i] = kMinPower;
+        bandEnergy_[i] = 0.0f;
     }
     prevGain_ = 1.0f;
 }
@@ -112,7 +113,14 @@ void NoiseReduction::process(float* buffer, int blockSize) {
         return;
     }
 
-    // Si NR está desactivado (nivel 0), pass-through sin modificar
+    // Paso 0: actualizar SIEMPRE las estimaciones de potencia señal/ruido por
+    // banda (también las usa el clasificador de entorno vía getSignalEstimate/
+    // getNoiseEstimate). Esto deja el SNR del clasificador fresco incluso en
+    // nivel 0. NO modifica el audio.
+    updateBandPowers(buffer, blockSize);
+
+    // Si NR está desactivado (nivel 0), pass-through sin modificar el audio.
+    // Las estimaciones ya quedaron actualizadas arriba.
     int currentLevel = level_.load(std::memory_order_relaxed);
     if (currentLevel == 0) {
         return;
@@ -121,50 +129,11 @@ void NoiseReduction::process(float* buffer, int blockSize) {
     // Obtener piso de ganancia para el nivel actual
     float gainFloor = getGainFloor();
 
-    // --- Paso 1: Estimar potencia de señal por sub-banda ---
-    // Filtrar el bloque completo por cada sub-banda y calcular energía
-    float bandEnergy[kNrSubBands] = {};
-
-    for (int band = 0; band < kNrSubBands; ++band) {
-        float energy = 0.0f;
-        // Copiar estado del filtro para no modificar el estado principal
-        // durante la estimación (usamos el estado principal directamente
-        // ya que se actualiza bloque a bloque)
-        for (int i = 0; i < blockSize; ++i) {
-            float filtered = applyBiquad(buffer[i], bandCoeffs_[band],
-                                         bandStates_[band]);
-            energy += filtered * filtered;
-        }
-        // Energía promedio por muestra en esta banda
-        bandEnergy[band] = energy / static_cast<float>(blockSize);
-    }
-
-    // --- Paso 2: Actualizar estimaciones de potencia de señal y ruido ---
+    // --- Paso 3: Calcular ganancia Wiener por sub-banda ---
+    // Las potencias signalPower_/noisePower_ ya fueron actualizadas en
+    // updateBandPowers(); aquí solo derivamos la ganancia.
     float gains[kNrSubBands];
-
     for (int band = 0; band < kNrSubBands; ++band) {
-        float currentEnergy = std::max(bandEnergy[band], kMinPower);
-
-        // Actualizar potencia de señal (suavizado rápido)
-        signalPower_[band] += kSignalAlpha * (currentEnergy - signalPower_[band]);
-
-        // Actualizar estimación de ruido solo cuando la señal está cerca
-        // del piso de ruido (no hay habla presente en esta banda)
-        float snrEstimate = signalPower_[band] / std::max(noisePower_[band], kMinPower);
-
-        if (snrEstimate < kSignalPresenceThreshold) {
-            // No hay señal significativa — actualizar estimación de ruido
-            noisePower_[band] += kNoiseAlpha * (currentEnergy - noisePower_[band]);
-        } else {
-            // Hay señal presente — actualizar ruido muy lentamente
-            // (para adaptarse a cambios graduales del ruido de fondo)
-            noisePower_[band] += (kNoiseAlpha * 0.1f) * (currentEnergy - noisePower_[band]);
-        }
-
-        // Asegurar que la estimación de ruido no exceda la señal
-        noisePower_[band] = std::min(noisePower_[band], signalPower_[band]);
-
-        // --- Paso 3: Calcular ganancia Wiener ---
         // G = max(1 - noise_power / signal_power, gain_floor)
         float wienerGain = 1.0f - (noisePower_[band] / std::max(signalPower_[band], kMinPower));
 
@@ -185,7 +154,7 @@ void NoiseReduction::process(float* buffer, int blockSize) {
 
     float totalEnergy = 0.0f;
     for (int band = 0; band < kNrSubBands; ++band) {
-        totalEnergy += bandEnergy[band];
+        totalEnergy += bandEnergy_[band];
     }
 
     if (totalEnergy < kMinPower) {
@@ -200,7 +169,7 @@ void NoiseReduction::process(float* buffer, int blockSize) {
     // según el diseño — NR puede operar a block-rate).
     float compositeGain = 0.0f;
     for (int band = 0; band < kNrSubBands; ++band) {
-        float weight = bandEnergy[band] / totalEnergy;
+        float weight = bandEnergy_[band] / totalEnergy;
         compositeGain += weight * gains[band];
     }
 
@@ -222,6 +191,84 @@ void NoiseReduction::process(float* buffer, int blockSize) {
     // Aplicar ganancia compuesta al buffer
     for (int i = 0; i < blockSize; ++i) {
         buffer[i] *= compositeGain;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Análisis sin aplicar ganancia (camino DNN/bypass) — mantiene vivo el SNR
+// ─────────────────────────────────────────────────────────────────────────────
+
+void NoiseReduction::analyzeOnly(const float* buffer, int blockSize) {
+    if (buffer == nullptr || blockSize <= 0) {
+        return;
+    }
+    updateBandPowers(buffer, blockSize);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Actualización de potencias por banda (compartida por process/analyzeOnly)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void NoiseReduction::updateBandPowers(const float* buffer, int blockSize) {
+    // --- Paso 1: Estimar potencia de señal por sub-banda ---
+    // Filtrar el bloque completo por cada sub-banda y calcular energía
+    for (int band = 0; band < kNrSubBands; ++band) {
+        float energy = 0.0f;
+        for (int i = 0; i < blockSize; ++i) {
+            float filtered = applyBiquad(buffer[i], bandCoeffs_[band],
+                                         bandStates_[band]);
+            energy += filtered * filtered;
+        }
+        // Energía promedio por muestra en esta banda
+        bandEnergy_[band] = energy / static_cast<float>(blockSize);
+    }
+
+    // --- Paso 2: Actualizar estimaciones de potencia de señal y ruido ---
+    for (int band = 0; band < kNrSubBands; ++band) {
+        float currentEnergy = std::max(bandEnergy_[band], kMinPower);
+
+        // Actualizar potencia de señal (suavizado rápido)
+        signalPower_[band] += kSignalAlpha * (currentEnergy - signalPower_[band]);
+
+        // Actualizar estimación de ruido solo cuando la señal está cerca
+        // del piso de ruido (no hay habla presente en esta banda)
+        float snrEstimate = signalPower_[band] / std::max(noisePower_[band], kMinPower);
+
+        if (snrEstimate < kSignalPresenceThreshold) {
+            // No hay señal significativa — actualizar estimación de ruido
+            noisePower_[band] += kNoiseAlpha * (currentEnergy - noisePower_[band]);
+        } else {
+            // Hay señal presente — actualizar ruido muy lentamente
+            // (para adaptarse a cambios graduales del ruido de fondo)
+            noisePower_[band] += (kNoiseAlpha * 0.1f) * (currentEnergy - noisePower_[band]);
+        }
+
+        // Asegurar que la estimación de ruido no exceda la señal
+        noisePower_[band] = std::min(noisePower_[band], signalPower_[band]);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Getters de estimaciones por banda (para el clasificador de entorno)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void NoiseReduction::getSignalEstimate(float* out, int maxBands) const {
+    if (out == nullptr || maxBands <= 0) {
+        return;
+    }
+    int n = std::min(maxBands, kNrSubBands);
+    for (int band = 0; band < n; ++band) {
+        out[band] = signalPower_[band];
+    }
+}
+
+void NoiseReduction::getNoiseEstimate(float* out, int maxBands) const {
+    if (out == nullptr || maxBands <= 0) {
+        return;
+    }
+    int n = std::min(maxBands, kNrSubBands);
+    for (int band = 0; band < n; ++band) {
+        out[band] = noisePower_[band];
     }
 }
 

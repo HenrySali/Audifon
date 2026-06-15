@@ -35,17 +35,35 @@ static constexpr float kEnvAlpha = 0.05f;
 /// pruebas en escenas reales para mayor estabilidad subjetiva.
 static constexpr int kEnvHoldBlocks = 750;
 
-/// Umbral de nivel para entorno silencioso (dB SPL)
-static constexpr float kEnvLevelQuietThreshold = 45.0f;
+/// Umbral de nivel para entorno silencioso (dB SPL).
+/// Recalibrado (FIX clasificador, splOffset=93 dB del mic celular): un
+/// ambiente tranquilo ronda 40-48 dB SPL; la voz normal ~60-65 dB SPL queda
+/// claramente por encima. Antes 45 dB SPL.
+static constexpr float kEnvLevelQuietThreshold = 48.0f;
 
-/// Umbral de nivel máximo para clasificar como habla (dB SPL)
-static constexpr float kEnvLevelSpeechMax = 70.0f;
+/// Umbral de nivel máximo para clasificar como habla (dB SPL).
+/// Recalibrado: con el SNR real (razón señal/ruido del NR) el discriminador
+/// principal es el SNR, no el nivel; subimos el techo a 80 dB SPL para no
+/// bloquear voz fuerte legítima. El ruido fuerte cae en NOISE por SNR bajo,
+/// no por nivel. Antes 70 dB SPL.
+static constexpr float kEnvLevelSpeechMax = 80.0f;
 
-/// Umbral de SNR para habla limpia (dB)
-static constexpr float kEnvSnrSpeechThreshold = 10.0f;
+/// Umbral de SNR para ENTRAR a SPEECH (dB) — histéresis alta.
+/// Recalibrado contra el SNR autoconsistente del NR
+/// (tools/sim_v3/validate_classifier.py): voz limpia ≈ 10 dB; voz en ruido
+/// ≈ 2.7 dB; ruido/música < 1 dB. Entrar a SPEECH con SNR > 6 dB separa voz
+/// limpia del resto. Antes 12 dB (calibrado para el SNR falso = nivel-30).
+static constexpr float kEnvSnrSpeechEnter = 6.0f;
 
-/// Umbral de SNR para habla en ruido — límite inferior (dB)
-static constexpr float kEnvSnrNoiseThreshold = 0.0f;
+/// Umbral de SNR para SALIR de SPEECH (dB) — histéresis baja.
+/// Zona muerta [4, 6] dB mantiene el estado y evita chatter. Antes 5 dB.
+static constexpr float kEnvSnrSpeechExit = 4.0f;
+
+/// Umbral de SNR por debajo del cual el entorno es NOISE (dB).
+/// Recalibrado: ruido estacionario/música dan SNR < 1.5 dB (señal≈ruido);
+/// voz en ruido da ~2.7 dB → SPEECH_IN_NOISE. Antes 0 dB (inalcanzable con
+/// el SNR falso). Ambos (NOISE y SPEECH_IN_NOISE) se muestran como "Ruidoso".
+static constexpr float kEnvSnrNoiseThreshold = 1.5f;
 
 /// SNR mínimo clampeable (dB)
 static constexpr float kEnvSnrMin = -20.0f;
@@ -62,10 +80,10 @@ static constexpr float kHeadroomCeiling = 0.95f;
 
 /// Clasificación del entorno acústico.
 enum class EnvironmentClass : int {
-    QUIET = 0,            ///< Nivel < 45 dB SPL
-    SPEECH = 1,           ///< Nivel 45-70 dB SPL, SNR > 10 dB
-    SPEECH_IN_NOISE = 2,  ///< SNR 0-10 dB
-    NOISE = 3             ///< Nivel > 70 dB SPL o SNR < 0 dB
+    QUIET = 0,            ///< Nivel < 48 dB SPL
+    SPEECH = 1,           ///< Nivel 48-80 dB SPL, SNR > 6 dB
+    SPEECH_IN_NOISE = 2,  ///< SNR 1.5-6 dB
+    NOISE = 3             ///< Nivel > 80 dB SPL o SNR < 1.5 dB
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,14 +139,21 @@ public:
     /// @return Struct con compressionKnee y compressionRatio
     EnvWdrcParams getRecommendedWdrcParams() const;
 
-    /// Estima el SNR a partir de las potencias de ruido del NR.
+    /// Estima el SNR a partir de las potencias por banda del NR Wiener.
     ///
-    /// @param noiseEstimate Array de estimaciones de ruido por banda (energía lineal)
-    /// @param numBands Número de bandas en el array
-    /// @param signalRmsDb Nivel RMS de la señal actual en dB
+    /// SNR autoconsistente = 10·log10( Σ signalPower / Σ noisePower ), usando
+    /// las potencias de señal y ruido del mismo banco de filtros del NR (misma
+    /// referencia → sin sesgo SPL/dBFS). Valida en
+    /// tools/sim_v3/validate_classifier.py: voz limpia ≈ 10 dB, voz en ruido
+    /// ≈ 2.7 dB, ruido/música < 1 dB (el enfoque previo "señal banda-ancha −
+    /// promedio de ruido por banda" NO discriminaba: comprimía todo a ~10-16 dB).
+    ///
+    /// @param signalEstimate Array de potencias de señal por banda (energía lineal)
+    /// @param noiseEstimate  Array de potencias de ruido por banda (energía lineal)
+    /// @param numBands       Número de bandas en los arrays
     /// @return SNR estimado en dB, clampeado a [-20, 40]
-    static float estimateSnrFromNr(const float* noiseEstimate, int numBands,
-                                   float signalRmsDb);
+    static float estimateSnrFromNr(const float* signalEstimate,
+                                   const float* noiseEstimate, int numBands);
 
     /// Reinicia el clasificador al estado inicial (QUIET).
     void reset();

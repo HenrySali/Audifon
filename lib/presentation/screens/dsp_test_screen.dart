@@ -58,6 +58,20 @@ class _DspTestScreenState extends State<DspTestScreen> {
   // ─── Ambiente detectado más reciente ──────────────────────────────────
   int _envClass = -1; // -1 = aún sin dato
 
+  // ─── Saturación del limitador MPO (spec audifono-v3 T10.2 / R9.2) ─────
+  // Métricas expuestas por el motor en `getDspStageMetrics()`:
+  //   - `mpoLimitingFraction` (double 0..1): fracción de muestras del
+  //     último bloque en que el MPO recortó.
+  //   - `mpoLimitingSustained` (bool): true si la limitación fue sostenida
+  //     (~≥200 ms). Señal del aviso visible al técnico.
+  // Tolerantes a `.so` viejos que no exponen estas claves → 0.0 / false.
+  double _mpoFraction = 0.0;
+  bool _mpoSustained = false;
+
+  /// Umbral de `mpoLimitingFraction` por encima del cual se considera que
+  /// el limitador está actuando de forma notable aunque no sea sostenida.
+  static const double _satFractionThreshold = 0.2;
+
   @override
   void initState() {
     super.initState();
@@ -77,15 +91,33 @@ class _DspTestScreenState extends State<DspTestScreen> {
     try {
       final r = await _channel.invokeMethod<Map>('getDspStageMetrics');
       if (mounted && r != null) {
-        final ec = r['environmentClass'];
-        if (ec is int && ec >= 0 && ec != _envClass) {
-          setState(() => _envClass = ec);
-        } else if (ec is int && _envClass < 0) {
-          setState(() => _envClass = ec);
+        final m = Map<String, dynamic>.from(r);
+        final ec = m['environmentClass'];
+        final newEnv = (ec is int && ec >= 0) ? ec : _envClass;
+        final frac = _satFraction(m['mpoLimitingFraction']);
+        final sust = _satSustained(m['mpoLimitingSustained']);
+        if (newEnv != _envClass ||
+            frac != _mpoFraction ||
+            sust != _mpoSustained) {
+          setState(() {
+            _envClass = newEnv;
+            _mpoFraction = frac;
+            _mpoSustained = sust;
+          });
         }
       }
     } catch (_) {}
   }
+
+  /// Parser tolerante de `mpoLimitingFraction`: acepta cualquier `num`,
+  /// recorta a `[0,1]`. `.so` viejos que no exponen la clave → 0.0.
+  double _satFraction(dynamic v) =>
+      v is num ? v.toDouble().clamp(0.0, 1.0).toDouble() : 0.0;
+
+  /// Parser tolerante de `mpoLimitingSustained`: acepta `bool` o `num`
+  /// (1.0f → true). Clave ausente → false.
+  bool _satSustained(dynamic v) =>
+      v is bool ? v : (v is num ? v != 0 : false);
 
   @override
   void dispose() {
@@ -170,6 +202,8 @@ class _DspTestScreenState extends State<DspTestScreen> {
         final m = Map<String, dynamic>.from(r);
         final ec = m['environmentClass'];
         if (ec is int) _envClass = ec;
+        _mpoFraction = _satFraction(m['mpoLimitingFraction']);
+        _mpoSustained = _satSustained(m['mpoLimitingSustained']);
         setState(() => _metrics = m);
       }
     } on MissingPluginException {
@@ -353,6 +387,8 @@ class _DspTestScreenState extends State<DspTestScreen> {
           children: [
             _buildEnvBanner(),
             const SizedBox(height: 8),
+            _buildSaturationIndicator(),
+            const SizedBox(height: 8),
             _buildRunAllAndOptions(),
             const SizedBox(height: 10),
             if (_activePresetIndex != null) ...[
@@ -366,6 +402,88 @@ class _DspTestScreenState extends State<DspTestScreen> {
             _buildPresets(),
           ],
         ),
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Indicador de saturación del limitador (MPO) — R9.2 audifono-v3
+  // ────────────────────────────────────────────────────────────────────────
+  //
+  // Se alimenta del MISMO polling de métricas ya existente:
+  //   - `_fetchAmbientOnly` (500 ms, siempre activo cuando no hay test)
+  //   - `_fetch` (100 ms, durante un test de preset)
+  // Muestra en vivo si el limitador clínico está recortando la salida:
+  //   - VERDE  "Sin saturación"  → no limita.
+  //   - NARANJA "Limitando"       → fracción > umbral (recorte puntual).
+  //   - ROJO    "SATURACIÓN sostenida" → `mpoLimitingSustained == true`
+  //     (≥ ~200 ms cuasi-continuos: la salida está pegada al techo).
+  // El valor cuantitativo (% de muestras recortadas) acompaña al estado.
+  Widget _buildSaturationIndicator() {
+    final bool limiting = _mpoFraction > _satFractionThreshold;
+    final bool alert = _mpoSustained || limiting;
+    final String pct = (_mpoFraction * 100).toStringAsFixed(0);
+
+    final Color color = _mpoSustained
+        ? Colors.red
+        : (limiting ? Colors.orange : Colors.green);
+    final String state = _mpoSustained
+        ? 'SATURACIÓN sostenida'
+        : (limiting ? 'Limitando' : 'Sin saturación');
+    final IconData icon =
+        alert ? Icons.warning_amber_rounded : Icons.check_circle_outline;
+
+    return Semantics(
+      container: true,
+      label: 'Indicador de saturación del limitador MPO. '
+          'Estado: $state. Recorte del $pct por ciento de las muestras '
+          'del último bloque.',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.5)),
+        ),
+        child: Row(children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Limitador (MPO): $state',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Recorte: $pct % de las muestras del último bloque',
+                  style: const TextStyle(color: Colors.white70, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Barra cuantitativa (0..1) con el color del estado actual.
+          SizedBox(
+            width: 64,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: SizedBox(
+                height: 8,
+                child: LinearProgressIndicator(
+                  value: _mpoFraction.clamp(0.0, 1.0),
+                  backgroundColor: Colors.white.withOpacity(0.08),
+                  color: color,
+                ),
+              ),
+            ),
+          ),
+        ]),
       ),
     );
   }

@@ -216,13 +216,6 @@ private:
     /// @param volumeLinear Factor lineal de volumen
     static void applyVolume(float* buffer, int blockSize, float volumeLinear);
 
-    /// Estimación simplificada de SNR basada en nivel de entrada.
-    /// Usada por el clasificador de entorno cuando no hay acceso directo
-    /// a las estimaciones de ruido por banda del NR.
-    /// @param inputLevelDb Nivel de entrada en dB SPL
-    /// @return SNR estimado en dB, clampeado a [-20, 40]
-    float estimateSnrSimple(float inputLevelDb) const;
-
     /// Aplica al limitador MPO el threshold derivado de un valor en dB SPL,
     /// usando la calibración de SALIDA dedicada (kMpoSplOffset), NO el offset
     /// de entrada del micrófono (splOffset_).

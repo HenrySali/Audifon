@@ -75,10 +75,45 @@ public:
     /// Reinicia el estado interno (estimaciones de ruido, filtros).
     void reset();
 
+    /// Actualiza SOLO las estimaciones de potencia de señal/ruido por banda
+    /// SIN aplicar ganancia al buffer (no modifica el audio).
+    ///
+    /// Pensado para el camino en que un denoiser externo (DNN) ya procesó el
+    /// audio y el NR Wiener interno está bypasseado (ver DspPipeline::
+    /// isNrBypassed): aun así el clasificador de entorno necesita una
+    /// estimación de SNR fresca por banda, así que el pipeline llama a este
+    /// método para mantener vivas signalPower_/noisePower_.
+    ///
+    /// @param buffer Buffer de audio float32 (NO se modifica)
+    /// @param blockSize Número de muestras en el buffer
+    void analyzeOnly(const float* buffer, int blockSize);
+
+    /// Copia la estimación de potencia de SEÑAL por sub-banda (energía lineal
+    /// suavizada). Usado por el clasificador de entorno para estimar SNR.
+    /// @param out Buffer destino (al menos @p maxBands floats)
+    /// @param maxBands Tamaño del buffer destino; se copian min(maxBands, 8) bandas
+    void getSignalEstimate(float* out, int maxBands) const;
+
+    /// Copia la estimación de potencia de RUIDO por sub-banda (energía lineal).
+    /// Usado por el clasificador de entorno (EnvironmentClassifier::
+    /// estimateSnrFromNr) para estimar el SNR del ambiente.
+    /// @param out Buffer destino (al menos @p maxBands floats)
+    /// @param maxBands Tamaño del buffer destino; se copian min(maxBands, 8) bandas
+    void getNoiseEstimate(float* out, int maxBands) const;
+
 private:
     /// Obtiene el piso de ganancia para el nivel actual.
     /// @return Piso de ganancia lineal (0.18, 0.3, 0.5, o 1.0 para off)
     float getGainFloor() const;
+
+    /// Filtra el bloque por las 8 sub-bandas y actualiza las estimaciones de
+    /// potencia de señal y ruido (signalPower_/noisePower_) y bandEnergy_.
+    /// NO aplica ganancia al buffer. Compartido por process() y analyzeOnly()
+    /// para que la estimación de SNR del clasificador esté siempre fresca,
+    /// incluso con NR en nivel 0 o bypasseado.
+    /// @param buffer Buffer de audio float32 (NO se modifica)
+    /// @param blockSize Número de muestras en el buffer
+    void updateBandPowers(const float* buffer, int blockSize);
 
     /// Estado de filtro bandpass de 2° orden (biquad) por sub-banda.
     struct BiquadState {
@@ -126,6 +161,7 @@ private:
 
     float noisePower_[kNrSubBands];   ///< Estimación de potencia de ruido por banda
     float signalPower_[kNrSubBands];  ///< Potencia de señal por banda (suavizada)
+    float bandEnergy_[kNrSubBands] = {}; ///< Energía por banda del último bloque (para ponderar la ganancia compuesta)
 
     /// Ganancia compuesta del bloque anterior (para suavizado temporal).
     float prevGain_ = 1.0f;

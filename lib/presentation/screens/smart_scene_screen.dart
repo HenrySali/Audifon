@@ -657,16 +657,18 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   /// 2. Invocar `audioBridge.getDspStageMetrics()`. En excepción o
   ///    `null` → omitir tick sin actualizar `_lastEnvClass` (Req 2.12).
   /// 3. Leer `environmentClass` como `int`; tipos no-int → omitir.
-  /// 4. Normalizar a `[0, 7]` (Req 2.13).
-  /// 5. cls ∈ {0, 7} → no dispatch, no actualizar `_lastEnvClass`
-  ///    (Req 2.7).
-  /// 6. cls igual al último → no dispatch (Req 2.11).
-  /// 7. Mapear con `resolveSmartPreset` (helper puro de tarea 2.5).
-  ///    Si retorna `null` (sin match exacto ni prefijo) → no dispatch.
-  /// 8. Si el preset coincide con el `activeProfile` actual del bloc →
-  ///    no dispatch (evita ruido en la cadena de eventos del bloc).
-  /// 9. Despachar `ChangeProfile(profile: preset)` y actualizar
+  /// 4. Contrato REAL del motor C++ = `EnvironmentClass` (0..3): QUIET,
+  ///    SPEECH, SPEECH_IN_NOISE, NOISE. Fuera de `[0, 3]` → omitir.
+  /// 5. cls igual al último → no dispatch (Req 2.11).
+  /// 6. Mapear con `resolveEnvironmentProfile` (4 clases → Silencioso/
+  ///    Conversación/Ruidoso). `null` (perfil no disponible) → no dispatch.
+  /// 7. Si el perfil coincide con el `activeProfile` actual → no dispatch.
+  /// 8. Despachar `ChangeProfile(profile: preset)` y actualizar
   ///    `_lastEnvClass` (Req 2.2).
+  ///
+  /// FIX clasificador: antes el paso 4 normalizaba a `[0,7]` y el mapeo
+  /// usaba `resolveSmartPreset` (contrato `SceneClass` de 8 clases con
+  /// presets "Suave/Medio/Alto" inexistentes) → nunca cambiaba de perfil.
   Future<void> _pollSmartScene() async {
     if (!mounted) {
       _stopSmartScenePolling();
@@ -705,38 +707,30 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
     final raw = metrics['environmentClass'];
     if (raw is! int) return;
 
-    // Paso 4: normalizar a [0, 7] (Req 2.13).
-    final cls = (raw < 0 || raw > 7) ? 0 : raw;
+    // Paso 4: contrato REAL del motor C++ = EnvironmentClass (0..3).
+    // QUIET=0, SPEECH=1, SPEECH_IN_NOISE=2, NOISE=3. Fuera de rango → no-op.
+    if (raw < 0 || raw > 3) return;
+    final cls = raw;
 
-    // Paso 5: Req 2.7. cls ∈ {0, 7} → no dispatch. NO actualizar
-    // `_lastEnvClass`: la próxima vez que la clase salga del par
-    // {0, 7} debe contar como transición.
-    if (cls == 0 || cls == 7) return;
-
-    // Paso 6: Req 2.11. cls igual al último → idempotente, no dispatch.
+    // Paso 5: cls igual al último → idempotente, no dispatch (Req 2.11).
     if (cls == _lastEnvClass) return;
 
-    // Paso 7: mapear cls → nombre de preset (helper puro tarea 2.5).
-    final presetName = resolveSmartPreset(cls, _availableProfileNames);
+    // Paso 6: mapear EnvironmentClass → perfil del técnico
+    // (Silencioso/Conversación/Ruidoso) con el helper puro.
+    final presetName = resolveEnvironmentProfile(cls, _availableProfileNames);
     if (presetName == null) {
-      // Sin match exacto ni prefijo en el bundle activo: no dispatch
-      // (AC 2.9). NO actualizar `_lastEnvClass` para que el próximo
-      // tick con la misma cls sí re-evalúe — el set de presets podría
-      // haber cambiado.
+      // El perfil mapeado no está disponible: no dispatch. NO actualizar
+      // `_lastEnvClass` para reintentar si el set de perfiles cambia.
       return;
     }
 
-    // Paso 8: evitar dispatch redundante si ya estamos en ese preset.
-    // Esto es defensivo: el bloc también idempotenta `ChangeProfile`,
-    // pero ahorra un evento + reconstrucción del bundle.
+    // Paso 7: evitar dispatch redundante si ya estamos en ese perfil.
     if (presetName == state.activeProfile) {
-      // Preservar el avance de `_lastEnvClass` para no recalcular en
-      // cada tick mientras la clase persista.
       _lastEnvClass = cls;
       return;
     }
 
-    // Paso 9: dispatch + memorizar.
+    // Paso 8: dispatch + memorizar.
     _lastEnvClass = cls;
     bloc.add(ChangeProfile(profile: presetName));
   }

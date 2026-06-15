@@ -75,9 +75,9 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
 
     // Step 2: Clasificación rule-based con HISTÉRESIS
     // La histéresis evita oscilación en la frontera SPEECH↔NOISE.
-    // Para ENTRAR a SPEECH: SNR debe ser > 12 dB (umbral alto)
-    // Para SALIR de SPEECH: SNR debe caer < 5 dB (umbral bajo)
-    // Zona muerta [5, 12] dB: mantiene el estado actual.
+    // Para ENTRAR a SPEECH: SNR debe ser > kEnvSnrSpeechEnter (6 dB)
+    // Para SALIR de SPEECH: SNR debe caer < kEnvSnrSpeechExit (4 dB)
+    // Zona muerta [4, 6] dB: mantiene el estado actual.
     EnvironmentClass newClass;
     float level = smoothedLevelDb_;
     float snr = smoothedSnrDb_;
@@ -88,25 +88,25 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     if (level < kEnvLevelQuietThreshold) {
         newClass = EnvironmentClass::QUIET;
     } else if (current == EnvironmentClass::SPEECH) {
-        // Ya estamos en SPEECH — solo salir si SNR cae mucho (< 5 dB)
-        if (snr < 5.0f) {
+        // Ya estamos en SPEECH — solo salir si SNR cae bajo el umbral de salida
+        if (snr < kEnvSnrSpeechExit) {
             newClass = (snr < kEnvSnrNoiseThreshold) ?
                 EnvironmentClass::NOISE : EnvironmentClass::SPEECH_IN_NOISE;
         } else {
             newClass = EnvironmentClass::SPEECH; // mantener
         }
     } else if (current == EnvironmentClass::NOISE) {
-        // Ya estamos en NOISE — solo salir si SNR sube mucho (> 12 dB)
-        if (snr > 12.0f && level <= kEnvLevelSpeechMax) {
+        // Ya estamos en NOISE — solo salir si SNR sube sobre el umbral de entrada
+        if (snr > kEnvSnrSpeechEnter && level <= kEnvLevelSpeechMax) {
             newClass = EnvironmentClass::SPEECH;
-        } else if (snr > 5.0f) {
+        } else if (snr > kEnvSnrSpeechExit) {
             newClass = EnvironmentClass::SPEECH_IN_NOISE;
         } else {
             newClass = EnvironmentClass::NOISE; // mantener
         }
     } else {
         // SPEECH_IN_NOISE o estado inicial — usar umbrales normales
-        if (snr > 12.0f && level <= kEnvLevelSpeechMax) {
+        if (snr > kEnvSnrSpeechEnter && level <= kEnvLevelSpeechMax) {
             newClass = EnvironmentClass::SPEECH;
         } else if (snr < kEnvSnrNoiseThreshold) {
             newClass = EnvironmentClass::NOISE;
@@ -158,30 +158,36 @@ EnvWdrcParams EnvironmentClassifier::getRecommendedWdrcParams() const {
 // Estimación de SNR desde el módulo de NR
 // ─────────────────────────────────────────────────────────────────────────────
 
-float EnvironmentClassifier::estimateSnrFromNr(const float* noiseEstimate,
-                                               int numBands,
-                                               float signalRmsDb) {
-    if (noiseEstimate == nullptr || numBands <= 0) {
+float EnvironmentClassifier::estimateSnrFromNr(const float* signalEstimate,
+                                               const float* noiseEstimate,
+                                               int numBands) {
+    if (signalEstimate == nullptr || noiseEstimate == nullptr || numBands <= 0) {
         return 0.0f;
     }
 
-    // Promediar energía de ruido en todas las sub-bandas
+    // SNR autoconsistente: razón de potencias señal/ruido en la MISMA
+    // referencia (energía banda-filtrada del NR). Sumamos sobre las bandas
+    // (broadband) → 10·log10(Σ señal / Σ ruido). Self-consistent: los offsets
+    // del banco de filtros se cancelan, sin confusión SPL/dBFS.
+    float signalEnergySum = 0.0f;
     float noiseEnergySum = 0.0f;
     for (int band = 0; band < numBands; ++band) {
+        signalEnergySum += signalEstimate[band];
         noiseEnergySum += noiseEstimate[band];
     }
-    float avgNoiseEnergy = noiseEnergySum / static_cast<float>(numBands);
 
-    // Convertir energía promedio de ruido a dB
-    float noiseDb;
-    if (avgNoiseEnergy > 1e-10f) {
-        noiseDb = 10.0f * std::log10(avgNoiseEnergy);
-    } else {
-        noiseDb = -90.0f;
+    // Piso numérico para evitar log(0) / división por cero.
+    static constexpr float kPowerFloor = 1e-10f;
+    if (signalEnergySum < kPowerFloor) {
+        // Señal nula → SNR mínimo (silencio absoluto; el nivel decide QUIET).
+        return kEnvSnrMin;
+    }
+    if (noiseEnergySum < kPowerFloor) {
+        // Ruido despreciable → SNR máximo (señal limpia).
+        return kEnvSnrMax;
     }
 
-    // SNR = nivel de señal - nivel de ruido
-    float snr = signalRmsDb - noiseDb;
+    float snr = 10.0f * std::log10(signalEnergySum / noiseEnergySum);
 
     // Clampear al rango práctico [-20, 40] dB
     snr = std::max(kEnvSnrMin, std::min(kEnvSnrMax, snr));

@@ -479,7 +479,12 @@ class _IdleView extends StatelessWidget {
             },
           ),
           const Spacer(flex: 1),
-          // Selector de perfil (disponible incluso en idle para pre-selección)
+          // Pre-selección en IDLE (aún no hay amplificación activa → no hay
+          // `activeProfile` real). El chip activo REAL se muestra en la vista
+          // activa (`_ActiveView` → `_ProfileSelector(state.activeProfile)`),
+          // que el clasificador automático actualiza vía `ChangeProfile`.
+          // PENDIENTE (no invasivo): reflejar aquí el último perfil persistido
+          // (SettingsRepository.lastProfile) requiere carga async en idle.
           const _ProfileSelector(activeProfile: 'Conversación'),
           const SizedBox(height: 24),
         ],

@@ -104,3 +104,52 @@ String? resolveSmartPreset(int cls, List<String> availablePresets) {
   // (3) Sin match exacto ni prefijo → no cambiar de preset (AC 2.9).
   return null;
 }
+
+/// Resuelve el perfil de entorno del TÉCNICO para la `environmentClass` REAL
+/// que emite el motor C++ (`EnvironmentClassifier`, 4 clases), mapeándola a
+/// los perfiles que existen en la app: **Silencioso / Conversación / Ruidoso**.
+///
+/// FIX del clasificador (causa raíz #3): el motor expone `EnvironmentClass`
+/// (0..3) vía `getDspStageMetrics()['environmentClass']`, pero el polling lo
+/// interpretaba con `resolveSmartPreset` como `smart_scene::SceneClass` (0..7)
+/// con presets inexistentes ("Suave/Medio/Alto") → siempre `null` → nunca
+/// cambiaba de perfil. Este helper usa el contrato correcto de 4 clases.
+///
+/// Tabla de mapeo (`environment_classifier.h` → perfil del técnico):
+///
+/// | `envClass` | EnvironmentClass | Perfil          |
+/// |------------|------------------|-----------------|
+/// | 0          | QUIET            | "Silencioso"    |
+/// | 1          | SPEECH           | "Conversación"  |
+/// | 2          | SPEECH_IN_NOISE  | "Ruidoso"       |
+/// | 3          | NOISE            | "Ruidoso"       |
+///
+/// Reglas:
+/// - `envClass` fuera de `[0, 3]` → `null` (no cambiar de perfil).
+/// - Si el perfil mapeado NO está en `availableProfiles` (case-sensitive,
+///   sin trim) → `null` (no despachar; comportamiento seguro). Los perfiles
+///   predefinidos (Req 8.1) siempre incluyen los tres.
+///
+/// Garantías: función pura, sin efectos secundarios, sin throws (total sobre
+/// `int × List<String>`), no muta `availableProfiles`.
+String? resolveEnvironmentProfile(int envClass, List<String> availableProfiles) {
+  String target;
+  switch (envClass) {
+    case 0: // QUIET
+      target = 'Silencioso';
+      break;
+    case 1: // SPEECH
+      target = 'Conversación';
+      break;
+    case 2: // SPEECH_IN_NOISE
+    case 3: // NOISE
+      target = 'Ruidoso';
+      break;
+    default:
+      return null;
+  }
+  for (final name in availableProfiles) {
+    if (name == target) return name;
+  }
+  return null;
+}
