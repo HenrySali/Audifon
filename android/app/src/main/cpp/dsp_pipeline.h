@@ -28,6 +28,7 @@
 #include "spectrum_analyzer.h"
 #include "transient_reducer.h"
 #include "feedback_suppressor.h"
+#include "output_compressor.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -143,6 +144,18 @@ public:
     /// Default: -18 dB. Rango: -6 (suave) a -30 (agresivo).
     void setFeedbackDepthDb(float db) { fbs_.setDepthDb(db); }
 
+    /// Habilita/deshabilita el compresor/soft-limiter de SALIDA (freno pre-MPO).
+    /// Baja la ganancia de forma suave (soft-knee + ratio finito) sobre la
+    /// señal real de salida ANTES del MPO, para que el MPO casi nunca tenga
+    /// que hacer hard-clamp (menos THD). Solo atenúa. Activado por default.
+    void setOutputCompressorEnabled(bool enabled) { oc_.setEnabled(enabled); }
+    bool isOutputCompressorEnabled() const { return oc_.isEnabled(); }
+
+    /// Ratio del compresor de salida (input:output). Default: 6.0 (6:1).
+    void setOutputCompressorRatio(float ratio) { oc_.setRatio(ratio); }
+    /// Ancho del soft-knee del compresor de salida en dB. Default: 6 dB.
+    void setOutputCompressorKneeDb(float kneeDb) { oc_.setKneeDb(kneeDb); }
+
     /// Actualiza offset de calibración SPL (dBFS → dB SPL).
     /// @param offset Offset en dB (120 para mic real, 76 para WAV)
     void setSplOffset(float offset);
@@ -257,6 +270,14 @@ private:
     /// Red de seguridad dura anti-clipping: el threshold nunca lo supera.
     static constexpr float kMpoDigitalCeiling = 0.85f;
 
+    /// Headroom del compresor de salida (OutputCompressor) respecto al techo
+    /// del MPO. El threshold del OC = thresholdMpo × kSoftLimiterHeadroom, de
+    /// modo que el freno suave empieza a actuar ~3 dB ANTES que el hard-clamp
+    /// del MPO. Así el MPO casi nunca recorta (menos THD) y sigue intacto como
+    /// red de seguridad dura. 0.71 ≈ -3 dB. Validado en
+    /// tools/sim_v3/validate_softlimiter.py.
+    static constexpr float kSoftLimiterHeadroom = 0.71f;
+
     // --- Módulos del pipeline ---
     NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
@@ -265,6 +286,7 @@ private:
     EnvironmentClassifier envClassifier_; ///< Clasificador automático de entorno
     TransientReducer tnr_;    ///< Transient Noise Reducer (impulsos abruptos)
     FeedbackSuppressor fbs_;  ///< Supresor de realimentación (anti-howling)
+    OutputCompressor oc_;     ///< Compresor/soft-limiter de salida (freno pre-MPO)
 
     // --- Parámetros atómicos (actualizables desde hilo de UI) ---
     std::atomic<float> volumeDb_{0.0f};       ///< Volumen maestro en dB

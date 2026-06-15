@@ -1,7 +1,7 @@
 /// @file dsp_pipeline.cpp
 /// @brief Implementación del pipeline DSP para procesamiento de audio en tiempo real.
 ///
-/// Pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+/// Pipeline: HPF → TNR → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → FBS → OC → MPO
 ///                       ↓
 ///              Environment Classifier
 ///              (actualiza NR + WDRC directamente al target)
@@ -77,6 +77,17 @@ void DspPipeline::init(const AudioConfig& config) {
     fbs_.init(config.sampleRate);
     fbs_.setEnabled(true);
     fbs_.setDepthDb(-18.0f);
+
+    // Inicializar Output Compressor (freno de amplificación pre-MPO) — baja la
+    // ganancia de forma SUAVE (soft-knee 6 dB + ratio 6:1) sobre la envolvente
+    // real de salida, de modo que el MPO casi nunca tenga que hacer hard-clamp
+    // (menos THD = se va el silbido residual). Activado por default como TNR/FBS;
+    // solo atenúa. Su threshold se ancla bajo el techo del MPO en
+    // applyMpoThresholdFromDbSpl() (más abajo, tras mpo_.init()).
+    oc_.init(config.sampleRate);
+    oc_.setEnabled(true);
+    oc_.setRatio(10.0f);
+    oc_.setKneeDb(6.0f);
 
     // Inicializar WDRC con sample rate (para coeficientes attack/release correctos)
     wdrc_.init(config.sampleRate);
@@ -288,6 +299,16 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // Solo atenúa, así que no agrega riesgo de clipping para el MPO.
     fbs_.process(buffer, blockSize);
 
+    // ─── 6.7. Output Compressor — freno de amplificación pre-MPO ─────────
+    // Mira la envolvente REAL de salida (post-EQ/Volume/FBS) y baja la ganancia
+    // de forma SUAVE (soft-knee + ratio finito) cuando los picos se acercan al
+    // techo del MPO. Esto descarga al MPO: en vez de recortar duro los picos
+    // (hard-clamp → THD → "silbido"), el MPO recibe una señal ya contenida y
+    // casi nunca tiene que actuar. Solo atenúa. Su threshold está anclado
+    // ~3 dB bajo el techo del MPO (kSoftLimiterHeadroom). A nivel de voz
+    // normal (~65 dB SPL) los picos no llegan al threshold → transparente.
+    oc_.process(buffer, blockSize);
+
     // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede
     // 0.85 lineal (-1.4 dBFS). Opera muestra-por-muestra, no block-rate.
@@ -397,6 +418,8 @@ void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     // MPO clínico no seteado (NaN) → techo digital puro (comportamiento legacy).
     if (!std::isfinite(dbSpl)) {
         mpo_.setThresholdLinear(kMpoDigitalCeiling);
+        // El freno de salida se ancla bajo el techo digital del MPO.
+        oc_.setThresholdLinear(kMpoDigitalCeiling * kSoftLimiterHeadroom);
         return;
     }
 
@@ -410,6 +433,10 @@ void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     const float safeLinear = (linear > kMpoDigitalCeiling) ? kMpoDigitalCeiling : linear;
     if (safeLinear > 0.0f) {
         mpo_.setThresholdLinear(safeLinear);
+        // El freno de salida (OutputCompressor) actúa ~3 dB ANTES del MPO:
+        // su threshold "sigue" al techo del MPO clínico (severa/moderada/leve)
+        // para que el hard-clamp del MPO casi nunca se dispare → menos THD.
+        oc_.setThresholdLinear(safeLinear * kSoftLimiterHeadroom);
     }
 }
 
