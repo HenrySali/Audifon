@@ -71,6 +71,13 @@ void DspPipeline::init(const AudioConfig& config) {
     tnr_.setThreshold(8.0f);
     tnr_.setAttenuationDb(-12.0f);
 
+    // Inicializar Feedback Suppressor (anti-howling) — rompe el lazo Larsen
+    // que aparece a ganancia alta (mic+parlante cercanos en el teléfono).
+    // Activado por default como el TNR; solo atenúa (notch + guard ≤ 0 dB).
+    fbs_.init(config.sampleRate);
+    fbs_.setEnabled(true);
+    fbs_.setDepthDb(-18.0f);
+
     // Inicializar WDRC con sample rate (para coeficientes attack/release correctos)
     wdrc_.init(config.sampleRate);
 
@@ -272,6 +279,14 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
 
     // Métrica: nivel post-Volume
     lastPostVolumeLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+
+    // ─── 6.5. Feedback Suppressor (anti-howling) ────────────────────────
+    // Última etapa "inteligente" antes del MPO. Opera sobre la señal que va
+    // a salir por el parlante (la que realimenta al mic). Detecta el pitido
+    // tonal del lazo Larsen y lo ataca con notches adaptativos; si persiste,
+    // un guard de ganancia de respaldo baja unos dB hasta estabilizar.
+    // Solo atenúa, así que no agrega riesgo de clipping para el MPO.
+    fbs_.process(buffer, blockSize);
 
     // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
     // Red de seguridad absoluta. Garantiza que ninguna muestra excede

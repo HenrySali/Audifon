@@ -27,6 +27,7 @@
 #include "environment_classifier.h"
 #include "spectrum_analyzer.h"
 #include "transient_reducer.h"
+#include "feedback_suppressor.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -131,6 +132,16 @@ public:
     /// Configura la atenuación del TNR en dB (negativo).
     /// Default: -12 dB. Rango: -6 a -18 dB.
     void setTnrAttenuationDb(float db) { tnr_.setAttenuationDb(db); }
+
+    /// Habilita/deshabilita el supresor de realimentación (anti-howling).
+    /// Detecta el pitido (Larsen) por tonalidad/persistencia y lo ataca con
+    /// notches adaptativos + un guard de ganancia de respaldo. Solo atenúa.
+    void setFeedbackSuppressorEnabled(bool enabled) { fbs_.setEnabled(enabled); }
+    bool isFeedbackSuppressorEnabled() const { return fbs_.isEnabled(); }
+
+    /// Profundidad de cada notch anti-howling en dB (negativo).
+    /// Default: -18 dB. Rango: -6 (suave) a -30 (agresivo).
+    void setFeedbackDepthDb(float db) { fbs_.setDepthDb(db); }
 
     /// Actualiza offset de calibración SPL (dBFS → dB SPL).
     /// @param offset Offset en dB (120 para mic real, 76 para WAV)
@@ -253,6 +264,7 @@ private:
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)
     EnvironmentClassifier envClassifier_; ///< Clasificador automático de entorno
     TransientReducer tnr_;    ///< Transient Noise Reducer (impulsos abruptos)
+    FeedbackSuppressor fbs_;  ///< Supresor de realimentación (anti-howling)
 
     // --- Parámetros atómicos (actualizables desde hilo de UI) ---
     std::atomic<float> volumeDb_{0.0f};       ///< Volumen maestro en dB
