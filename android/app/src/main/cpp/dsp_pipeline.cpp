@@ -57,6 +57,11 @@ void DspPipeline::init(const AudioConfig& config) {
     // Configurar offset de calibración SPL
     splOffset_.store(config.splOffset, std::memory_order_relaxed);
 
+    // Inicializar AFC (Adaptive Feedback Canceller) — estima el feedback path
+    // y resta la estimación del mic antes de que entre al pipeline. Preventivo.
+    // Activado por default; solo resta (seguro). El FBS queda como respaldo.
+    afc_.init(config.sampleRate);
+
     // Inicializar EQ con sample rate
     eq_.init(config.sampleRate);
 
@@ -144,6 +149,14 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     if (spectrumActive) {
         std::memcpy(inputCopy, buffer, blockSize * sizeof(float));
     }
+
+    // ─── 0.1. AFC — restar estimación del feedback path del mic ──────────
+    // Opera sobre la señal CRUDA del mic, ANTES del HPF y todo lo demás.
+    // Usa el historial del parlante (capturado al final del bloque anterior)
+    // como referencia para el NLMS. Si el AFC aún no convergió o está
+    // deshabilitado, pasa sin cambio (solo resta ~0). El FBS (notch+guard)
+    // queda como respaldo reactivo más adelante en el pipeline.
+    afc_.removeFeedback(buffer, blockSize);
 
     // ─── 0.5. High-pass filter @ 100 Hz (remove rumble, preserve voice) ─
     // 2nd-order Butterworth HPF at 100 Hz removes low-frequency wind/vibration
@@ -316,6 +329,14 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // FDA 21 CFR 800.30 limita output OTC a 111 dB SPL en el oído;
     // con auriculares, 0.85 lineal es conservador y seguro.
     mpo_.process(buffer, blockSize);
+
+    // ─── 7.5. AFC — inyectar probe noise + capturar referencia ───────────
+    // El probe noise (~-50 dBFS, inaudible) se suma a la señal de salida
+    // que va al parlante. Esta señal completa (DSP + probe) se almacena
+    // como referencia para el NLMS del bloque siguiente. El probe
+    // decorrelaciona la referencia de la señal deseada y evita entrainment.
+    // DESPUÉS del MPO para que el probe no dispare el limiter (nivel << th).
+    afc_.injectProbeAndCapture(buffer, blockSize);
 
     // Métricas finales: output level, peak, clip count
     {

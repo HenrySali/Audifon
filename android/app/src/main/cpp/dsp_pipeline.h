@@ -29,6 +29,7 @@
 #include "transient_reducer.h"
 #include "feedback_suppressor.h"
 #include "output_compressor.h"
+#include "adaptive_feedback_canceller.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -133,6 +134,18 @@ public:
     /// Configura la atenuación del TNR en dB (negativo).
     /// Default: -12 dB. Rango: -6 a -18 dB.
     void setTnrAttenuationDb(float db) { tnr_.setAttenuationDb(db); }
+
+    /// Habilita/deshabilita el cancelador adaptativo de feedback (AFC).
+    /// Estima el camino de feedback y lo resta del mic ANTES de que entre al
+    /// pipeline. Preventivo (vs FBS que es reactivo). Activado por default.
+    void setAfcEnabled(bool enabled) { afc_.setEnabled(enabled); }
+    bool isAfcEnabled() const { return afc_.isEnabled(); }
+
+    /// Step size (mu) del NLMS del AFC. Rango: [0.001, 0.1]. Default: 0.01.
+    void setAfcStepSize(float mu) { afc_.setStepSize(mu); }
+
+    /// Nivel del probe noise del AFC (lineal). Default: 0.003 (~-50 dBFS).
+    void setAfcProbeLevel(float level) { afc_.setProbeLevel(level); }
 
     /// Habilita/deshabilita el supresor de realimentación (anti-howling).
     /// Detecta el pitido (Larsen) por tonalidad/persistencia y lo ataca con
@@ -279,6 +292,7 @@ private:
     static constexpr float kSoftLimiterHeadroom = 0.71f;
 
     // --- Módulos del pipeline ---
+    AdaptiveFeedbackCanceller afc_; ///< AFC adaptativo (estima y resta feedback path)
     NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
