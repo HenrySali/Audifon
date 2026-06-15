@@ -2309,6 +2309,14 @@ class _AutoSuggestButtonState extends State<_AutoSuggestButton> {
       await Future.delayed(const Duration(milliseconds: 100));
     }
 
+    // Modo normal del Técnico = manual: el clasificador solo se prende
+    // para esta medición de 1 s y se vuelve a apagar al terminar, para no
+    // dejarlo persistente pisando el WDRC cada bloque. La sugerencia de
+    // preset/volumen se aplica igual debajo con la clase ya medida.
+    try {
+      await _channel.invokeMethod('updateAutoClassify', {'enabled': false});
+    } catch (_) {}
+
     if (!mounted) return;
 
     if (classCounts.isEmpty) {

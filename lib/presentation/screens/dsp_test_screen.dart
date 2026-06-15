@@ -123,6 +123,12 @@ class _DspTestScreenState extends State<DspTestScreen> {
   void dispose() {
     _pollTimer?.cancel();
     _ambientPollTimer?.cancel();
+    // Esta pantalla de diagnóstico prende el clasificador en initState para
+    // poder leer `environmentClass`. Al salir hay que apagarlo para no dejarlo
+    // ON contaminando el modo normal del Técnico (manual = clasificador OFF).
+    _channel
+        .invokeMethod('updateAutoClassify', {'enabled': false})
+        .catchError((_) => null);
     // Si quedó algo activo, restaurar volumen
     _restoreVolume();
     super.dispose();

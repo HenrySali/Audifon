@@ -19,6 +19,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:hearing_aid_app/data/bridges/audio_bridge.dart';
 import 'package:hearing_aid_app/domain/entities/audio_config.dart';
 import 'package:hearing_aid_app/domain/entities/audiogram.dart';
+import 'package:hearing_aid_app/domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
 import 'package:hearing_aid_app/domain/entities/environment_profile.dart';
 import 'package:hearing_aid_app/domain/entities/prescription_mode.dart';
 import 'package:hearing_aid_app/domain/entities/wdrc_params.dart';
@@ -612,6 +613,236 @@ void main() {
                 'newUser=${newUserGains[i]}',
           );
         }
+
+        await bloc.close();
+      },
+    );
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // patient-dsp-controls-fix — Tarea 3: `_onUpdateEqGains` debe reaplicar
+  // la cadena coherente MPO → WDRC → EQ (no solo los gains crudos) cuando
+  // el engine está activo, para no dejar el motor con gains altos +
+  // compresor/MPO de la escena anterior → saturación.
+  // ──────────────────────────────────────────────────────────────────
+  group('UpdateEqGains — reaplica WDRC/MPO/clamp (patient-dsp-controls-fix T3)',
+      () {
+    test(
+      'con bundle activo despacha setMpoThresholdDbSpl + updateWdrcParams '
+      'además de updateEqGains, y los gains pasan por el clamp de headroom',
+      () async {
+        when(() => mockSettingsRepo.setLastEqPreset(any()))
+            .thenAnswer((_) async {});
+        when(() => mockSettingsRepo.comfort).thenReturn(0.5);
+
+        final bloc = buildBloc();
+
+        // Boot: `_onApplyBundle` establece `_lastBundle` (fuente
+        // autoritativa de WDRC/MPO).
+        bloc.add(const StartAmplification());
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(bloc.state, isA<AmplificationActive>());
+
+        // Aislar las llamadas que provoca el cambio de preset.
+        clearInteractions(mockAudioBridge);
+
+        // Cambio a un preset de GANANCIAS ALTAS (12 bandas a 45 dB).
+        bloc.add(UpdateEqGains(
+          gains: List<double>.filled(12, 45.0),
+          presetName: 'Alto Plano',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // Antes (Tarea 0) solo se llamaba updateEqGains. Ahora la ruta
+        // reaplica MPO y WDRC además del EQ.
+        verify(() => mockAudioBridge.setMpoThresholdDbSpl(any())).called(1);
+        verify(() => mockAudioBridge.updateWdrcParams(any())).called(1);
+
+        final captured = verify(
+          () => mockAudioBridge.updateEqGains(captureAny()),
+        ).captured;
+        expect(captured, isNotEmpty);
+        final sentGains = (captured.last as List).cast<double>();
+        expect(sentGains, hasLength(12));
+        // Clamp de headroom: ninguna banda queda en el crudo 45 dB —
+        // todas se acotan contra el MPO del bundle.
+        expect(
+          sentGains.every((g) => g < 45.0),
+          isTrue,
+          reason: 'los gains del evento deben pasar por el clamp de headroom '
+              '(no enviarse crudos)',
+        );
+
+        await bloc.close();
+      },
+    );
+
+    blocTest<AmplificationBloc, AmplificationState>(
+      'sin estado Active solo persiste el preset y NO toca el engine',
+      build: () {
+        when(() => mockSettingsRepo.setLastEqPreset(any()))
+            .thenAnswer((_) async {});
+        return buildBloc();
+      },
+      seed: () => const AmplificationIdle(),
+      act: (bloc) => bloc.add(UpdateEqGains(
+        gains: List<double>.filled(12, 20.0),
+        presetName: 'Medio Plano',
+      )),
+      expect: () => const <AmplificationState>[],
+      verify: (_) {
+        verify(() => mockSettingsRepo.setLastEqPreset(any())).called(1);
+        verifyNever(() => mockAudioBridge.updateEqGains(any()));
+        verifyNever(() => mockAudioBridge.updateWdrcParams(any()));
+        verifyNever(() => mockAudioBridge.setMpoThresholdDbSpl(any()));
+      },
+    );
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // patient-dsp-controls-fix — Tarea 4: MHL/Música dejan de ser la muleta
+  // de estabilización. Al APAGARLOS, la rama OFF debe reaplicar la MISMA
+  // cadena coherente que la Tarea 3 (MPO → WDRC → EQ con clamp de
+  // headroom), de modo que encender y apagar el modo deje el motor
+  // EXACTAMENTE en el estado coherente que tendría sin haberlo tocado.
+  // También se valida que el snapshot/restore del mirror lógico
+  // `_smartEnabled` siga intacto.
+  // ──────────────────────────────────────────────────────────────────
+  group('MHL/Música OFF — reaplica cadena coherente (patient-dsp-controls-fix T4)',
+      () {
+    // Stubs comunes a las rutas de restore (bridge + settings).
+    void stubToggleDeps() {
+      when(() => mockAudioBridge.setMhlPrescriptionEnabled(any()))
+          .thenAnswer((_) async {});
+      when(() => mockAudioBridge.setMusicModeEnabled(any()))
+          .thenAnswer((_) async {});
+      when(() => mockAudioBridge.setDnnIntensity(any()))
+          .thenAnswer((_) async {});
+      when(() => mockSettingsRepo.setMhlPrescriptionEnabled(any()))
+          .thenAnswer((_) async {});
+      when(() => mockSettingsRepo.setMusicModeEnabled(any()))
+          .thenAnswer((_) async {});
+      when(() => mockSettingsRepo.getLastEqPreset())
+          .thenAnswer((_) async => null);
+      when(() => mockSettingsRepo.comfort).thenReturn(0.5);
+      when(() => mockSettingsRepo.nrLevel).thenReturn(0);
+      when(() => mockSettingsRepo.dnnIntensity).thenReturn(0.6);
+      when(() => mockSettingsRepo.mhlPrescriptionEnabled).thenReturn(false);
+      when(() => mockSettingsRepo.musicModeEnabled).thenReturn(false);
+    }
+
+    /// Verifica que las llamadas capturadas tras el OFF respeten el orden
+    /// MPO → WDRC → EQ y que los gains del EQ pasen por el clamp.
+    void verifyCoherentOffChain() {
+      // `verifyInOrder` devuelve los resultados (con `captured`) y consume
+      // las llamadas verificadas; tomamos el capture del 3er paso (EQ) de
+      // ahí para no re-verificar `updateEqGains` por separado.
+      final results = verifyInOrder([
+        () => mockAudioBridge.setMpoThresholdDbSpl(any()),
+        () => mockAudioBridge.updateWdrcParams(any()),
+        () => mockAudioBridge.updateEqGains(captureAny()),
+      ]);
+
+      final captured = results[2].captured;
+      expect(captured, isNotEmpty,
+          reason: 'el OFF debe reaplicar el EQ del preset activo');
+      final sentGains = (captured.last as List).cast<double>();
+      expect(sentGains, hasLength(12));
+      // Clamp de headroom: los gains quedan dentro del rango operativo del
+      // EQ [gainMinDb, gainMaxDb]; nunca se envían valores fuera de rango.
+      expect(
+        sentGains.every((g) =>
+            g >= AudiogramDrivenBundle.gainMinDb &&
+            g <= AudiogramDrivenBundle.gainMaxDb),
+        isTrue,
+        reason: 'los gains restaurados deben pasar por _clampGainsToHeadroom',
+      );
+    }
+
+    test(
+      'ToggleMhlPrescription(false) reaplica MPO → WDRC → EQ (con clamp)',
+      () async {
+        stubToggleDeps();
+        final bloc = buildBloc();
+
+        // Boot: `_onApplyBundle` deja `_lastBundle` seteado.
+        bloc.add(const StartAmplification());
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(bloc.state, isA<AmplificationActive>());
+
+        // Encender MHL (no reaplica cadena; solo flat 8 dB + CR 1.0).
+        bloc.add(const ToggleMhlPrescription(activate: true));
+        await Future.delayed(const Duration(milliseconds: 30));
+        expect(bloc.isMhlActive, isTrue,
+            reason: 'MHL ON debe marcar el mirror legacy');
+
+        // Aislar exclusivamente las llamadas del OFF.
+        clearInteractions(mockAudioBridge);
+
+        bloc.add(const ToggleMhlPrescription(activate: false));
+        await Future.delayed(const Duration(milliseconds: 30));
+
+        verifyCoherentOffChain();
+        expect(bloc.isMhlActive, isFalse,
+            reason: 'MHL OFF debe apagar el mirror legacy');
+
+        await bloc.close();
+      },
+    );
+
+    test(
+      'ToggleMusicMode(false) reaplica MPO → WDRC → EQ (con clamp)',
+      () async {
+        stubToggleDeps();
+        final bloc = buildBloc();
+
+        bloc.add(const StartAmplification());
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(bloc.state, isA<AmplificationActive>());
+
+        // Encender Música (NR=0 + DNN=0; no toca EQ/WDRC).
+        bloc.add(const ToggleMusicMode(activate: true));
+        await Future.delayed(const Duration(milliseconds: 30));
+
+        clearInteractions(mockAudioBridge);
+
+        bloc.add(const ToggleMusicMode(activate: false));
+        await Future.delayed(const Duration(milliseconds: 30));
+
+        verifyCoherentOffChain();
+        final st = bloc.state;
+        expect(st, isA<AmplificationActive>());
+        expect((st as AmplificationActive).musicModeActive, isFalse,
+            reason: 'Música OFF debe reflejarse en el state');
+
+        await bloc.close();
+      },
+    );
+
+    test(
+      'snapshot/restore de _smartEnabled intacto en el ciclo MHL ON→OFF',
+      () async {
+        stubToggleDeps();
+        final bloc = buildBloc();
+
+        bloc.add(const StartAmplification());
+        await Future.delayed(const Duration(milliseconds: 100));
+        // Invariante clínico al boot: Smart arranca apagado (Tarea 1).
+        expect(bloc.isSmartEnabled, isFalse);
+
+        bloc.add(const ToggleMhlPrescription(activate: true));
+        await Future.delayed(const Duration(milliseconds: 30));
+        // MHL fuerza el mirror Smart en false mientras está activo.
+        expect(bloc.isSmartEnabled, isFalse);
+        expect(bloc.isMhlActive, isTrue);
+
+        bloc.add(const ToggleMhlPrescription(activate: false));
+        await Future.delayed(const Duration(milliseconds: 30));
+        // Al apagar MHL se restaura el snapshot (false en este escenario)
+        // y el mirror legacy queda apagado — el ciclo no corrompe el
+        // estado del Smart.
+        expect(bloc.isSmartEnabled, isFalse);
+        expect(bloc.isMhlActive, isFalse);
 
         await bloc.close();
       },

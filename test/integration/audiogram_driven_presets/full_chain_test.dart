@@ -97,7 +97,9 @@ Audiogram _audiogramFromMap(Map<int, double> map) =>
 // the values reaching the bridge are consistent with the bundle, we
 // replicate the documented formulas from amplification_bloc.dart.
 
-const double _kTypicalInputDbSpl = 65.0;
+// Mirror de `AmplificationBloc._kHeadroomInputDbSpl` (peor caso operativo:
+// voz fuerte/cercana ≈ 80 dB SPL, no la conversación normal de 65).
+const double _kTypicalInputDbSpl = 80.0;
 const double _kHeadroomSafetyMarginDb = 3.0;
 
 double _broadbandMpoOf(AudiogramDrivenBundle b) {

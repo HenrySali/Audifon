@@ -682,6 +682,19 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
   }
 
   @override
+  void dispose() {
+    // Control de diagnóstico: si el técnico lo dejó activado, apagar el
+    // clasificador al salir para no contaminar el modo normal (manual = OFF).
+    if (_autoClassify) {
+      try {
+        const channel = MethodChannel('com.psk.hearing_aid/audio');
+        channel.invokeMethod('updateAutoClassify', {'enabled': false});
+      } catch (_) {}
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(14),

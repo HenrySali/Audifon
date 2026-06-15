@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive/hive.dart';
 
@@ -699,6 +700,26 @@ class AmplificationBloc
     //    llamada nativa debe insertarse.
     _smartEnabled = false;
 
+    //    Sincronizar el estado NATIVO con el mirror lógico: el motor
+    //    arranca con `autoClassifyEnabled_ = true` por default (header
+    //    C++), así que sin esto el clasificador quedaría ON pisando el
+    //    WDRC cada bloque mientras el mirror dice false (desincronización).
+    //    El Técnico es manual: clasificador APAGADO en el modo normal.
+    //    Tolerante a fallo — no abortar el boot si el canal nativo falla.
+    //    Cadena: updateAutoClassify → AudioMethodChannel.handleUpdateAutoClassify
+    //    → nativeBridge.setAutoClassifyEnabled(false).
+    try {
+      await const MethodChannel('com.psk.hearing_aid/audio')
+          .invokeMethod('updateAutoClassify', {'enabled': false});
+    } catch (e, st) {
+      developer.log(
+        'No se pudo sincronizar autoClassify=false al boot (no crítico)',
+        name: 'AmplificationBloc',
+        error: e,
+        stackTrace: st,
+      );
+    }
+
     // 2) Emitir Active inicial ANTES de dispatchear el bundle. El
     //    handler `_onApplyBundle` reemitirá `Active` con `bundle:
     //    initialBundle` después de aplicar la cadena atómica al
@@ -1302,15 +1323,46 @@ class AmplificationBloc
     );
   }
 
-  /// Actualiza las ganancias del EQ directamente (desde configuración avanzada).
+  /// Actualiza las ganancias del EQ directamente (desde configuración
+  /// avanzada, chips de perfil/preset "Personal" en main_screen, el
+  /// simulador, step5_recommendation y el scene_engine).
   ///
-  /// Usa la misma lógica que UpdateAudiogram: solo llama updateEqGains()
-  /// directamente al bridge nativo. Esto funciona sin ruido porque el engine
-  /// maneja la transición internamente (igual que la pantalla de audiometría).
+  /// **patient-dsp-controls-fix — Tarea 3 (reaplicar WDRC/MPO/clamp).**
+  /// Antes este handler mandaba los gains CRUDOS del evento con
+  /// `updateEqGains(event.gains)`, sin pasar por el clamp de headroom y
+  /// sin reaplicar WDRC ni MPO. Al cambiar de preset o tocar ganancias,
+  /// el motor quedaba con gains altos + el compresor/MPO de la escena
+  /// anterior → saturación audible ("reventado"). Ahora reaplica la
+  /// cadena coherente **MPO → WDRC → EQ** replicando el patrón probado
+  /// de [_onApplyBundle], con la misma tolerancia a fallos histórica
+  /// (un error en cualquier setter no aborta el resto ni propaga).
   ///
-  /// Funciona en cualquier estado: si el audífono está activo aplica al engine
-  /// y emite el nuevo estado; si está inactivo solo persiste para usar al
-  /// próximo encendido.
+  /// Funciona en cualquier estado: si el audífono está activo aplica al
+  /// engine y emite el nuevo estado; si está inactivo solo persiste para
+  /// usar al próximo encendido (contrato original sin cambios).
+  ///
+  /// Resolución de WDRC/MPO según haya o no un bundle clínico activo:
+  ///
+  /// - **Con [_lastBundle] != null** (caso normal): el bundle es la
+  ///   fuente autoritativa. Se reaplica WDRC con
+  ///   `compressionRatio = _effectiveCompressionRatio(_lastBundle)` — el
+  ///   MISMO CR efectivo que usan MHL/Comodidad/`_onApplyBundle`, lo que
+  ///   también corrige la incoherencia de CR entre rutas. Knees,
+  ///   attack/release salen del bundle (vía [_resolveBridgeCompressionKnee]
+  ///   y `bundle.wdrc*`). El MPO broadband se reaplica con
+  ///   [_resolveBroadbandMpo]. Los gains del evento se acotan banda-a-banda
+  ///   contra `mpoProfileDbSpl` del bundle (misma fórmula de headroom que
+  ///   [_resolveFinalGains], con `_kHeadroomInputDbSpl`).
+  ///
+  /// - **Con [_lastBundle] == null** (flujo legacy preset-only, sin bundle
+  ///   clínico todavía): no hay perfil MPO por banda disponible. Se honra
+  ///   el WDRC sugerido por nombre de preset vía [_findEqPresetWdrcParams],
+  ///   pero el ratio se pasa por [_applyComfortToRatio] para respetar
+  ///   Comodidad (decisión documentada: no podemos llamar
+  ///   `_effectiveCompressionRatio` porque exige un bundle; reusamos su
+  ///   misma fórmula escalar). El MPO no se reaplica (no hay perfil del
+  ///   cual derivarlo) y los gains se clampean de forma conservadora al
+  ///   rango operativo del EQ `[gainMinDb, gainMaxDb]`.
   Future<void> _onUpdateEqGains(
     UpdateEqGains event,
     Emitter<AmplificationState> emit,
@@ -1318,22 +1370,239 @@ class AmplificationBloc
     try {
       final presetName = event.presetName ?? 'Custom';
 
-      // 1. Persistir el preset SIEMPRE (independiente del estado)
+      // 1. Persistir el preset SIEMPRE (independiente del estado).
       await _settingsRepository.setLastEqPreset({
         'name': presetName,
         'gains': event.gains,
       });
 
-      // 2. Aplicar al engine solo si está activo
-      if (state is AmplificationActive) {
-        await _audioBridge.updateEqGains(event.gains);
-        // Actualizar estado con el nombre del preset activo
-        emit((state as AmplificationActive).copyWith(
-          activeEqPreset: presetName,
-        ));
+      // 2. Aplicar al engine solo si está activo. Si no, solo persiste
+      //    (contrato original sin cambios).
+      if (state is! AmplificationActive) {
+        return;
+      }
+
+      final bundle = _lastBundle;
+
+      // 2a. Clamp de headroom sobre los gains del evento. Con bundle se
+      //     acota por banda contra su mpoProfile; sin bundle, clamp
+      //     conservador al rango operativo del EQ.
+      final clampedGains = _clampGainsToHeadroom(event.gains, bundle);
+
+      // 2b. Resolver WDRC + MPO coherentes con la escena clínica activa.
+      WdrcParams? wdrcParams;
+      double? mpoBroadband;
+      if (bundle != null) {
+        // Bundle clínico = fuente autoritativa. CR efectivo (con
+        // Comodidad) idéntico al de MHL/Comodidad/_onApplyBundle →
+        // todas las rutas quedan coherentes.
+        wdrcParams = WdrcParams(
+          expansionKnee: bundle.expansionKneeDbSpl,
+          compressionKnee: _resolveBridgeCompressionKnee(bundle, _manualDelta),
+          compressionRatio: _effectiveCompressionRatio(bundle),
+          attackMs: bundle.wdrcAttackMs,
+          releaseMs: bundle.wdrcReleaseMs,
+        );
+        mpoBroadband = _resolveBroadbandMpo(bundle);
+      } else {
+        // Flujo legacy preset-only: honrar el WDRC sugerido por nombre,
+        // pasando el ratio por la fórmula de Comodidad. Sin perfil MPO
+        // disponible no se reaplica MPO.
+        final presetWdrc = _findEqPresetWdrcParams(presetName);
+        if (presetWdrc != null) {
+          wdrcParams = WdrcParams(
+            expansionKnee: presetWdrc.expansionKnee,
+            compressionKnee: presetWdrc.compressionKnee,
+            compressionRatio:
+                _applyComfortToRatio(presetWdrc.compressionRatio),
+          );
+        }
+      }
+
+      // 2c. Aplicar en orden seguro MPO → WDRC → EQ (mismo orden que la
+      //     cadena atómica de _onApplyBundle). Cada setter es tolerante a
+      //     fallos: un error no aborta los siguientes (contrato histórico
+      //     del handler — "no interrumpir por error de actualización").
+      if (mpoBroadband != null) {
+        try {
+          await _audioBridge.setMpoThresholdDbSpl(mpoBroadband);
+        } catch (e, st) {
+          developer.log(
+            '_onUpdateEqGains: setMpoThresholdDbSpl falló: $e',
+            name: 'AmplificationBloc',
+            level: 900,
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }
+      if (wdrcParams != null) {
+        try {
+          await _audioBridge.updateWdrcParams(wdrcParams);
+        } catch (e, st) {
+          developer.log(
+            '_onUpdateEqGains: updateWdrcParams falló: $e',
+            name: 'AmplificationBloc',
+            level: 900,
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }
+      try {
+        await _audioBridge.updateEqGains(clampedGains);
+      } catch (e, st) {
+        developer.log(
+          '_onUpdateEqGains: updateEqGains falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+
+      // 2d. Re-emitir el state activo con el nombre del preset. Se
+      //     re-evalúa `state` post-await (puede haber cambiado).
+      final current = state;
+      if (current is AmplificationActive) {
+        emit(current.copyWith(activeEqPreset: presetName));
       }
     } catch (_) {
-      // No interrumpir por error de actualización de EQ
+      // No interrumpir por error de actualización de EQ.
+    }
+  }
+
+  /// Acota una lista de ganancias EQ sueltas (del evento [UpdateEqGains])
+  /// por headroom MPO, replicando la fórmula de [_resolveFinalGains] pero
+  /// sobre gains que NO provienen de un bundle.
+  ///
+  /// - Siempre clampa al rango operativo del EQ `[gainMinDb, gainMaxDb]`.
+  /// - Si [bundle] != null, aplica además el clamp de headroom por banda:
+  ///   `g ≤ mpoProfileDbSpl[i] - _kHeadroomInputDbSpl - _kHeadroomSafetyMarginDb`,
+  ///   nunca por debajo del piso `gainMinDb`. Si una banda no existe en el
+  ///   perfil (longitudes distintas), usa el MPO broadband como cota.
+  /// - Si [bundle] == null, no hay perfil MPO del cual derivar headroom →
+  ///   clamp conservador solo al rango operativo (caso documentado).
+  List<double> _clampGainsToHeadroom(
+    List<double> gains,
+    AudiogramDrivenBundle? bundle,
+  ) {
+    final n = gains.length;
+    final out = List<double>.filled(n, 0.0, growable: false);
+    final double? broadband =
+        bundle != null ? _resolveBroadbandMpo(bundle) : null;
+    for (var i = 0; i < n; i++) {
+      double g = gains[i]
+          .clamp(
+            AudiogramDrivenBundle.gainMinDb,
+            AudiogramDrivenBundle.gainMaxDb,
+          )
+          .toDouble();
+      if (bundle != null) {
+        final mpoBand = i < bundle.mpoProfileDbSpl.length
+            ? bundle.mpoProfileDbSpl[i]
+            : broadband!;
+        final headroom =
+            mpoBand - _kHeadroomInputDbSpl - _kHeadroomSafetyMarginDb;
+        if (headroom < g) {
+          g = math.max(headroom, AudiogramDrivenBundle.gainMinDb);
+        }
+      }
+      out[i] = g;
+    }
+    return List<double>.unmodifiable(out);
+  }
+
+  /// Reaplica al motor la cadena DSP coherente al RESTAURAR desde MHL
+  /// Prescripción OFF o Modo Música OFF, replicando bit-a-bit el orden y los
+  /// resolvers de la Tarea 3 (`_onUpdateEqGains`) y de la cadena atómica de
+  /// [_onApplyBundle]:
+  ///
+  ///   1. MPO broadband vía [_resolveBroadbandMpo].
+  ///   2. WDRC con `compressionRatio = _effectiveCompressionRatio(bundle)`
+  ///      (preservando knees/expansion/attack/release del bundle).
+  ///   3. EQ con los gains del preset acotados por headroom vía
+  ///      [_clampGainsToHeadroom].
+  ///
+  /// **Objetivo (patient-dsp-controls-fix — Tarea 4)**: encender y apagar
+  /// MHL/Música debe dejar el motor EXACTAMENTE en el mismo estado coherente
+  /// que tendría sin haber tocado esos modos. Antes la restauración solo
+  /// reaplicaba EQ (gains crudos, SIN clamp) + WDRC, dejando el MPO de la
+  /// escena viejo y los gains sin acotar por headroom — la misma incoherencia
+  /// que la Tarea 3 corrigió para `_onUpdateEqGains`. Reusar este helper
+  /// alinea las tres rutas de restore (MHL OFF, mutex MHL OFF, Música OFF)
+  /// con esa cadena.
+  ///
+  /// - Con [bundle] != null (caso normal): se reaplican MPO + WDRC derivados
+  ///   del bundle y los gains se acotan por banda contra `mpoProfileDbSpl`.
+  /// - Con [bundle] == null (boot temprano / fallo previo): no hay perfil
+  ///   clínico del cual derivar MPO/WDRC → se omiten esos dos setters (no se
+  ///   envían parámetros arbitrarios al motor) y los gains se clampean solo al
+  ///   rango operativo del EQ, idéntico al fallback de [_clampGainsToHeadroom]
+  ///   y de la Tarea 3.
+  ///
+  /// Cada setter es tolerante a fallos: un error se loguea (nivel 900) pero no
+  /// aborta los siguientes (mismo contrato que `_onUpdateEqGains`).
+  /// [logContext] identifica el call-site en los logs.
+  ///
+  /// Requisitos: 1.6, 4.4, 4.5, 10.1, 10.2
+  Future<void> _reapplyCoherentChainOnRestore(
+    List<double> presetGains,
+    AudiogramDrivenBundle? bundle,
+    String logContext,
+  ) async {
+    // 1. MPO broadband — primero, igual que T3 / _onApplyBundle.
+    if (bundle != null) {
+      try {
+        await _audioBridge.setMpoThresholdDbSpl(_resolveBroadbandMpo(bundle));
+      } catch (e, st) {
+        developer.log(
+          '$logContext: setMpoThresholdDbSpl falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // 2. WDRC con _effectiveCompressionRatio(bundle) (CR efectivo idéntico al
+    //    de MHL/Comodidad/_onApplyBundle/_onUpdateEqGains).
+    if (bundle != null) {
+      try {
+        final wdrcParams = WdrcParams(
+          expansionKnee: bundle.expansionKneeDbSpl,
+          compressionKnee: _resolveBridgeCompressionKnee(bundle, _manualDelta),
+          compressionRatio: _effectiveCompressionRatio(bundle),
+          attackMs: bundle.wdrcAttackMs,
+          releaseMs: bundle.wdrcReleaseMs,
+        );
+        await _audioBridge.updateWdrcParams(wdrcParams);
+      } catch (e, st) {
+        developer.log(
+          '$logContext: updateWdrcParams falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // 3. EQ con clamp de headroom (mismo clamp que la Tarea 3).
+    if (presetGains.isNotEmpty) {
+      final clampedGains = _clampGainsToHeadroom(presetGains, bundle);
+      try {
+        await _audioBridge.updateEqGains(clampedGains);
+      } catch (e, st) {
+        developer.log(
+          '$logContext: updateEqGains falló: $e',
+          name: 'AmplificationBloc',
+          level: 900,
+          error: e,
+          stackTrace: st,
+        );
+      }
     }
   }
 
@@ -1915,53 +2184,22 @@ class AmplificationBloc
       );
     }
 
-    // Reaplicar gains del preset activo usando _resolveGainsForPreset
-    // (Req 5.1, 5.2). Se lee `lastEqPreset` desde Settings; si la
-    // entrada está vacía o corrupta, fallback al bundle activo.
+    // Reaplicar la cadena DSP coherente (MPO → WDRC → EQ con clamp de
+    // headroom), idéntica a la Tarea 3 (`_onUpdateEqGains`) y a la cadena
+    // atómica de `_onApplyBundle`. Esto garantiza que apagar MHL deje el motor
+    // EXACTAMENTE en el estado coherente que tendría sin haber tocado el modo
+    // (patient-dsp-controls-fix — Tarea 4) — Req 1.6, 4.4, 4.5. Los gains del
+    // preset activo se resuelven con _resolveGainsForPreset (Req 5.1, 5.2);
+    // sin bundle activo se omiten MPO/WDRC y los gains se clampean solo al
+    // rango operativo del EQ.
     final List<double> presetGains = await _resolvePresetGainsForRestore(
       currentState.activeEqPreset,
     );
-    if (presetGains.isNotEmpty) {
-      try {
-        await _audioBridge.updateEqGains(presetGains);
-      } catch (e, st) {
-        developer.log(
-          '_onToggleMhlPrescription[OFF]: bridge.updateEqGains falló: $e',
-          name: 'AmplificationBloc',
-          level: 900,
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
-
-    // Reaplicar WDRC con _effectiveCompressionRatio(bundle) — Req 1.6,
-    // 4.4, 4.5. Si no hay bundle activo (boot temprano o fallo previo),
-    // se omite la reaplicación de WDRC para no enviar parámetros
-    // arbitrarios al motor.
-    final bundle = _lastBundle;
-    if (bundle != null) {
-      try {
-        final wdrcParams = WdrcParams(
-          expansionKnee: bundle.expansionKneeDbSpl,
-          compressionKnee:
-              _resolveBridgeCompressionKnee(bundle, _manualDelta),
-          compressionRatio: _effectiveCompressionRatio(bundle),
-          attackMs: bundle.wdrcAttackMs,
-          releaseMs: bundle.wdrcReleaseMs,
-        );
-        await _audioBridge.updateWdrcParams(wdrcParams);
-      } catch (e, st) {
-        developer.log(
-          '_onToggleMhlPrescription[OFF]: bridge.updateWdrcParams '
-          'falló: $e',
-          name: 'AmplificationBloc',
-          level: 900,
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
+    await _reapplyCoherentChainOnRestore(
+      presetGains,
+      _lastBundle,
+      '_onToggleMhlPrescription[OFF]',
+    );
 
     // Apagar el mirror legacy del modo MHL (Req 1.10).
     _mhlActive = false;
@@ -2293,49 +2531,17 @@ class AmplificationBloc
       );
     }
 
-    // Reaplicar gains del preset activo (Req 5.1, 5.2).
+    // Reaplicar la cadena DSP coherente (MPO → WDRC → EQ con clamp), igual
+    // que la rama OFF directa de MHL (patient-dsp-controls-fix — Tarea 4) —
+    // Req 1.6, 4.4, 4.5, 5.1, 5.2.
     final List<double> presetGains = await _resolvePresetGainsForRestore(
       currentState.activeEqPreset,
     );
-    if (presetGains.isNotEmpty) {
-      try {
-        await _audioBridge.updateEqGains(presetGains);
-      } catch (e, st) {
-        developer.log(
-          '_applyMhlOffBranchForMutex: bridge.updateEqGains falló: $e',
-          name: 'AmplificationBloc',
-          level: 900,
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
-
-    // Reaplicar WDRC con _effectiveCompressionRatio(bundle) — Req 4.4,
-    // 4.5. Si no hay bundle activo, omitir la reaplicación.
-    final bundle = _lastBundle;
-    if (bundle != null) {
-      try {
-        final wdrcParams = WdrcParams(
-          expansionKnee: bundle.expansionKneeDbSpl,
-          compressionKnee:
-              _resolveBridgeCompressionKnee(bundle, _manualDelta),
-          compressionRatio: _effectiveCompressionRatio(bundle),
-          attackMs: bundle.wdrcAttackMs,
-          releaseMs: bundle.wdrcReleaseMs,
-        );
-        await _audioBridge.updateWdrcParams(wdrcParams);
-      } catch (e, st) {
-        developer.log(
-          '_applyMhlOffBranchForMutex: bridge.updateWdrcParams '
-          'falló: $e',
-          name: 'AmplificationBloc',
-          level: 900,
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
+    await _reapplyCoherentChainOnRestore(
+      presetGains,
+      _lastBundle,
+      '_applyMhlOffBranchForMutex',
+    );
 
     // Mirror lógico (Req 1.10).
     _mhlActive = false;
@@ -2584,49 +2790,19 @@ class AmplificationBloc
       );
     }
 
-    // Reaplicar gains del preset activo usando _resolveGainsForPreset
-    // (Req 5.1, 5.2).
+    // Reaplicar la cadena DSP coherente (MPO → WDRC → EQ con clamp de
+    // headroom), idéntica a la Tarea 3 (`_onUpdateEqGains`). Garantiza que
+    // apagar Música deje el motor EXACTAMENTE en el estado coherente que
+    // tendría sin haber tocado el modo (patient-dsp-controls-fix — Tarea 4) —
+    // Req 1.6, 4.4, 4.5, 5.1, 5.2.
     final List<double> presetGains = await _resolvePresetGainsForRestore(
       currentState.activeEqPreset,
     );
-    if (presetGains.isNotEmpty) {
-      try {
-        await _audioBridge.updateEqGains(presetGains);
-      } catch (e, st) {
-        developer.log(
-          '_onToggleMusicMode[OFF]: bridge.updateEqGains falló: $e',
-          name: 'AmplificationBloc',
-          level: 900,
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
-
-    // Reaplicar WDRC con _effectiveCompressionRatio(bundle) — Req 1.6,
-    // 4.4, 4.5. Si no hay bundle activo, omitir.
-    final bundle = _lastBundle;
-    if (bundle != null) {
-      try {
-        final wdrcParams = WdrcParams(
-          expansionKnee: bundle.expansionKneeDbSpl,
-          compressionKnee:
-              _resolveBridgeCompressionKnee(bundle, _manualDelta),
-          compressionRatio: _effectiveCompressionRatio(bundle),
-          attackMs: bundle.wdrcAttackMs,
-          releaseMs: bundle.wdrcReleaseMs,
-        );
-        await _audioBridge.updateWdrcParams(wdrcParams);
-      } catch (e, st) {
-        developer.log(
-          '_onToggleMusicMode[OFF]: bridge.updateWdrcParams falló: $e',
-          name: 'AmplificationBloc',
-          level: 900,
-          error: e,
-          stackTrace: st,
-        );
-      }
-    }
+    await _reapplyCoherentChainOnRestore(
+      presetGains,
+      _lastBundle,
+      '_onToggleMusicMode[OFF]',
+    );
 
     // Apagar el mirror lógico de Música (Req 1.11).
     _musicModeActive = false;
@@ -3231,9 +3407,29 @@ class AmplificationBloc
   /// Modo Amplificador (Req 13.7).
   static const double _kDefaultAmplifierGainScale = 0.40;
 
-  /// Nivel de input típico (dB SPL) usado para clampar las ganancias
-  /// finales contra el headroom MPO. Conversación normal ≈ 65 dB SPL.
-  static const double _kTypicalInputDbSpl = 65.0;
+  /// Nivel de input de referencia (dB SPL) usado para clampar las ganancias
+  /// finales contra el headroom MPO.
+  ///
+  /// Se dimensiona al PEOR CASO OPERATIVO, no a la conversación normal:
+  /// - Conversación normal ≈ 65 dB SPL.
+  /// - Voz alzada / interlocutor cercano ≈ 75-85 dB SPL.
+  /// Clampar contra 65 dB SPL solo garantizaba no-saturación para charla
+  /// tranquila; con inputs fuertes (75-85 dB SPL) el presupuesto de headroom
+  /// se desbordaba y el MPO saturaba audible ("reventado"). Usamos 80 dB SPL
+  /// como referencia: cubre voz fuerte/cercana, que es el peor caso realista
+  /// sostenido (los transitorios puntuales por encima de 80 dB SPL los
+  /// absorben el TNR y el peak-limiter instantáneo del MPO, no este clamp
+  /// estático de ganancia).
+  ///
+  /// TRADE-OFF (sub-amplificación): subir la referencia recorta más la
+  /// ganancia en bandas con MPO bajo (audiogramas severos). Es aceptable y
+  /// está acotado: el clamp NUNCA baja la ganancia por debajo de
+  /// [AudiogramDrivenBundle.gainMinDb] (piso clínico del EQ), así que no
+  /// puede sub-amplificar de forma absurda. Preferimos perder unos dB de
+  /// ganancia máxima en picos fuertes antes que entregar salida distorsionada
+  /// por MPO saturado, que es clínicamente peor (peor inteligibilidad y
+  /// fatiga/incomodidad en pediatría).
+  static const double _kHeadroomInputDbSpl = 80.0;
 
   /// Margen de seguridad sustraído al headroom MPO (Req 10.2).
   static const double _kHeadroomSafetyMarginDb = 3.0;
@@ -3336,7 +3532,7 @@ class AmplificationBloc
       // Clamp por headroom MPO: nunca permitir gains que empujen el
       // pico de salida por encima del MPO de la banda.
       final headroom = bundle.mpoProfileDbSpl[i] -
-          _kTypicalInputDbSpl -
+          _kHeadroomInputDbSpl -
           _kHeadroomSafetyMarginDb;
       if (headroom < g) {
         g = math.max(headroom, AudiogramDrivenBundle.gainMinDb);
@@ -3437,10 +3633,27 @@ class AmplificationBloc
     // Base broadband: PTA-weighted average con delta manual y clamp
     // a [1.0, 3.0] aplicados (read-only sobre el bundle).
     final base = _resolveBridgeCompressionRatio(bundle, _manualDelta);
+    return _applyComfortToRatio(base);
+  }
 
-    // Comfort sincrónico desde Settings. Defensivo contra NaN/Infinity
-    // a pesar de que el getter del repo ya saneé estos casos: si la
-    // lectura lanza, default a 0.5; si es no finita, también 0.5.
+  /// Aplica el offset del slider "Comodidad" sobre un ratio de compresión
+  /// escalar [base] ya resuelto.
+  ///
+  /// Extraído de [_effectiveCompressionRatio] para que ambas rutas (la
+  /// bundle-driven y la de presets legacy con WDRC propio en
+  /// [_onUpdateEqGains]) honren Comodidad con la MISMA fórmula:
+  ///
+  /// ```
+  /// result = base + (1 - base) * comfort
+  /// ```
+  ///
+  /// `comfort` se lee sincrónicamente de [SettingsRepository.comfort]
+  /// (sin `await`). Defensivo contra NaN/Infinity a pesar de que el
+  /// getter del repo ya sanea estos casos: si la lectura lanza, default
+  /// a 0.5; si es no finita, también 0.5. Clamp final a `[0.0, 1.0]`.
+  ///
+  /// Requisitos: 4.4, 4.5, 4.7, 4.8, 4.11
+  double _applyComfortToRatio(double base) {
     double comfort;
     try {
       final raw = _settingsRepository.comfort;
@@ -3449,7 +3662,6 @@ class AmplificationBloc
       comfort = 0.5;
     }
     comfort = comfort.clamp(0.0, 1.0).toDouble();
-
     return base + (1.0 - base) * comfort;
   }
 

@@ -115,10 +115,11 @@ String _seedToStyleName(double seed) {
 // Constants mirrored from AmplificationBloc._resolveFinalGains
 // ---------------------------------------------------------------------------
 
-/// Nivel de input típico (dB SPL) usado por el bloc para el clamp de
-/// headroom MPO. Conversación normal ≈ 65 dB SPL.
-/// Mismo valor que `AmplificationBloc._kTypicalInputDbSpl`.
-const double _kTypicalInputDbSpl = 65.0;
+/// Nivel de input de referencia (dB SPL) usado por el bloc para el clamp
+/// de headroom MPO. Peor caso operativo: voz fuerte/cercana ≈ 80 dB SPL
+/// (no la conversación normal de 65).
+/// Mismo valor que `AmplificationBloc._kHeadroomInputDbSpl`.
+const double _kTypicalInputDbSpl = 80.0;
 
 /// Margen de seguridad sustraído al headroom MPO (Req 10.2).
 /// Mismo valor que `AmplificationBloc._kHeadroomSafetyMarginDb`.

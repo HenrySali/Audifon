@@ -110,7 +110,9 @@ List<AudiogramPoint> _pointsFrom(Map<int, double> map) => map.entries
 // consistent with the bundle, the test mirrors the documented
 // formulas (design.md §"Atomic apply" + amplification_bloc.dart).
 
-const double _kTypicalInputDbSpl = 65.0;
+// Mirror de `AmplificationBloc._kHeadroomInputDbSpl` (peor caso operativo:
+// voz fuerte/cercana ≈ 80 dB SPL, no la conversación normal de 65).
+const double _kTypicalInputDbSpl = 80.0;
 const double _kHeadroomSafetyMarginDb = 3.0;
 
 double _broadbandMpoOf(AudiogramDrivenBundle b) {

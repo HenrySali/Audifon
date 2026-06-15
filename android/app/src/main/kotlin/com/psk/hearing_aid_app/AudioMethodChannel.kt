@@ -1183,6 +1183,17 @@ class AudioMethodChannel(
     // El lado Dart (AmplificationBloc) además gestiona el snapshot/restore del
     // toggle Smart y reaplica el preset al desactivar; este nivel solo replica
     // las llamadas JNI que el paciente hace.
+    //
+    // ⚠️ NOTA (patient-dsp-controls-fix — Tarea 4): el `setAutoClassifyEnabled(false)`
+    // que estos helpers invocan es REDUNDANTE / DEFENSIVO, NO la fuente del
+    // alivio sonoro. Desde la Tarea 1, el clasificador automático ya queda
+    // apagado en el modo normal del Técnico (`updateAutoClassify(false)` al
+    // boot), así que MHL/Música YA NO son lo que estabiliza el sonido. La
+    // estabilización real viene de la cadena coherente MPO→WDRC→EQ con clamp
+    // de headroom (Tareas 1-3). Se conserva la llamada porque no hace daño
+    // (idempotente) y cubre el caso borde de un polling viejo que reactive el
+    // clasificador, pero MHL volvió a ser lo que clínicamente representa: un
+    // modo de prescripción selectivo, no un "botón de pánico".
     // ─────────────────────────────────────────────────────────────────────
 
     /**
@@ -1209,9 +1220,13 @@ class AudioMethodChannel(
                 attackMs = lastAttackMs,
                 releaseMs = lastReleaseMs
             )
-            // Apagar el clasificador automático (es responsabilidad del lado
-            // Dart forzar el toggle de Smart en false; acá lo replicamos
-            // a nivel motor para evitar que un polling viejo lo prenda).
+            // Apagar el clasificador automático.
+            // ⚠️ REDUNDANTE / DEFENSIVO (patient-dsp-controls-fix — Tarea 4):
+            // desde la Tarea 1 el clasificador ya queda OFF en el modo normal
+            // del Técnico, así que esta llamada NO es lo que estabiliza el
+            // sonido — el alivio viene de la cadena coherente MPO→WDRC→EQ. Se
+            // mantiene porque es idempotente y cubre el borde de un polling
+            // viejo que lo reactive; MHL ya no es la muleta de estabilización.
             nativeBridge.setAutoClassifyEnabled(false)
         } else {
             // Restaurar EQ y WDRC originales del preset activo.
@@ -1240,6 +1255,11 @@ class AudioMethodChannel(
         if (enabled) {
             nativeBridge.setNrLevel(0)
             nativeBridge.nativeSetDnnIntensity(0.0f)
+            // ⚠️ REDUNDANTE / DEFENSIVO (patient-dsp-controls-fix — Tarea 4):
+            // el clasificador ya queda OFF en el modo normal del Técnico desde
+            // la Tarea 1. Modo Música no estabiliza por apagar el clasificador;
+            // solo preserva timbres/dinámicas (NR=0 + DNN=0). Se conserva la
+            // llamada por ser idempotente y defensiva.
             nativeBridge.setAutoClassifyEnabled(false)
         }
         // OFF: el lado Dart reaplica nrLevel + dnnIntensity desde Settings.

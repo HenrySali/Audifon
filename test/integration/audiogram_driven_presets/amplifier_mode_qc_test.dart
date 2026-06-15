@@ -101,10 +101,11 @@ class _FakeAudiogram extends Fake implements Audiogram {}
 
 // ─── Constants mirrored from the bloc ──────────────────────────────────────
 
-/// Mirror of `AmplificationBloc._kTypicalInputDbSpl` — the dB SPL of a
-/// "typical conversation" used as the input level in the headroom
-/// clamp.
-const double _kTypicalInputDbSpl = 65.0;
+/// Mirror of `AmplificationBloc._kHeadroomInputDbSpl` — the dB SPL of
+/// the worst-case operational input (loud/close speech ≈ 80 dB SPL,
+/// not the 65 dB SPL of a typical conversation) used as the input
+/// level in the headroom clamp.
+const double _kTypicalInputDbSpl = 80.0;
 
 /// Mirror of `AmplificationBloc._kHeadroomSafetyMarginDb` — the
 /// safety margin subtracted from the MPO before allowing a gain.
