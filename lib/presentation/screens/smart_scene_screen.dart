@@ -31,10 +31,7 @@ import '../../scene/scene_recorder.dart';
 import '../../scene/scene_snapshot.dart';
 import '../../scene/smart_preset.dart';
 import '../bloc/amplification_bloc.dart';
-import '../bloc/amplification_event.dart';
-import '../bloc/amplification_state.dart';
 import '../widgets/default_audiogram_hint.dart';
-import 'smart_preset_resolver.dart';
 
 class SmartSceneScreen extends StatefulWidget {
   const SmartSceneScreen({super.key});
@@ -91,58 +88,13 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   Timer? _dnnIsActivePollTimer;
   static const Duration _dnnIsActivePollInterval = Duration(milliseconds: 500);
 
-  // ─── Smart Scene polling 1 Hz (tarea 8.1, paridad técnico ↔ paciente) ─
-  //
-  // Polling separado del de snapshots (10 Hz, arriba): cada 1 s lee
-  // `environmentClass` desde `getDspStageMetrics()` (vía AudioBridge),
-  // mapea con `resolveSmartPreset` y despacha `ChangeProfile` al bloc.
-  //
-  // Cancelación: 4 condiciones del design (Smart OFF/ engine stop /
-  // MHL Prescripción ON / Modo Música ON) + widget dispose. Las primeras
-  // tres se evalúan reactivamente vía `_amplStateSubscription` sobre el
-  // stream del `AmplificationBloc`; la cuarta vive en `dispose`.
-  //
-  // Validates: Requirements 2.1, 2.2, 2.10, 2.11, 2.12, 2.13.
-
-  /// Periodo del polling Smart Scene (1 Hz exacto, ± jitter del scheduler
-  /// de Dart). El paciente usa `Duration(seconds: 1)`; aquí mantenemos
-  /// `Duration(milliseconds: 1000)` por consistencia con la documentación
-  /// del design.md.
-  static const Duration _smartPollInterval = Duration(milliseconds: 1000);
-
-  /// Timer del polling 1 Hz de Smart Scene. `null` cuando el polling no
-  /// está activo (engine apagado, modo MHL o Música activos, o widget
-  /// destruido).
-  Timer? _smartPollTimer;
-
-  /// Última `environmentClass` despachada al bloc en este ciclo de polling.
-  /// Permite cumplir Req 2.11 (no re-dispatchear cuando la clase no
-  /// cambió). Se resetea a `null` al cancelar el polling para que el
-  /// siguiente arranque trate la primera lectura como una transición.
-  int? _lastEnvClass;
-
-  /// Lista de nombres de presets disponibles desde `ProfileRepository`,
-  /// cacheada para no recargar en cada tick del polling. Se carga una
-  /// vez en `initState` y no se invalida durante la sesión: si el técnico
-  /// agrega/elimina presets desde otra screen, el polling toma efecto al
-  /// reabrir esta screen.
-  List<String> _availableProfileNames = const <String>[];
-
-  /// Suscripción al `bloc.stream` para reaccionar a transiciones del
-  /// `AmplificationState` y arrancar/parar el polling según las 4
-  /// condiciones de cancelación. La suscripción se cierra en `dispose`.
-  StreamSubscription<AmplificationState>? _amplStateSubscription;
-
   @override
   void initState() {
     super.initState();
     _startPolling();
     _initEngineAndAudiogram();
     _initDnnDenoiser();
-    // Tarea 8.1: cargar la lista de presets disponibles y suscribirse al
-    // stream del AmplificationBloc para evaluar las 4 condiciones de
-    // arranque/cancelación del polling 1 Hz de Smart Scene.
-    _initSmartScenePolling();
+    // Técnico = MANUAL: ya no se arranca polling automático de ambiente.
   }
 
   Future<void> _initEngineAndAudiogram() async {
@@ -215,11 +167,6 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   void dispose() {
     _pollTimer?.cancel();
     _dnnIsActivePollTimer?.cancel();
-    // Tarea 8.1: cancelar polling Smart Scene + suscripción al bloc al
-    // destruir el widget (4ta condición de cancelación del design).
-    _stopSmartScenePolling();
-    _amplStateSubscription?.cancel();
-    _amplStateSubscription = null;
     super.dispose();
   }
 
@@ -562,178 +509,17 @@ class _SmartSceneScreenState extends State<SmartSceneScreen> {
   }
 
   // ────────────────────────────────────────────────────────────────────
-  // Smart Scene polling 1 Hz (tarea 8.1, paridad técnico ↔ paciente)
+  // Técnico = MANUAL (sin clasificador automático)
   // ────────────────────────────────────────────────────────────────────
   //
-  // Diseño:
-  // - Suscripción única al `bloc.stream`: cada estado nuevo evalúa las
-  //   4 condiciones de cancelación (Smart OFF / engine stop /
-  //   MHL Prescripción ON / Modo Música ON) y arranca o detiene el
-  //   timer en consecuencia.
-  // - "Smart OFF" en el técnico no es un toggle Dart explícito: se
-  //   modela como `state is! AmplificationActive` (engine apagado o en
-  //   error). Cuando el bloc exponga un `setSmartEnabled` dedicado, este
-  //   método se actualiza para incluirlo. Hasta entonces, el polling
-  //   solo corre con engine activo y sin modos selectivos encendidos.
-  // - El timer es 1 Hz exacto (`Timer.periodic(_smartPollInterval)`).
-  //   La primera lectura es inmediata (no se espera 1 s a la primera
-  //   lectura) — Req 2.1 + paridad con `home_screen.dart` del paciente.
+  // Decisión de producto: en el TÉCNICO los 3 ambientes
+  // (Silencioso / Conversación / Ruidoso) se eligen SIEMPRE a mano desde
+  // el selector de perfil. La ÚNICA app con cambio de ambiente automático
+  // es V3. Por eso acá NO hay polling 1 Hz que despache `ChangeProfile`.
   //
-  // Validates: Requirements 2.1, 2.2, 2.10, 2.11, 2.12, 2.13.
-
-  /// Carga la lista de presets disponibles desde `ProfileRepository` y
-  /// se suscribe al stream del `AmplificationBloc` para reaccionar a
-  /// cambios de estado (engine on/off, MHL/Música ON/OFF).
-  Future<void> _initSmartScenePolling() async {
-    if (!mounted) return;
-    final bloc = context.read<AmplificationBloc>();
-
-    // Cargar nombres de presets disponibles (cacheado para todo el
-    // ciclo de vida de la screen). Si la carga falla, dejamos la lista
-    // vacía: `resolveSmartPreset` retornará `null` y el polling no
-    // despachará `ChangeProfile`, comportamiento seguro.
-    try {
-      final profiles = await bloc.profileRepository.getAllProfiles();
-      if (!mounted) return;
-      _availableProfileNames = profiles
-          .map((p) => p.name)
-          .toList(growable: false);
-    } catch (e) {
-      _logError('Smart Scene polling: getAllProfiles falló: $e');
-    }
-
-    if (!mounted) return;
-
-    // Suscribirse al stream del bloc para evaluar arranque/parada del
-    // polling en cada transición de estado.
-    _amplStateSubscription = bloc.stream.listen(_onAmplificationStateChanged);
-
-    // Evaluar el estado actual al boot (el `listen` solo dispara con
-    // estados emitidos a partir de ahora).
-    _onAmplificationStateChanged(bloc.state);
-  }
-
-  /// Evalúa las 4 condiciones de cancelación cada vez que el bloc emite
-  /// un estado nuevo. Si todas pasan → arrancar polling; si alguna
-  /// falla → detener polling.
-  void _onAmplificationStateChanged(AmplificationState state) {
-    if (!mounted) return;
-    final engineRunning = state is AmplificationActive;
-    final modeBlocking = state is AmplificationActive &&
-        (state.mhlActive || state.musicModeActive);
-    if (engineRunning && !modeBlocking) {
-      _startSmartScenePolling();
-    } else {
-      _stopSmartScenePolling();
-    }
-  }
-
-  /// Arranca el polling 1 Hz si todavía no está corriendo. Idempotente:
-  /// si el timer ya existe y está activo, no hace nada.
-  void _startSmartScenePolling() {
-    if (_smartPollTimer != null && _smartPollTimer!.isActive) return;
-    // Resetear la última clase para que el primer dispatch del nuevo
-    // ciclo se produzca aunque el bloc haya cambiado de preset desde
-    // afuera entre paradas.
-    _lastEnvClass = null;
-    _smartPollTimer =
-        Timer.periodic(_smartPollInterval, (_) => _pollSmartScene());
-    // Req 2.1: primera lectura inmediata, sin esperar 1 s.
-    _pollSmartScene();
-  }
-
-  /// Detiene el polling y descarta el último valor leído.
-  void _stopSmartScenePolling() {
-    _smartPollTimer?.cancel();
-    _smartPollTimer = null;
-    _lastEnvClass = null;
-  }
-
-  /// Tick del polling 1 Hz.
-  ///
-  /// Pasos (en orden):
-  /// 1. Re-validar las 4 condiciones de cancelación contra el estado
-  ///    actual del bloc (puede haber cambiado entre suscripción y tick).
-  /// 2. Invocar `audioBridge.getDspStageMetrics()`. En excepción o
-  ///    `null` → omitir tick sin actualizar `_lastEnvClass` (Req 2.12).
-  /// 3. Leer `environmentClass` como `int`; tipos no-int → omitir.
-  /// 4. Contrato REAL del motor C++ = `EnvironmentClass` (0..3): QUIET,
-  ///    SPEECH, SPEECH_IN_NOISE, NOISE. Fuera de `[0, 3]` → omitir.
-  /// 5. cls igual al último → no dispatch (Req 2.11).
-  /// 6. Mapear con `resolveEnvironmentProfile` (4 clases → Silencioso/
-  ///    Conversación/Ruidoso). `null` (perfil no disponible) → no dispatch.
-  /// 7. Si el perfil coincide con el `activeProfile` actual → no dispatch.
-  /// 8. Despachar `ChangeProfile(profile: preset)` y actualizar
-  ///    `_lastEnvClass` (Req 2.2).
-  ///
-  /// FIX clasificador: antes el paso 4 normalizaba a `[0,7]` y el mapeo
-  /// usaba `resolveSmartPreset` (contrato `SceneClass` de 8 clases con
-  /// presets "Suave/Medio/Alto" inexistentes) → nunca cambiaba de perfil.
-  Future<void> _pollSmartScene() async {
-    if (!mounted) {
-      _stopSmartScenePolling();
-      return;
-    }
-    final bloc = context.read<AmplificationBloc>();
-    final state = bloc.state;
-
-    // Paso 1: re-validar condiciones (engine activo + sin modos).
-    if (state is! AmplificationActive ||
-        state.mhlActive ||
-        state.musicModeActive) {
-      _stopSmartScenePolling();
-      return;
-    }
-
-    // Paso 2: invocar el bridge con tolerancia a fallos (Req 2.12).
-    Map<String, dynamic>? metrics;
-    try {
-      metrics = await bloc.audioBridge.getDspStageMetrics();
-    } catch (e) {
-      // Req 2.12: omitir tick, no actualizar `_lastEnvClass`,
-      // continuar próximo tick.
-      _logError('Smart Scene polling: getDspStageMetrics excepción: $e');
-      return;
-    }
-    if (!mounted) return;
-    if (metrics == null) {
-      // Bridge retornó null (motor no corre o handler no implementado).
-      // Equivalente a una excepción de bridge: no actualizar
-      // `_lastEnvClass`, no dispatch (Req 2.12).
-      return;
-    }
-
-    // Paso 3: leer environmentClass como int.
-    final raw = metrics['environmentClass'];
-    if (raw is! int) return;
-
-    // Paso 4: contrato REAL del motor C++ = EnvironmentClass (0..3).
-    // QUIET=0, SPEECH=1, SPEECH_IN_NOISE=2, NOISE=3. Fuera de rango → no-op.
-    if (raw < 0 || raw > 3) return;
-    final cls = raw;
-
-    // Paso 5: cls igual al último → idempotente, no dispatch (Req 2.11).
-    if (cls == _lastEnvClass) return;
-
-    // Paso 6: mapear EnvironmentClass → perfil del técnico
-    // (Silencioso/Conversación/Ruidoso) con el helper puro.
-    final presetName = resolveEnvironmentProfile(cls, _availableProfileNames);
-    if (presetName == null) {
-      // El perfil mapeado no está disponible: no dispatch. NO actualizar
-      // `_lastEnvClass` para reintentar si el set de perfiles cambia.
-      return;
-    }
-
-    // Paso 7: evitar dispatch redundante si ya estamos en ese perfil.
-    if (presetName == state.activeProfile) {
-      _lastEnvClass = cls;
-      return;
-    }
-
-    // Paso 8: dispatch + memorizar.
-    _lastEnvClass = cls;
-    bloc.add(ChangeProfile(profile: presetName));
-  }
+  // El motor C++ sigue exponiendo `environmentClass` (lo usa V3 y el botón
+  // manual "Detectar y aplicar" de esta pantalla vía `SceneEngine`), pero
+  // esta screen ya no aplica ningún preset por su cuenta.
 
   // ────────────────────────────────────────────────────────────────────
   // Build
