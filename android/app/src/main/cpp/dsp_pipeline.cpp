@@ -257,10 +257,33 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // de clase). Esto garantiza que cualquier diferencia entre el valor actual
     // y el target se reduzca exponencialmente, eliminando los chasquidos al
     // transitar entre escenas (SPEECH→NOISE, QUIET→SPEECH, etc.).
+    //
+    // FIX saturación transitoria preset bajo→alto (Opción C: "WDRC first"):
+    // Si el target implica MÁS compresión (CR sube o knee baja), aplicar
+    // INSTANTÁNEO para que la compresión "esté lista" cuando las gains EQ
+    // suban (evita picos transitorios que disparan el MPO). Si implica MENOS
+    // compresión (CR baja o knee sube), rampear suave para evitar que el
+    // nivel suba de golpe. Patrón estándar de audífonos: attack rápido /
+    // release lento, pero a nivel de PARÁMETROS en vez de señal.
     {
-        // 1) Knee + ratio: rampa exponencial sample-by-bloque (~200 ms a 4 ms/bloque).
-        wdrcKneeRamp_  += kWdrcRampAlpha * (wdrcKneeTarget_  - wdrcKneeRamp_);
-        wdrcRatioRamp_ += kWdrcRampAlpha * (wdrcRatioTarget_ - wdrcRatioRamp_);
+        // 1) Knee: baja = más compresión = instantáneo; sube = menos = rampear.
+        if (wdrcKneeTarget_ < wdrcKneeRamp_) {
+            // Knee bajando → más compresión → aplicar instantáneo (protege)
+            wdrcKneeRamp_ = wdrcKneeTarget_;
+        } else {
+            // Knee subiendo → menos compresión → rampear suave (evita pico)
+            wdrcKneeRamp_ += kWdrcRampAlpha * (wdrcKneeTarget_ - wdrcKneeRamp_);
+        }
+
+        // 2) Ratio: sube = más compresión = instantáneo; baja = menos = rampear.
+        if (wdrcRatioTarget_ > wdrcRatioRamp_) {
+            // Ratio subiendo → más compresión → aplicar instantáneo (protege)
+            wdrcRatioRamp_ = wdrcRatioTarget_;
+        } else {
+            // Ratio bajando → menos compresión → rampear suave (evita pico)
+            wdrcRatioRamp_ += kWdrcRampAlpha * (wdrcRatioTarget_ - wdrcRatioRamp_);
+        }
+
         wdrc_.setCompressionKnee(wdrcKneeRamp_);
         wdrc_.setCompressionRatio(wdrcRatioRamp_);
 
