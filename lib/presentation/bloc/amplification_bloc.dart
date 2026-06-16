@@ -13,6 +13,7 @@ import '../../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
 import '../../domain/audiogram_driven_presets/bundle_builder.dart';
 import '../../domain/audiogram_driven_presets/environment_profile_mapper.dart';
 import '../../domain/audiogram_driven_presets/manual_adjustment_delta.dart';
+import '../../domain/audiogram_driven_presets/style_applicator.dart';
 import '../../domain/audiogram_driven_presets/operating_mode.dart';
 import '../../domain/audiogram_driven_presets/recd_provider.dart';
 import '../../domain/entities/audio_config.dart';
@@ -902,6 +903,23 @@ class AmplificationBloc
   ///
   /// Persiste el nuevo perfil en settings (Req 8.4).
   ///
+  // ─── Mapeo de ambiente manual → estilo EQ ────────────────────────────
+  //
+  // Réplica del comportamiento del paciente con Smart ON:
+  //   SILENCE → "Suave Plano"  (ganancia conservadora, perfil neutro)
+  //   VOICE   → "Medio Voz"   (NAL-NL2 pura + énfasis voz 1-4 kHz)
+  //   NOISE   → "Alto Voz"    (más agresiva + énfasis voz)
+  //
+  // Justificación clínica: en silencio, ganancias bajas evitan
+  // amplificar el piso de ruido; en conversación, NAL-NL2 pleno con
+  // foco en inteligibilidad; en ruido, se compensa la caída de SNR
+  // con +30 % de gain y énfasis en banda de habla.
+  static const Map<String, String> _profileToStyle = <String, String>{
+    'Silencioso': StyleApplicator.styleSoftFlat,    // ×0.7, Plano
+    'Conversación': StyleApplicator.styleMediumVoice, // ×1.0, Voz
+    'Ruidoso': StyleApplicator.styleHighVoice,      // ×1.3, Voz
+  };
+
   /// Requisitos: 6.2, 6.3, 6.4, 6.5, 8.2, 8.5
   Future<void> _onChangeProfile(
     ChangeProfile event,
@@ -945,7 +963,7 @@ class AmplificationBloc
         baseBundle.nrLevel,
         newProfile.nrDelta,
       );
-      final bundle = adjustedNrLevel == baseBundle.nrLevel
+      final nrBundle = adjustedNrLevel == baseBundle.nrLevel
           ? baseBundle
           : AudiogramDrivenBundle(
               gainsDb: baseBundle.gainsDb,
@@ -963,9 +981,34 @@ class AmplificationBloc
               derivedAt: baseBundle.derivedAt,
             );
 
-      // Reflejar el nombre del perfil activo de inmediato; el bundle
-      // se aplica vía `_onApplyBundle`.
-      emit(currentState.copyWith(activeProfile: newProfile.name));
+      // ─── Adaptación EQ por ambiente ────────────────────────────────
+      //
+      // Aplica el estilo (multiplicador + delta espectral) sobre las
+      // gains NAL del bundle, emulando el comportamiento del paciente
+      // Smart. Si el perfil no tiene mapeo (custom), se usa el bundle
+      // tal cual (sin colorear).
+      final styleName = _profileToStyle[newProfile.name];
+      final AudiogramDrivenBundle bundle;
+      final String eqPresetLabel;
+
+      if (styleName != null) {
+        bundle = StyleApplicator.applyStyle(
+          nrBundle,
+          styleName,
+          derivedAt: _clock().toUtc(),
+        );
+        eqPresetLabel = styleName;
+      } else {
+        bundle = nrBundle;
+        eqPresetLabel = currentState.activeEqPreset;
+      }
+
+      // Reflejar el nombre del perfil activo y el preset EQ derivado
+      // de inmediato; el bundle se aplica vía `_onApplyBundle`.
+      emit(currentState.copyWith(
+        activeProfile: newProfile.name,
+        activeEqPreset: eqPresetLabel,
+      ));
 
       add(ApplyAudiogramDrivenBundle(bundle: bundle, delta: _manualDelta));
     } catch (e, st) {
