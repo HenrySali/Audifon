@@ -188,6 +188,10 @@ public:
     int32_t getInputDeviceId() const;
     int32_t getOutputDeviceId() const;
 
+    /// Retorna el audio session ID del input stream (para NoiseSuppressor Android).
+    /// @return Session ID (>0 si válido), o -1 si el stream no está activo.
+    int32_t getInputSessionId() const;
+
     // ─── Oboe FullDuplexStream override ─────────────────────────────────
     oboe::DataCallbackResult onBothStreamsReady(
         const void *inputData,

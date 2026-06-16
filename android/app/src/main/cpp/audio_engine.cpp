@@ -70,6 +70,9 @@ oboe::Result AudioEngine::openInputStream() {
     builder.setSharingMode(oboe::SharingMode::Shared);
     builder.setAudioApi(oboe::AudioApi::Unspecified);
     builder.setErrorCallback(this);
+    // Pedir al HAL que asigne un audio session ID (para NoiseSuppressor Android).
+    // Sin esto, getSessionId() devuelve 0 (None) y NoiseSuppressor no puede attachear.
+    builder.setSessionId(oboe::SessionId::Allocate);
     // Allow format conversion so Oboe can handle int16→float if needed
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
@@ -105,13 +108,14 @@ oboe::Result AudioEngine::openInputStream() {
 
     if (result == oboe::Result::OK) {
         LOGI("Input stream opened — API: %s, sampleRate: %d, format: %s, "
-             "sharingMode: %s, deviceId: %d, framesPerBurst: %d",
+             "sharingMode: %s, deviceId: %d, framesPerBurst: %d, sessionId: %d",
              oboe::convertToText(inputStream_->getAudioApi()),
              inputStream_->getSampleRate(),
              oboe::convertToText(inputStream_->getFormat()),
              oboe::convertToText(inputStream_->getSharingMode()),
              inputStream_->getDeviceId(),
-             inputStream_->getFramesPerBurst());
+             inputStream_->getFramesPerBurst(),
+             static_cast<int32_t>(inputStream_->getSessionId()));
     } else {
         LOGE("Failed to open input stream: %s", oboe::convertToText(result));
     }
@@ -389,6 +393,13 @@ int32_t AudioEngine::getInputDeviceId() const {
 int32_t AudioEngine::getOutputDeviceId() const {
     if (outputStream_) {
         return outputStream_->getDeviceId();
+    }
+    return -1;
+}
+
+int32_t AudioEngine::getInputSessionId() const {
+    if (inputStream_) {
+        return static_cast<int32_t>(inputStream_->getSessionId());
     }
     return -1;
 }

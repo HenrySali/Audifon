@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
@@ -73,6 +74,9 @@ class AudioMethodChannel(
     // (default), se mantiene el comportamiento histórico: A2DP @ 48 kHz.
     private val scoController = BluetoothScoController(context)
     @Volatile private var conversationMode: Boolean = false
+
+    /** NoiseSuppressor del sistema Android (Fase 1 noise gate HW). */
+    private var noiseSuppressor: NoiseSuppressor? = null
 
     /** Sink para emitir nivel de entrada a Flutter. */
     private var levelEventSink: EventChannel.EventSink? = null
@@ -438,6 +442,27 @@ class AudioMethodChannel(
         )
 
         emitState("active")
+
+        // ─── NoiseSuppressor del sistema (Fase 1 — reducción de ruido HW) ───
+        // Usa el audio session ID del input stream Oboe para attachear el
+        // efecto del framework Android. No requiere MODE_IN_COMMUNICATION.
+        // Si no está disponible (dispositivo viejo o HAL sin soporte), se
+        // continúa sin él — no es bloqueante.
+        try {
+            val sessionId = nativeBridge.nativeGetInputSessionId()
+            if (sessionId > 0 && NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = NoiseSuppressor.create(sessionId)
+                noiseSuppressor?.enabled = true
+                Log.i(TAG, "NoiseSuppressor attached to session $sessionId")
+            } else {
+                Log.w(TAG, "NoiseSuppressor not available (sessionId=$sessionId, " +
+                        "isAvailable=${NoiseSuppressor.isAvailable()})")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "NoiseSuppressor attach failed: ${e.message}")
+            noiseSuppressor = null
+        }
+
         result.success(null)
     }
 
@@ -446,6 +471,10 @@ class AudioMethodChannel(
      * También detiene el foreground service.
      */
     private fun handleStopAudio(result: MethodChannel.Result) {
+        // ─── Release NoiseSuppressor ANTES de detener el engine ──────────
+        noiseSuppressor?.release()
+        noiseSuppressor = null
+
         nativeBridge.stop()
 
         // Si el modo conversación estaba ON, liberar SCO también para no
@@ -500,6 +529,10 @@ class AudioMethodChannel(
         }
 
         // Engine corriendo → reiniciar.
+        // Release NoiseSuppressor antes de destruir el engine.
+        noiseSuppressor?.release()
+        noiseSuppressor = null
+
         nativeBridge.stop()
 
         val scoStatus: String
@@ -535,6 +568,19 @@ class AudioMethodChannel(
             nrLevel = 0,
             mpoThresholdDbSpl = lastMpoDbSpl
         )
+
+        // Re-attach NoiseSuppressor al nuevo engine.
+        try {
+            val sessionId = nativeBridge.nativeGetInputSessionId()
+            if (sessionId > 0 && NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = NoiseSuppressor.create(sessionId)
+                noiseSuppressor?.enabled = true
+                Log.i(TAG, "NoiseSuppressor re-attached to session $sessionId")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "NoiseSuppressor re-attach failed: ${e.message}")
+            noiseSuppressor = null
+        }
 
         // Re-init DNN: el motor anterior se destruyó, así que el .onnx hay
         // que cargarlo en el nuevo `g_engine`.

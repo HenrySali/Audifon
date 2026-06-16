@@ -560,6 +560,21 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetOutputDeviceId(
     return g_engine->getOutputDeviceId();
 }
 
+/// Obtiene el audio session ID del stream de entrada (para NoiseSuppressor Android).
+/// Kotlin lo usa para crear NoiseSuppressor.create(sessionId).
+/// @return Session ID (>0 si válido), o -1 si no está activo.
+JNIEXPORT jint JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetInputSessionId(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return -1;
+    }
+
+    return g_engine->getInputSessionId();
+}
+
 /// Setea el flag del "Modo Conversación" (SCO + baja latencia).
 ///
 /// IMPORTANTE: debe llamarse ANTES de `nativeStart` (o antes de reiniciar

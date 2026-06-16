@@ -303,6 +303,9 @@ class NativeAudioBridge {
 
     private external fun nativeGetOutputDeviceId(): Int
 
+    /** Retorna el audio session ID del input stream (para NoiseSuppressor Android). */
+    external fun nativeGetInputSessionId(): Int
+
     /**
      * Setea el flag del "Modo Conversación" (SCO + baja latencia). Debe
      * llamarse ANTES de [start] (o antes de un stop→start) para que el
