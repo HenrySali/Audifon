@@ -396,12 +396,24 @@ void DspPipeline::setVolume(float volumeDb) {
 }
 
 void DspPipeline::setWdrcParams(const WdrcParams& params) {
+    // Expansion knee/ratio + attack/release: aplicar inmediato (no producen
+    // saltos audibles — la expansión atenúa señales ya débiles y los tiempos
+    // de envolvente son suaves por naturaleza).
     wdrc_.setExpansionKnee(params.expansionKnee);
     wdrc_.setExpansionRatio(params.expansionRatio);
-    wdrc_.setCompressionKnee(params.compressionKnee);
-    wdrc_.setCompressionRatio(params.compressionRatio);
     wdrc_.setAttackMs(params.attackMs);
     wdrc_.setReleaseMs(params.releaseMs);
+
+    // Compression knee/ratio: fijar TARGETS de la rampa exponencial existente
+    // (kWdrcRampAlpha=0.02, ~200 ms). La rampa corre cada bloque en
+    // processBlock() y converge suavemente al target, eliminando el "pop" al
+    // cambiar de preset o togglear MHL ON/OFF desde Dart.
+    // ANTES: se pisaba directamente wdrc_.setCompressionKnee/Ratio → salto
+    //        brusco de compresión (audible como click/pop).
+    // AHORA: la misma rampa que suaviza los cambios del clasificador automático
+    //        suaviza también los cambios desde Dart (presets, MHL, manual).
+    wdrcKneeTarget_  = params.compressionKnee;
+    wdrcRatioTarget_ = params.compressionRatio;
 }
 
 void DspPipeline::setNrLevel(int level) {
