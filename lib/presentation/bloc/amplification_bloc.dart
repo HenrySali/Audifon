@@ -16,6 +16,7 @@ import '../../domain/audiogram_driven_presets/manual_adjustment_delta.dart';
 import '../../domain/audiogram_driven_presets/style_applicator.dart';
 import '../../domain/audiogram_driven_presets/operating_mode.dart';
 import '../../domain/audiogram_driven_presets/recd_provider.dart';
+import '../../domain/audiogram_driven_presets/wcpf_fitter.dart';
 import '../../domain/entities/audio_config.dart';
 import '../../domain/entities/audiogram.dart';
 import '../../domain/entities/environment_profile.dart';
@@ -1526,13 +1527,14 @@ class AmplificationBloc
   ///   perfil (longitudes distintas), usa el MPO broadband como cota.
   /// - Si [bundle] == null, no hay perfil MPO del cual derivar headroom →
   ///   clamp conservador solo al rango operativo (caso documentado).
-  /// - Aplica siempre el techo de ganancia del hardware (`gainCeiling`)
-  ///   como clamp final absoluto.
+  /// - Aplica siempre el techo de ganancia del hardware (`hardwareGainCeilingPerBandDb`)
+  ///   vía [fitPrescriptionToCeiling] (WCPF — Weighted Constrained Proportional
+  ///   Fitting): escala la curva proporcionalmente con pesos SII en lugar de
+  ///   recortar banda por banda, preservando la forma para inteligibilidad.
   List<double> _clampGainsToHeadroom(
     List<double> gains,
     AudiogramDrivenBundle? bundle,
   ) {
-    final gainCeiling = _settingsRepository.hardwareGainCeilingDb;
     final n = gains.length;
     final out = List<double>.filled(n, 0.0, growable: false);
     final double? broadband =
@@ -1554,11 +1556,16 @@ class AmplificationBloc
           g = math.max(headroom, AudiogramDrivenBundle.gainMinDb);
         }
       }
-      // Clamp final: techo de ganancia del hardware (gain ceiling).
-      if (g > gainCeiling) {
-        g = gainCeiling;
-      }
       out[i] = g;
+    }
+    // WCPF: escala proporcionalmente con pesos SII para respetar el
+    // techo per-band del hardware sin destruir la forma de la curva.
+    // Si la longitud no es 12 (caso defensivo), el helper acepta peso
+    // uniforme; si los 12 techos son 50 (sin calibrar), retorna el
+    // input intacto (backward compat).
+    final ceiling = _settingsRepository.hardwareGainCeilingPerBandDb;
+    if (ceiling.length == n) {
+      return fitPrescriptionToCeiling(out, ceiling);
     }
     return List<double>.unmodifiable(out);
   }
@@ -3563,13 +3570,13 @@ class AmplificationBloc
   /// MPO: `gainsDb[i] ≤ mpoProfileDbSpl[i] - input - 3 dB` (Req 10.2).
   ///
   /// Adicionalmente, aplica el techo de ganancia del hardware
-  /// (`hardwareGainCeilingDb`) como clamp final absoluto. Si el techo
-  /// es 50 (default — sin calibrar), no recorta nada.
+  /// (`hardwareGainCeilingPerBandDb`) vía [fitPrescriptionToCeiling]
+  /// (WCPF). Si los 12 techos son 50 (default — sin calibrar), no
+  /// recorta nada (backward compat).
   List<double> _resolveFinalGains(
     AudiogramDrivenBundle bundle,
     ManualAdjustmentDelta? delta,
   ) {
-    final gainCeiling = _settingsRepository.hardwareGainCeilingDb;
     final gains = List<double>.filled(
       AudiogramDrivenBundle.bandCount,
       0.0,
@@ -3595,11 +3602,15 @@ class AmplificationBloc
       if (headroom < g) {
         g = math.max(headroom, AudiogramDrivenBundle.gainMinDb);
       }
-      // Clamp final: techo de ganancia del hardware (gain ceiling).
-      if (g > gainCeiling) {
-        g = gainCeiling;
-      }
       gains[i] = g;
+    }
+    // Clamp final: techo de ganancia del hardware vía WCPF (escala
+    // proporcionalmente con pesos SII para preservar la forma de la
+    // curva). Backward compat: si los 12 techos son 50, retorna gains
+    // intactos.
+    final ceiling = _settingsRepository.hardwareGainCeilingPerBandDb;
+    if (ceiling.length == AudiogramDrivenBundle.bandCount) {
+      return fitPrescriptionToCeiling(gains, ceiling);
     }
     return List<double>.unmodifiable(gains);
   }

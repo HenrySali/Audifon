@@ -161,16 +161,45 @@ abstract class SettingsRepository {
   // auricular conectado. Ese valor se persiste como techo absoluto de
   // ganancia por banda. Default 50.0 (sin restricción — usuario no calibró).
 
-  /// Techo de ganancia máxima del hardware en dB.
+  /// Techo de ganancia máxima del hardware en dB **escalar** (legacy).
   ///
   /// Valor en `[0.0, 50.0]`. Default `50.0` cuando la key está ausente
   /// (equivalente a "sin límite": el hardware soporta todo el rango del EQ).
   /// Lectura sincrónica para uso en clamps hot-path.
+  ///
+  /// **Reemplazado por [hardwareGainCeilingPerBandDb]** a partir de la
+  /// calibración de 12 pasos. Esta propiedad se conserva por
+  /// retro-compatibilidad: implementaciones nuevas la derivan como
+  /// `min(hardwareGainCeilingPerBandDb)` para que cualquier consumidor
+  /// legacy reciba el techo más restrictivo de las 12 bandas.
   double get hardwareGainCeilingDb;
 
-  /// Persiste el techo de ganancia máxima del hardware.
+  /// Persiste el techo escalar legacy.
   ///
   /// El valor se clampa a `[0.0, 50.0]`; valores no finitos se reemplazan
-  /// por el default `50.0`.
+  /// por el default `50.0`. Setter conservado por backward compat: la
+  /// implementación replica el valor en las 12 bandas para mantener
+  /// coherencia con [hardwareGainCeilingPerBandDb].
   Future<void> setHardwareGainCeilingDb(double value);
+
+  /// Techo de ganancia máxima del hardware en dB, **por banda** (12).
+  ///
+  /// Lista de longitud exacta 12, alineada con
+  /// `Audiogram.standardFrequencies` (250, 500, 750, 1000, 1500, 2000,
+  /// 2500, 3000, 3500, 4000, 6000, 8000 Hz). Cada valor en `[0.0, 50.0]`;
+  /// default `[50.0, 50.0, ..., 50.0]` cuando la key está ausente
+  /// (equivalente a "sin restricción" en todas las bandas).
+  ///
+  /// Lectura sincrónica para uso en hot-path del DSP. La implementación
+  /// migra automáticamente la key escalar legacy [hardwareGainCeilingDb]
+  /// a las 12 bandas (replicando el valor) cuando la key per-banda no
+  /// está presente.
+  List<double> get hardwareGainCeilingPerBandDb;
+
+  /// Persiste el techo por banda. Recibe lista de longitud 12; cada
+  /// valor se clampa a `[0.0, 50.0]` y los valores no finitos se
+  /// reemplazan por `50.0`. Si la lista no tiene 12 elementos la
+  /// implementación rellena con `50.0` los faltantes o trunca los
+  /// excedentes.
+  Future<void> setHardwareGainCeilingPerBandDb(List<double> values);
 }

@@ -36,8 +36,18 @@ class _SettingsKeys {
   /// Modo Conversación (SCO + 16 kHz). Default false.
   static const String conversationModeEnabled = 'conversationModeEnabled';
 
-  /// Techo de ganancia máxima del hardware (dB). Default 50.0.
+  /// Techo de ganancia máxima del hardware (dB) — legacy escalar.
+  /// Default 50.0. Conservado para retro-compat: la implementación
+  /// nueva deriva su valor de `min(hardwareGainCeilingPerBandDb)`.
   static const String hardwareGainCeilingDb = 'hardwareGainCeilingDb';
+
+  /// Techo de ganancia máxima del hardware (dB) **por banda**. Lista
+  /// de 12 doubles alineada con `Audiogram.standardFrequencies`.
+  /// Default `[50.0]*12` (sin restricción). Migración: si la key
+  /// está ausente y existe la legacy escalar, se replica en las 12
+  /// bandas en la primera lectura.
+  static const String hardwareGainCeilingPerBandDb =
+      'hardwareGainCeilingPerBandDb';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -256,24 +266,113 @@ class SettingsRepositoryImpl implements SettingsRepository {
 
   // --- Gain Ceiling (calibración de ganancia máxima del hardware) ----------
 
+  /// Cantidad de bandas del techo per-band. Coincide con
+  /// `Audiogram.standardFrequencies.length` (no se importa el archivo
+  /// para mantener bajo el acoplamiento del repositorio).
+  static const int _kCeilingBandCount = 12;
+
+  /// Techo "sin restricción" (default cuando la key está ausente o la
+  /// banda no fue calibrada). Coincide con `AudiogramDrivenBundle.gainMaxDb`.
+  static const double _kCeilingMaxDb = 50.0;
+
   @override
   double get hardwareGainCeilingDb {
-    final raw = _box.get(_SettingsKeys.hardwareGainCeilingDb);
-    if (raw is! num || raw.isNaN) return 50.0;
-    final d = raw.toDouble();
-    if (!d.isFinite) return 50.0;
-    if (d < 0.0) return 0.0;
-    if (d > 50.0) return 50.0;
-    return d;
+    // Política nueva: el escalar legacy es `min(per-band)` para que
+    // cualquier consumidor que aún lea esta key reciba el techo más
+    // restrictivo de las 12 bandas (clamp más conservador). Si nadie
+    // calibró todavía, devuelve 50.0 (sin restricción).
+    final perBand = hardwareGainCeilingPerBandDb;
+    var minVal = perBand.first;
+    for (var i = 1; i < perBand.length; i++) {
+      if (perBand[i] < minVal) minVal = perBand[i];
+    }
+    return minVal;
   }
 
   @override
   Future<void> setHardwareGainCeilingDb(double value) async {
-    double v = value;
-    if (v.isNaN || !v.isFinite) v = 50.0;
-    if (v < 0.0) v = 0.0;
-    if (v > 50.0) v = 50.0;
-    await _box.put(_SettingsKeys.hardwareGainCeilingDb, v);
+    // Setter legacy: replicar el valor escalar en las 12 bandas para
+    // que [hardwareGainCeilingPerBandDb] quede coherente. La key
+    // legacy también se persiste para tolerar lecturas viejas que no
+    // hayan migrado todavía.
+    final clamped = _clampCeiling(value);
+    final replicated = List<double>.filled(_kCeilingBandCount, clamped);
+    await _box.put(_SettingsKeys.hardwareGainCeilingDb, clamped);
+    await _box.put(
+      _SettingsKeys.hardwareGainCeilingPerBandDb,
+      replicated,
+    );
+  }
+
+  @override
+  List<double> get hardwareGainCeilingPerBandDb {
+    final raw = _box.get(_SettingsKeys.hardwareGainCeilingPerBandDb);
+    if (raw is List && raw.length == _kCeilingBandCount) {
+      // Camino feliz: los 12 valores ya están guardados como per-band.
+      final out = List<double>.filled(_kCeilingBandCount, _kCeilingMaxDb);
+      for (var i = 0; i < _kCeilingBandCount; i++) {
+        out[i] = _clampCeiling(_asDouble(raw[i]));
+      }
+      return List<double>.unmodifiable(out);
+    }
+
+    // Migración: si no hay per-band guardado pero sí un escalar legacy
+    // calibrado (< 50.0), replicarlo en las 12 bandas. Esto cubre a
+    // técnicos que ya habían calibrado con la pantalla anterior y
+    // todavía no abrieron la nueva versión.
+    final legacyRaw = _box.get(_SettingsKeys.hardwareGainCeilingDb);
+    if (legacyRaw is num && legacyRaw.isFinite) {
+      final legacy = _clampCeiling(legacyRaw.toDouble());
+      if (legacy < _kCeilingMaxDb) {
+        return List<double>.unmodifiable(
+          List<double>.filled(_kCeilingBandCount, legacy),
+        );
+      }
+    }
+
+    // Default: sin restricción en ninguna banda.
+    return List<double>.unmodifiable(
+      List<double>.filled(_kCeilingBandCount, _kCeilingMaxDb),
+    );
+  }
+
+  @override
+  Future<void> setHardwareGainCeilingPerBandDb(List<double> values) async {
+    // Normalizar a longitud 12 con default 50.0.
+    final normalized = List<double>.filled(_kCeilingBandCount, _kCeilingMaxDb);
+    final n = values.length < _kCeilingBandCount
+        ? values.length
+        : _kCeilingBandCount;
+    for (var i = 0; i < n; i++) {
+      normalized[i] = _clampCeiling(values[i]);
+    }
+    await _box.put(
+      _SettingsKeys.hardwareGainCeilingPerBandDb,
+      normalized,
+    );
+    // Mantener escalar legacy coherente (= min(per-band)) para
+    // consumidores que aún lo lean directo de Hive.
+    var minVal = normalized.first;
+    for (var i = 1; i < normalized.length; i++) {
+      if (normalized[i] < minVal) minVal = normalized[i];
+    }
+    await _box.put(_SettingsKeys.hardwareGainCeilingDb, minVal);
+  }
+
+  /// Convierte un valor crudo de Hive a `double`, tolerando `null` y
+  /// tipos no numéricos (devuelve 50.0 — sin restricción).
+  double _asDouble(dynamic raw) {
+    if (raw is num && raw.isFinite) return raw.toDouble();
+    return _kCeilingMaxDb;
+  }
+
+  /// Clampa un valor de techo a `[0.0, 50.0]`; valores no finitos se
+  /// reemplazan por 50.0 (sin restricción).
+  double _clampCeiling(double value) {
+    if (value.isNaN || !value.isFinite) return _kCeilingMaxDb;
+    if (value < 0.0) return 0.0;
+    if (value > _kCeilingMaxDb) return _kCeilingMaxDb;
+    return value;
   }
 
   /// Lee una key con un valor numérico esperado en `[0.0, 1.0]`. Trata
