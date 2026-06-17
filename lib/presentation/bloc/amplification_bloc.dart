@@ -3634,36 +3634,41 @@ class AmplificationBloc
   }
 
   /// Override de severidad del audiograma (decisión del usuario,
-  /// junio 2026): cuando MHL OFF, devuelve gains FLAT según PTA del
-  /// audiograma actual; cuando MHL ON o no hay audiograma medido,
-  /// devuelve `null` (sin override → comportamiento original).
+  /// junio 2026): cuando hay audiograma medido, devuelve gains FLAT
+  /// según PTA del audiograma actual; cuando no hay audiograma medido
+  /// o la pérdida es mínima, devuelve `null` (sin override → el bloc
+  /// usa los gains del preset/bundle).
   ///
   /// Reglas:
-  /// - MHL ON → `null`.
-  /// - Sin `_currentAudiogram` o audiograma incompleto/sin medir → `null`
-  ///   (NO aplicar override; el modo sin audiograma debe sonar
-  ///   transparente, sin amplificar ruido).
+  /// - Sin `_currentAudiogram` o audiograma incompleto → `null`.
   /// - PTA = promedio de umbrales en 500/1000/2000/4000 Hz (PTA-4 estándar).
+  /// - PTA ≤ 20 dB HL (pérdida mínima/normal) → `null` (sin override).
   /// - PTA > 35 dB HL → `[8.0]*12` (mismo approach que MHL: flat 8 dB).
-  /// - PTA ≤ 35 dB HL → `[14.0]*12`.
+  /// - 20 < PTA ≤ 35 dB HL → `[14.0]*12`.
+  ///
+  /// IMPORTANTE: el override aplica INDEPENDIENTEMENTE del estado de MHL.
+  /// Versiones anteriores retornaban `null` cuando MHL estaba activo,
+  /// asumiendo que el handler Kotlin de MHL ya pisaba los gains. Eso
+  /// fallaba porque al cambiar de preset/ambiente con MHL ON, el bloc
+  /// reaplica los gains del bundle (hasta 21 dB en agudos) y el motor
+  /// los recibe ANTES de que MHL los pise. El log de métricas mostró
+  /// `mpoFrac=1.0` sostenido en esos casos. Ahora el override actúa en
+  /// el bloc Dart, así los gains que llegan al motor ya están pisados a
+  /// flat 8/14 dB sin importar el path (preset, ambiente, audiograma).
   ///
   /// El usuario reportó tras un mes de iteración que la prescripción
   /// NAL/DSL combinada con presets/ambientes saturaba sistemáticamente
   /// con audiogramas severos, mientras que MHL (8 dB flat) sonaba bien.
   /// Esta función generaliza el approach: usa la lógica de MHL como
   /// fallback automático cuando el audiograma indica pérdida severa, y
-  /// 14 dB flat para pérdidas leves donde 8 dB se quedaría corto. La
-  /// prescripción NAL/DSL queda en el código pero no se aplica mientras
-  /// este override esté activo (futuras iteraciones la pueden re-habilitar
-  /// vía toggle si funciona bien la simplificación).
+  /// 14 dB flat para pérdidas leves. La prescripción NAL/DSL queda en
+  /// el código pero no se aplica mientras este override esté activo.
   ///
-  /// Importante: cuando NO hay audiograma medido (boot inicial, default
-  /// `Audiogram.defaultAudiogram()` con todos los umbrales en 10 dB),
-  /// retorna `null`. Sin esta regla, el sistema metía 14 dB flat al
-  /// arranque y se oía ruido amplificado de fondo (regresión reportada
-  /// por el usuario).
+  /// Cuando NO hay audiograma medido (boot inicial, default
+  /// `Audiogram.defaultAudiogram()` con todos los umbrales en 10 dB) o
+  /// PTA ≤ 20 dB, retorna `null` para que el modo "sin pérdida" no
+  /// amplifique de más y suene transparente.
   List<double>? _audiogramFlatGainsOverride() {
-    if (_mhlActive) return null;
     final audiogram = _currentAudiogram;
     if (audiogram == null) return null;
     if (!_isAudiogramComplete(audiogram)) return null;
@@ -3682,9 +3687,6 @@ class AmplificationBloc
     if (count == 0) return null;
     final pta = sum / count;
 
-    // Si la pérdida es mínima (PTA ≤ 20 dB HL), no aplicar override
-    // tampoco: aunque haya un audiograma "medido" pero casi normal,
-    // 14 dB flat suena ruidoso. Mantener el preset (gains bajos).
     if (pta <= 20.0) return null;
 
     final flatDb = pta > 35.0 ? 8.0 : 14.0;
