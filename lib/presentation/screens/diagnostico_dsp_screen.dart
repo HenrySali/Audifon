@@ -33,6 +33,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -615,7 +616,39 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
     }
   }
 
-  /// Vuelve a Idle desde el estado Error.
+  /// Pulsación del botón "Copiar" en estado Completed.
+  ///
+  /// Lee el JSON de metadatos de la última grabación y lo copia al
+  /// portapapeles del dispositivo. Sirve para pegarlo en un chat o
+  /// editor sin pasar por share sheet ni por la carpeta de descargas.
+  ///
+  /// Si no hay JSON o falla la lectura, muestra el error real en el
+  /// snackbar.
+  Future<void> onCopyPressed() async {
+    if (_screenState != DiagnosticoScreenState.completed) return;
+    final json = _lastJsonPath;
+    if (json == null) {
+      _showSnackBar(DiagnosticExportService.fileNotFoundError);
+      return;
+    }
+
+    try {
+      final content = await File(json).readAsString();
+      await Clipboard.setData(ClipboardData(text: content));
+      if (!mounted) return;
+      _showSnackBar('Diagnóstico copiado al portapapeles');
+    } catch (e, st) {
+      developer.log(
+        'onCopyPressed: lectura/copia falló: $e',
+        name: 'DiagnosticoDsp',
+        error: e,
+        stackTrace: st,
+        level: 1000,
+      );
+      if (!mounted) return;
+      _showSnackBar('Error al copiar: $e');
+    }
+  }
   void onDismissError() {
     setState(() {
       _screenState = DiagnosticoScreenState.idle;
@@ -970,15 +1003,15 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
         children: [
           Expanded(
             child: ElevatedButton.icon(
-              onPressed: sharing ? null : onExportPressed,
+              onPressed: sharing ? null : onCopyPressed,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _kTechCyan,
                 foregroundColor: _kTechBg,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
-              icon: const Icon(Icons.share),
+              icon: const Icon(Icons.copy),
               label: const Text(
-                'Exportar',
+                'Copiar',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
