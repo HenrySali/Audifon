@@ -285,11 +285,31 @@ private:
 
     /// Headroom del compresor de salida (OutputCompressor) respecto al techo
     /// del MPO. El threshold del OC = thresholdMpo × kSoftLimiterHeadroom, de
-    /// modo que el freno suave empieza a actuar ~3 dB ANTES que el hard-clamp
-    /// del MPO. Así el MPO casi nunca recorta (menos THD) y sigue intacto como
-    /// red de seguridad dura. 0.71 ≈ -3 dB. Validado en
-    /// tools/sim_v3/validate_softlimiter.py.
-    static constexpr float kSoftLimiterHeadroom = 0.71f;
+    /// modo que el freno suave (ShaMPO broadband único) empieza a actuar
+    /// MUY por debajo del hard-clamp del MPO. Así el MPO casi nunca recorta
+    /// (menos THD) y sigue intacto como red de seguridad dura.
+    ///
+    /// ETAPA 1 (shampo broadband headroom 22 dB) — red de seguridad robusta
+    /// frente a sumas broadband multitono y picos de habla, INDEPENDIENTE de
+    /// la calibración de mic/SPL. Justificación numérica:
+    ///   - Crest factor de habla (Byrne et al., ISTS): +12 dB pico/RMS.
+    ///   - Suma RMS de N=12 tonos no correlacionados (Mini-Circuits AN60-037):
+    ///     +10·log10(12) ≈ +10.8 dB sobre una banda aislada.
+    ///   - Total ≈ 22.8 dB ⇒ tomamos 22 dB de margen contra el techo MPO.
+    ///   - 22 dB ⇒ 10^(-22/20) ≈ 0.0794.
+    ///
+    /// Comportamiento esperado a este headroom:
+    ///   - Voz conversacional input 65 dB SPL → output RMS ~85 dB SPL
+    ///     (≈ -35 dBFS) queda muy por debajo del threshold (~88 dB SPL,
+    ///     ≈ -32 dBFS) → RMS de voz NO se atenúa (transparente).
+    ///   - Multitono N=12 broadband sostenido (la suma de las 12 bandas del
+    ///     EQ con audiogramas con frecuencias altas exigentes) o ráfagas de
+    ///     pico de habla con prescripción agresiva: el OC los frena con
+    ///     ratio 10:1 y soft-knee 6 dB ANTES de que el MPO tenga que
+    ///     hard-clampear → adiós saturación residual.
+    ///
+    /// Validado en tools/sim_v3/validate_softlimiter.py (paridad con C++).
+    static constexpr float kSoftLimiterHeadroom = 0.0794f;
 
     // --- Módulos del pipeline ---
     AdaptiveFeedbackCanceller afc_; ///< AFC adaptativo (estima y resta feedback path)

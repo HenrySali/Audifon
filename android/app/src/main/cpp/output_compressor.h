@@ -54,7 +54,7 @@
 ///   OutputCompressor oc;
 ///   oc.init(16000);
 ///   oc.setEnabled(true);
-///   oc.setThresholdLinear(0.60f); // anclado ~-3 dB bajo el techo del MPO
+///   oc.setThresholdLinear(0.0675f); // ETAPA 1: 22 dB bajo el techo del MPO
 ///   oc.process(buffer, blockSize); // in-place, post-FBS / pre-MPO
 /// @endcode
 class OutputCompressor {
@@ -217,7 +217,14 @@ private:
 
     // --- Parámetros atómicos (UI thread settable) ---
     std::atomic<bool>  enabled_{true};
-    std::atomic<float> thresholdLinear_{0.60f}; ///< ~-3 dB bajo techo MPO 0.85
+    /// Default standalone (sin pipeline): ≈ kMpoDigitalCeiling (0.85) ×
+    /// 0.0794 ≈ 0.0675, equivalente a 22 dB de headroom contra el techo
+    /// digital. ETAPA 1 ShaMPO broadband: 12 dB crest factor habla + 10.8 dB
+    /// suma RMS multitono N=12. NOTA: cuando el módulo se usa dentro de
+    /// DspPipeline (caso real), este valor se override en init() vía
+    /// applyMpoThresholdFromDbSpl(), que ancla el threshold al techo MPO
+    /// clínico del paciente con el mismo headroom.
+    std::atomic<float> thresholdLinear_{0.0675f};
     std::atomic<float> ratio_{10.0f};           ///< 10:1
     std::atomic<float> kneeDb_{6.0f};           ///< soft-knee 6 dB
 

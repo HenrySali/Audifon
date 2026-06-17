@@ -341,8 +341,12 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // techo del MPO. Esto descarga al MPO: en vez de recortar duro los picos
     // (hard-clamp → THD → "silbido"), el MPO recibe una señal ya contenida y
     // casi nunca tiene que actuar. Solo atenúa. Su threshold está anclado
-    // ~3 dB bajo el techo del MPO (kSoftLimiterHeadroom). A nivel de voz
-    // normal (~65 dB SPL) los picos no llegan al threshold → transparente.
+    // ~22 dB bajo el techo del MPO (kSoftLimiterHeadroom, ETAPA 1: ShaMPO
+    // broadband headroom 22 dB = 12 dB crest factor habla + 10.8 dB suma
+    // RMS multitono N=12). A nivel de voz conversacional (~65 dB SPL input,
+    // ~85 dB SPL output RMS) la RMS queda muy por debajo del threshold
+    // (~88 dB SPL pico) → transparente. Ante multitono broadband o picos
+    // agresivos de habla con prescripción alta, frena ANTES del MPO.
     oc_.process(buffer, blockSize);
 
     // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
@@ -489,9 +493,13 @@ void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     const float safeLinear = (linear > kMpoDigitalCeiling) ? kMpoDigitalCeiling : linear;
     if (safeLinear > 0.0f) {
         mpo_.setThresholdLinear(safeLinear);
-        // El freno de salida (OutputCompressor) actúa ~3 dB ANTES del MPO:
-        // su threshold "sigue" al techo del MPO clínico (severa/moderada/leve)
-        // para que el hard-clamp del MPO casi nunca se dispare → menos THD.
+        // El freno de salida (OutputCompressor) actúa ~22 dB ANTES del MPO
+        // (ETAPA 1 ShaMPO broadband): su threshold "sigue" automáticamente al
+        // techo del MPO clínico (severa/moderada/leve) cada vez que cambia
+        // setMpoThresholdDbSpl(). Esa re-derivación garantiza que el freno
+        // ESTÉ SIEMPRE proporcionado al techo de seguridad clínico del paciente,
+        // sin que la app tenga que tocar nada extra. Headroom 22 dB cubre
+        // 12 dB crest factor de habla + 10.8 dB suma RMS de N=12 tonos.
         oc_.setThresholdLinear(safeLinear * kSoftLimiterHeadroom);
     }
 }
