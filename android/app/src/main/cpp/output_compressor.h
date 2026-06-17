@@ -54,7 +54,7 @@
 ///   OutputCompressor oc;
 ///   oc.init(16000);
 ///   oc.setEnabled(true);
-///   oc.setThresholdLinear(0.0675f); // ETAPA 1: 22 dB bajo el techo del MPO
+///   oc.setThresholdLinear(0.2135f); // ETAPA 1 hotfix: 12 dB bajo techo MPO
 ///   oc.process(buffer, blockSize); // in-place, post-FBS / pre-MPO
 /// @endcode
 class OutputCompressor {
@@ -168,7 +168,8 @@ public:
     }
 
     /// Ratio de compresión (input:output) por encima del threshold.
-    /// Default: 10.0 (10:1). Rango: 2.0 (suave) a 20.0 (casi limitador).
+    /// Default: 4.0 (4:1, ETAPA 1 hotfix; era 10:1). Rango: 2.0 (suave) a
+    /// 20.0 (casi limitador).
     void setRatio(float ratio) {
         if (ratio < 1.5f) ratio = 1.5f;
         if (ratio > 20.0f) ratio = 20.0f;
@@ -218,14 +219,18 @@ private:
     // --- Parámetros atómicos (UI thread settable) ---
     std::atomic<bool>  enabled_{true};
     /// Default standalone (sin pipeline): ≈ kMpoDigitalCeiling (0.85) ×
-    /// 0.0794 ≈ 0.0675, equivalente a 22 dB de headroom contra el techo
-    /// digital. ETAPA 1 ShaMPO broadband: 12 dB crest factor habla + 10.8 dB
-    /// suma RMS multitono N=12. NOTA: cuando el módulo se usa dentro de
+    /// 0.2512 ≈ 0.2135, equivalente a 12 dB de headroom contra el techo
+    /// digital. ETAPA 1 hotfix (volumen percibido): el headroom previo de
+    /// 22 dB hacía que el limiter atenuara la voz conversacional todo el
+    /// tiempo (release 80 ms), bajando el volumen percibido. 12 dB cubre el
+    /// crest factor de habla típico (Byrne et al.) y deja pasar el RMS de
+    /// voz sin tocar; el peor caso multitono N=12 broadband se frena con
+    /// ratio 4:1 ANTES del MPO. NOTA: cuando el módulo se usa dentro de
     /// DspPipeline (caso real), este valor se override en init() vía
     /// applyMpoThresholdFromDbSpl(), que ancla el threshold al techo MPO
     /// clínico del paciente con el mismo headroom.
-    std::atomic<float> thresholdLinear_{0.0675f};
-    std::atomic<float> ratio_{10.0f};           ///< 10:1
+    std::atomic<float> thresholdLinear_{0.2135f};
+    std::atomic<float> ratio_{4.0f};            ///< 4:1 (hotfix: era 10:1)
     std::atomic<float> kneeDb_{6.0f};           ///< soft-knee 6 dB
 
     // --- Diagnóstico (UI thread readable) ---

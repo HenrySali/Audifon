@@ -84,14 +84,16 @@ void DspPipeline::init(const AudioConfig& config) {
     fbs_.setDepthDb(-18.0f);
 
     // Inicializar Output Compressor (freno de amplificación pre-MPO) — baja la
-    // ganancia de forma SUAVE (soft-knee 6 dB + ratio 6:1) sobre la envolvente
+    // ganancia de forma SUAVE (soft-knee 6 dB + ratio 4:1) sobre la envolvente
     // real de salida, de modo que el MPO casi nunca tenga que hacer hard-clamp
     // (menos THD = se va el silbido residual). Activado por default como TNR/FBS;
     // solo atenúa. Su threshold se ancla bajo el techo del MPO en
     // applyMpoThresholdFromDbSpl() (más abajo, tras mpo_.init()).
+    // ETAPA 1 hotfix: ratio 4:1 (antes 10:1) para que voz normal pase
+    // transparente y solo los picos sostenidos se atenúen suavemente.
     oc_.init(config.sampleRate);
     oc_.setEnabled(true);
-    oc_.setRatio(10.0f);
+    oc_.setRatio(4.0f);
     oc_.setKneeDb(6.0f);
 
     // Inicializar WDRC con sample rate (para coeficientes attack/release correctos)
@@ -341,12 +343,13 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // techo del MPO. Esto descarga al MPO: en vez de recortar duro los picos
     // (hard-clamp → THD → "silbido"), el MPO recibe una señal ya contenida y
     // casi nunca tiene que actuar. Solo atenúa. Su threshold está anclado
-    // ~22 dB bajo el techo del MPO (kSoftLimiterHeadroom, ETAPA 1: ShaMPO
-    // broadband headroom 22 dB = 12 dB crest factor habla + 10.8 dB suma
-    // RMS multitono N=12). A nivel de voz conversacional (~65 dB SPL input,
-    // ~85 dB SPL output RMS) la RMS queda muy por debajo del threshold
-    // (~88 dB SPL pico) → transparente. Ante multitono broadband o picos
-    // agresivos de habla con prescripción alta, frena ANTES del MPO.
+    // 12 dB bajo el techo del MPO (kSoftLimiterHeadroom, ETAPA 1 hotfix:
+    // bajamos de 22 dB a 12 dB para no atenuar la voz conversacional, ya que
+    // 22 dB hacía que el peak-follower tomara los picos de habla normales y
+    // sostuviera la atenuación con release 80 ms, bajando el volumen).
+    // A nivel de voz conversacional (picos ~-13 dBFS) cae justo en el knee
+    // → atenuación < 1 dB → transparente. Ante multitono broadband o picos
+    // agresivos, frena con ratio 4:1 ANTES del MPO sin opacar la voz.
     oc_.process(buffer, blockSize);
 
     // ─── 7. MPO — sample-by-sample peak limiter (ÚLTIMA etapa) ──────────
@@ -493,13 +496,15 @@ void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     const float safeLinear = (linear > kMpoDigitalCeiling) ? kMpoDigitalCeiling : linear;
     if (safeLinear > 0.0f) {
         mpo_.setThresholdLinear(safeLinear);
-        // El freno de salida (OutputCompressor) actúa ~22 dB ANTES del MPO
-        // (ETAPA 1 ShaMPO broadband): su threshold "sigue" automáticamente al
-        // techo del MPO clínico (severa/moderada/leve) cada vez que cambia
+        // El freno de salida (OutputCompressor) actúa 12 dB ANTES del MPO
+        // (ETAPA 1 hotfix): su threshold "sigue" automáticamente al techo
+        // del MPO clínico (severa/moderada/leve) cada vez que cambia
         // setMpoThresholdDbSpl(). Esa re-derivación garantiza que el freno
         // ESTÉ SIEMPRE proporcionado al techo de seguridad clínico del paciente,
-        // sin que la app tenga que tocar nada extra. Headroom 22 dB cubre
-        // 12 dB crest factor de habla + 10.8 dB suma RMS de N=12 tonos.
+        // sin que la app tenga que tocar nada extra. Headroom 12 dB cubre el
+        // crest factor de habla típico (Byrne et al., +12 dB pico/RMS) y deja
+        // pasar el RMS de voz sin tocar; el peor caso multitono se frena con
+        // ratio 4:1 dejando el output ≥ 6 dB bajo el MPO.
         oc_.setThresholdLinear(safeLinear * kSoftLimiterHeadroom);
     }
 }

@@ -164,7 +164,7 @@ public:
     void setOutputCompressorEnabled(bool enabled) { oc_.setEnabled(enabled); }
     bool isOutputCompressorEnabled() const { return oc_.isEnabled(); }
 
-    /// Ratio del compresor de salida (input:output). Default: 6.0 (6:1).
+    /// Ratio del compresor de salida (input:output). Default: 4.0 (4:1).
     void setOutputCompressorRatio(float ratio) { oc_.setRatio(ratio); }
     /// Ancho del soft-knee del compresor de salida en dB. Default: 6 dB.
     void setOutputCompressorKneeDb(float kneeDb) { oc_.setKneeDb(kneeDb); }
@@ -289,27 +289,28 @@ private:
     /// MUY por debajo del hard-clamp del MPO. Así el MPO casi nunca recorta
     /// (menos THD) y sigue intacto como red de seguridad dura.
     ///
-    /// ETAPA 1 (shampo broadband headroom 22 dB) — red de seguridad robusta
-    /// frente a sumas broadband multitono y picos de habla, INDEPENDIENTE de
-    /// la calibración de mic/SPL. Justificación numérica:
+    /// ETAPA 1 hotfix (volumen percibido) — el headroom de 22 dB previo
+    /// hacía que el peak-follower atrapara los picos de habla normales y
+    /// los atenuara con ratio 10:1, sosteniendo la atenuación por 80 ms
+    /// (release). Resultado: voz conversacional sonaba notoriamente más
+    /// baja. Bajamos a 12 dB de headroom + ratio 4:1 (en `oc_.setRatio` del
+    /// init) para que la voz pase transparente y los excesos se froquen
+    /// suaves antes del MPO. Justificación numérica:
     ///   - Crest factor de habla (Byrne et al., ISTS): +12 dB pico/RMS.
-    ///   - Suma RMS de N=12 tonos no correlacionados (Mini-Circuits AN60-037):
-    ///     +10·log10(12) ≈ +10.8 dB sobre una banda aislada.
-    ///   - Total ≈ 22.8 dB ⇒ tomamos 22 dB de margen contra el techo MPO.
-    ///   - 22 dB ⇒ 10^(-22/20) ≈ 0.0794.
+    ///   - 12 dB ⇒ 10^(-12/20) ≈ 0.2512.
     ///
     /// Comportamiento esperado a este headroom:
-    ///   - Voz conversacional input 65 dB SPL → output RMS ~85 dB SPL
-    ///     (≈ -35 dBFS) queda muy por debajo del threshold (~88 dB SPL,
-    ///     ≈ -32 dBFS) → RMS de voz NO se atenúa (transparente).
-    ///   - Multitono N=12 broadband sostenido (la suma de las 12 bandas del
-    ///     EQ con audiogramas con frecuencias altas exigentes) o ráfagas de
-    ///     pico de habla con prescripción agresiva: el OC los frena con
-    ///     ratio 10:1 y soft-knee 6 dB ANTES de que el MPO tenga que
-    ///     hard-clampear → adiós saturación residual.
+    ///   - Voz conversacional input 65 dB SPL → picos cerca del threshold
+    ///     (~88 dB SPL pico, ≈ -13.4 dBFS) caen en el soft-knee con
+    ///     atenuación < 1 dB → transparente.
+    ///   - Voz fuerte (picos -8 a -3 dBFS) → atenuación 4–8 dB con ratio
+    ///     4:1: contiene los picos sin opacar la voz.
+    ///   - Multitono N=12 broadband sostenido o picos extremos: el OC los
+    ///     frena ratio 4:1 hasta ~10 dB de atenuación, dejando el output
+    ///     peak ≥ 6 dB bajo el techo MPO → el MPO no necesita hard-clamp.
     ///
     /// Validado en tools/sim_v3/validate_softlimiter.py (paridad con C++).
-    static constexpr float kSoftLimiterHeadroom = 0.0794f;
+    static constexpr float kSoftLimiterHeadroom = 0.2512f;
 
     // --- Módulos del pipeline ---
     AdaptiveFeedbackCanceller afc_; ///< AFC adaptativo (estima y resta feedback path)
