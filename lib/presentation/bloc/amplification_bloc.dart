@@ -3635,11 +3635,14 @@ class AmplificationBloc
 
   /// Override de severidad del audiograma (decisión del usuario,
   /// junio 2026): cuando MHL OFF, devuelve gains FLAT según PTA del
-  /// audiograma actual; cuando MHL ON o no hay audiograma, devuelve
-  /// `null` (sin override → comportamiento original).
+  /// audiograma actual; cuando MHL ON o no hay audiograma medido,
+  /// devuelve `null` (sin override → comportamiento original).
   ///
   /// Reglas:
-  /// - MHL ON o sin `_currentAudiogram` → `null`.
+  /// - MHL ON → `null`.
+  /// - Sin `_currentAudiogram` o audiograma incompleto/sin medir → `null`
+  ///   (NO aplicar override; el modo sin audiograma debe sonar
+  ///   transparente, sin amplificar ruido).
   /// - PTA = promedio de umbrales en 500/1000/2000/4000 Hz (PTA-4 estándar).
   /// - PTA > 35 dB HL → `[8.0]*12` (mismo approach que MHL: flat 8 dB).
   /// - PTA ≤ 35 dB HL → `[14.0]*12`.
@@ -3653,10 +3656,17 @@ class AmplificationBloc
   /// prescripción NAL/DSL queda en el código pero no se aplica mientras
   /// este override esté activo (futuras iteraciones la pueden re-habilitar
   /// vía toggle si funciona bien la simplificación).
+  ///
+  /// Importante: cuando NO hay audiograma medido (boot inicial, default
+  /// `Audiogram.defaultAudiogram()` con todos los umbrales en 10 dB),
+  /// retorna `null`. Sin esta regla, el sistema metía 14 dB flat al
+  /// arranque y se oía ruido amplificado de fondo (regresión reportada
+  /// por el usuario).
   List<double>? _audiogramFlatGainsOverride() {
     if (_mhlActive) return null;
     final audiogram = _currentAudiogram;
     if (audiogram == null) return null;
+    if (!_isAudiogramComplete(audiogram)) return null;
 
     // PTA-4: promedio de umbrales en 500, 1000, 2000, 4000 Hz.
     const ptaFrequencies = [500, 1000, 2000, 4000];
@@ -3671,6 +3681,11 @@ class AmplificationBloc
     }
     if (count == 0) return null;
     final pta = sum / count;
+
+    // Si la pérdida es mínima (PTA ≤ 20 dB HL), no aplicar override
+    // tampoco: aunque haya un audiograma "medido" pero casi normal,
+    // 14 dB flat suena ruidoso. Mantener el preset (gains bajos).
+    if (pta <= 20.0) return null;
 
     final flatDb = pta > 35.0 ? 8.0 : 14.0;
     return List<double>.filled(AudiogramDrivenBundle.bandCount, flatDb,
