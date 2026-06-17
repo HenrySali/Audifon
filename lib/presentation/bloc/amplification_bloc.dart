@@ -1535,6 +1535,17 @@ class AmplificationBloc
     List<double> gains,
     AudiogramDrivenBundle? bundle,
   ) {
+    // Override directo basado en severidad del audiograma (decisión del
+    // usuario, junio 2026): cuando MHL OFF, ignorar la prescripción
+    // NAL/DSL/preset y emitir gains FLAT según PTA del audiograma:
+    //   - PTA > 35 dB HL (audiograma severo) → 8 dB flat (mismo approach
+    //     que MHL — el usuario reportó que suena bien).
+    //   - PTA ≤ 35 dB HL (audiograma leve)   → 14 dB flat.
+    // MHL siempre maneja sus propios gains (8 dB hardcoded en Kotlin)
+    // así que cuando MHL está activo este override NO se aplica.
+    final flatOverride = _audiogramFlatGainsOverride();
+    if (flatOverride != null) return flatOverride;
+
     final n = gains.length;
     final out = List<double>.filled(n, 0.0, growable: false);
     final double? broadband =
@@ -3577,6 +3588,13 @@ class AmplificationBloc
     AudiogramDrivenBundle bundle,
     ManualAdjustmentDelta? delta,
   ) {
+    // Override directo basado en severidad del audiograma (ver
+    // _audiogramFlatGainsOverride). MHL OFF + audiograma con PTA > 35
+    // → flat 8 dB; PTA ≤ 35 → flat 14 dB. Cuando MHL ON, el override
+    // no aplica (Kotlin maneja MHL aparte).
+    final flatOverride = _audiogramFlatGainsOverride();
+    if (flatOverride != null) return flatOverride;
+
     final gains = List<double>.filled(
       AudiogramDrivenBundle.bandCount,
       0.0,
@@ -3613,6 +3631,50 @@ class AmplificationBloc
       return fitPrescriptionToCeiling(gains, ceiling);
     }
     return List<double>.unmodifiable(gains);
+  }
+
+  /// Override de severidad del audiograma (decisión del usuario,
+  /// junio 2026): cuando MHL OFF, devuelve gains FLAT según PTA del
+  /// audiograma actual; cuando MHL ON o no hay audiograma, devuelve
+  /// `null` (sin override → comportamiento original).
+  ///
+  /// Reglas:
+  /// - MHL ON o sin `_currentAudiogram` → `null`.
+  /// - PTA = promedio de umbrales en 500/1000/2000/4000 Hz (PTA-4 estándar).
+  /// - PTA > 35 dB HL → `[8.0]*12` (mismo approach que MHL: flat 8 dB).
+  /// - PTA ≤ 35 dB HL → `[14.0]*12`.
+  ///
+  /// El usuario reportó tras un mes de iteración que la prescripción
+  /// NAL/DSL combinada con presets/ambientes saturaba sistemáticamente
+  /// con audiogramas severos, mientras que MHL (8 dB flat) sonaba bien.
+  /// Esta función generaliza el approach: usa la lógica de MHL como
+  /// fallback automático cuando el audiograma indica pérdida severa, y
+  /// 14 dB flat para pérdidas leves donde 8 dB se quedaría corto. La
+  /// prescripción NAL/DSL queda en el código pero no se aplica mientras
+  /// este override esté activo (futuras iteraciones la pueden re-habilitar
+  /// vía toggle si funciona bien la simplificación).
+  List<double>? _audiogramFlatGainsOverride() {
+    if (_mhlActive) return null;
+    final audiogram = _currentAudiogram;
+    if (audiogram == null) return null;
+
+    // PTA-4: promedio de umbrales en 500, 1000, 2000, 4000 Hz.
+    const ptaFrequencies = [500, 1000, 2000, 4000];
+    double sum = 0.0;
+    int count = 0;
+    for (final f in ptaFrequencies) {
+      final v = audiogram.thresholds[f];
+      if (v != null && v.isFinite) {
+        sum += v;
+        count++;
+      }
+    }
+    if (count == 0) return null;
+    final pta = sum / count;
+
+    final flatDb = pta > 35.0 ? 8.0 : 14.0;
+    return List<double>.filled(AudiogramDrivenBundle.bandCount, flatDb,
+        growable: false);
   }
 
   /// Resuelve el MPO broadband enviado al bridge:
