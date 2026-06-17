@@ -474,12 +474,23 @@ class DiagnosticoDspScreenState extends State<DiagnosticoDspScreen>
         intensity: settings.dnnIntensity,
       );
 
-      // Snapshot del bundle: nivel pre-DNN y origen del nivel WDRC. Si el
-      // bridge no expone `getDspStageMetrics()` (no está en la interfaz
-      // de [AudioBridge] del técnico), caemos a los sentinelas
-      // documentados en `DiagnosticMetadata` (`-1.0` / `'local'`).
-      double preDnnLevelDb = -1.0;
-      String wdrcLevelSource = 'local';
+      // Snapshot del último bloque procesado por el pipeline DSP: nivel
+      // pre-DNN y origen del nivel WDRC. Spec dsp-chain-optimization
+      // Task 4.4 · Requirements 6.1, 6.2 · Property 8.
+      //
+      // Etapa 2 — saturación residual: el `AudioBridge` técnico SÍ expone
+      // `getDspStageMetrics()` desde el spec `tecnico-paciente-feature-
+      // parity`. El bridge devuelve `preDnnLevelDb` (>=0 en dB SPL si el
+      // motor pasó nivel externo, -1.0 sentinel si midió localmente) y
+      // `wdrcLevelSource` ("pre-dnn" | "local"). Replica el patrón del
+      // paciente (`PACIENTE/.../home_screen.dart` ~L887). Si el handler
+      // nativo no está disponible (motor parado, .so antiguo), caemos a
+      // los sentinelas documentados en `DiagnosticMetadata`.
+      final stageMetrics = await bloc.audioBridge.getDspStageMetrics();
+      final double preDnnLevelDb =
+          (stageMetrics?['preDnnLevelDb'] as num?)?.toDouble() ?? -1.0;
+      final String wdrcLevelSource =
+          (stageMetrics?['wdrcLevelSource'] as String?) ?? 'local';
 
       _lastJsonPath = await _exportService.generateMetadata(
         directory: directory,

@@ -1256,13 +1256,24 @@ class AudioMethodChannel(
         if (enabled) {
             val flatGains = FloatArray(12) { 8f }
             nativeBridge.setEqGains(flatGains)
-            // Compresión lineal 1.0:1 — preserva el resto de los WDRC
-            // params del preset (knees, attack, release, expansion).
+            // Compresión MUY suave 1.5:1 (etapa 2 — saturación residual).
+            //
+            // Cambio respecto del 1.0:1 anterior: ningún fabricante grande
+            // (Phonak/Oticon/Widex/GN/Starkey/Signia) corre CR=1.0 broadband
+            // con gains altos en MHL/Mild HL — Phonak APD 2.0 linealiza
+            // selectivamente por nivel/banda, nunca todo plano. CR=1.5
+            // mantiene la idea de "Minimal Hearing Loss = compresión muy
+            // suave" pero protege transitorios de voz fuerte sin sacrificar
+            // timbre conversacional. Ver Hearing Review MPO whitepaper y
+            // Phonak APD 2.0 (notas técnicas Sonova).
+            //
+            // Resto de WDRC params (knees, attack, release, expansion) se
+            // preserva del preset activo.
             nativeBridge.setWdrcParams(
                 expKnee = lastExpKnee,
                 expRatio = lastExpRatio,
                 compKnee = lastCompKnee,
-                compRatio = 1.0f,
+                compRatio = 1.5f,
                 attackMs = lastAttackMs,
                 releaseMs = lastReleaseMs
             )
