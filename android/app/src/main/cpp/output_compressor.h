@@ -228,7 +228,10 @@ private:
     /// ratio 4:1 ANTES del MPO. NOTA: cuando el módulo se usa dentro de
     /// DspPipeline (caso real), este valor se override en init() vía
     /// applyMpoThresholdFromDbSpl(), que ancla el threshold al techo MPO
-    /// clínico del paciente con el mismo headroom.
+    /// clínico del paciente con headroom CONDICIONAL (-6 dB con MHL
+    /// Prescripción ON / MPO ≤ 100 dB SPL; -12 dB con MPO ≥ 110 dB SPL;
+    /// rampa lineal en dB en el medio). Ver dsp_pipeline.h
+    /// (computeSoftLimiterHeadroom).
     std::atomic<float> thresholdLinear_{0.2135f};
     std::atomic<float> ratio_{4.0f};            ///< 4:1 (hotfix: era 10:1)
     std::atomic<float> kneeDb_{6.0f};           ///< soft-knee 6 dB

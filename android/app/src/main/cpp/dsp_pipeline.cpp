@@ -482,7 +482,9 @@ void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     if (!std::isfinite(dbSpl)) {
         mpo_.setThresholdLinear(kMpoDigitalCeiling);
         // El freno de salida se ancla bajo el techo digital del MPO.
-        oc_.setThresholdLinear(kMpoDigitalCeiling * kSoftLimiterHeadroom);
+        // ETAPA 1 v3: techo digital ≈ 118.6 dB SPL (≥ HIGH) → headroom -12 dB.
+        oc_.setThresholdLinear(kMpoDigitalCeiling *
+                               computeSoftLimiterHeadroom(dbSpl));
         return;
     }
 
@@ -496,17 +498,48 @@ void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     const float safeLinear = (linear > kMpoDigitalCeiling) ? kMpoDigitalCeiling : linear;
     if (safeLinear > 0.0f) {
         mpo_.setThresholdLinear(safeLinear);
-        // El freno de salida (OutputCompressor) actúa 12 dB ANTES del MPO
-        // (ETAPA 1 hotfix): su threshold "sigue" automáticamente al techo
-        // del MPO clínico (severa/moderada/leve) cada vez que cambia
-        // setMpoThresholdDbSpl(). Esa re-derivación garantiza que el freno
-        // ESTÉ SIEMPRE proporcionado al techo de seguridad clínico del paciente,
-        // sin que la app tenga que tocar nada extra. Headroom 12 dB cubre el
-        // crest factor de habla típico (Byrne et al., +12 dB pico/RMS) y deja
-        // pasar el RMS de voz sin tocar; el peor caso multitono se frena con
-        // ratio 4:1 dejando el output ≥ 6 dB bajo el MPO.
-        oc_.setThresholdLinear(safeLinear * kSoftLimiterHeadroom);
+        // ETAPA 1 v3 (headroom condicional según MPO clínico):
+        //   - MHL Prescripción ON (dbSpl ≤ 100 dB SPL): headroom -6 dB. El MPO
+        //     clínico ya es per-band conservador → el OC sólo debe frenar
+        //     picos extremos. -6 dB deja la voz conversacional totalmente
+        //     transparente (caso real reportado: MPO 98.75 dB SPL → threshold
+        //     OC ≈ 92.75 dB SPL > picos voz normal).
+        //   - MHL OFF / MPO alto (dbSpl ≥ 110 dB SPL): headroom -12 dB. El OC
+        //     es la primera defensa contra suma multitono y transitorios.
+        //   - Entre 100 y 110 dB SPL: rampa lineal en dB → sin "click" al
+        //     activar/desactivar MHL durante el fitting.
+        // El threshold "sigue" automáticamente al techo MPO clínico del paciente
+        // (severa/moderada/leve) sin que la app tenga que tocar nada extra.
+        const float headroom = computeSoftLimiterHeadroom(dbSpl);
+        oc_.setThresholdLinear(safeLinear * headroom);
     }
+}
+
+float DspPipeline::computeSoftLimiterHeadroom(float mpoDbSpl) noexcept {
+    // MPO no clínico (NaN/Inf) o ≥ HIGH (MHL OFF / techo digital):
+    //   modo "normal" → -12 dB de headroom (cubre crest factor habla +
+    //   suma RMS multitono).
+    if (!std::isfinite(mpoDbSpl) || mpoDbSpl >= kSoftLimiterMpoHighDbSpl) {
+        return kSoftLimiterHeadroom; // 0.2512 ≈ -12 dB
+    }
+    // MHL Prescripción ON (MPO clínico bajo, conservador):
+    //   headroom relajado → -6 dB. El MPO ya limita per-band, el OC sólo
+    //   actúa como red de seguridad final para picos extremos.
+    if (mpoDbSpl <= kSoftLimiterMpoLowDbSpl) {
+        return kSoftLimiterHeadroomMhl; // 0.5012 ≈ -6 dB
+    }
+    // Zona de transición [LOW, HIGH]: interpolación lineal EN DB para no
+    // generar "click" perceptible al cambiar el MPO clínico (activar/
+    // desactivar MHL Prescripción). Lineal en dB ↔ exponencial en lineal,
+    // que es lo que el oído percibe como rampa uniforme.
+    constexpr float kHeadroomMhlDb    = -6.0f;
+    constexpr float kHeadroomNormalDb = -12.0f;
+    const float t =
+        (mpoDbSpl - kSoftLimiterMpoLowDbSpl) /
+        (kSoftLimiterMpoHighDbSpl - kSoftLimiterMpoLowDbSpl); // 0..1
+    const float headroomDb =
+        kHeadroomMhlDb + t * (kHeadroomNormalDb - kHeadroomMhlDb);
+    return std::pow(10.0f, headroomDb / 20.0f);
 }
 
 float DspPipeline::getLastInputLevelDb() const {

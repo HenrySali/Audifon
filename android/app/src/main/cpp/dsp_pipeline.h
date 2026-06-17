@@ -284,33 +284,63 @@ private:
     static constexpr float kMpoDigitalCeiling = 0.85f;
 
     /// Headroom del compresor de salida (OutputCompressor) respecto al techo
-    /// del MPO. El threshold del OC = thresholdMpo × kSoftLimiterHeadroom, de
-    /// modo que el freno suave (ShaMPO broadband único) empieza a actuar
-    /// MUY por debajo del hard-clamp del MPO. Así el MPO casi nunca recorta
-    /// (menos THD) y sigue intacto como red de seguridad dura.
+    /// del MPO. El threshold del OC = thresholdMpo × headroom, de modo que el
+    /// freno suave (ShaMPO broadband único) empieza a actuar POR DEBAJO del
+    /// hard-clamp del MPO. Así el MPO casi nunca recorta (menos THD) y sigue
+    /// intacto como red de seguridad dura.
     ///
-    /// ETAPA 1 hotfix (volumen percibido) — el headroom de 22 dB previo
-    /// hacía que el peak-follower atrapara los picos de habla normales y
-    /// los atenuara con ratio 10:1, sosteniendo la atenuación por 80 ms
-    /// (release). Resultado: voz conversacional sonaba notoriamente más
-    /// baja. Bajamos a 12 dB de headroom + ratio 4:1 (en `oc_.setRatio` del
-    /// init) para que la voz pase transparente y los excesos se froquen
-    /// suaves antes del MPO. Justificación numérica:
-    ///   - Crest factor de habla (Byrne et al., ISTS): +12 dB pico/RMS.
-    ///   - 12 dB ⇒ 10^(-12/20) ≈ 0.2512.
+    /// ETAPA 1 v3 (headroom condicional según MPO clínico) — el v2 dejó un
+    /// único headroom de 12 dB para todos los casos, pero con MHL Prescripción
+    /// ON el techo MPO baja a ≈ 99 dB SPL. Anclar el OC 12 dB POR DEBAJO de un
+    /// MPO ya conservador deja el threshold ≈ 87 dB SPL → atenúa voz
+    /// conversacional con preset alto (gains 25-27 dB). Solución: HEADROOM
+    /// CONDICIONAL al MPO clínico (en dB SPL), con plateaus + rampa suave para
+    /// evitar "click" al activar/desactivar MHL.
     ///
-    /// Comportamiento esperado a este headroom:
-    ///   - Voz conversacional input 65 dB SPL → picos cerca del threshold
-    ///     (~88 dB SPL pico, ≈ -13.4 dBFS) caen en el soft-knee con
-    ///     atenuación < 1 dB → transparente.
-    ///   - Voz fuerte (picos -8 a -3 dBFS) → atenuación 4–8 dB con ratio
-    ///     4:1: contiene los picos sin opacar la voz.
-    ///   - Multitono N=12 broadband sostenido o picos extremos: el OC los
-    ///     frena ratio 4:1 hasta ~10 dB de atenuación, dejando el output
-    ///     peak ≥ 6 dB bajo el techo MPO → el MPO no necesita hard-clamp.
+    ///   MPO ≤ kSoftLimiterMpoLowDbSpl  (≈100 dB SPL) → kSoftLimiterHeadroomMhl
+    ///                                                  (-6 dB)
+    ///   MPO ≥ kSoftLimiterMpoHighDbSpl (≈110 dB SPL) → kSoftLimiterHeadroom
+    ///                                                  (-12 dB)
+    ///   Entre LOW y HIGH                              → interpolación lineal
+    ///                                                  en dB (rampa suave).
+    ///
+    /// Justificación clínica:
+    ///   - Con MHL Prescripción ON el MPO ya es per-band y conservador (UCL
+    ///     menos margen): el OC sólo necesita ser red de seguridad final
+    ///     contra picos extremos. -6 dB cubre el crest factor instantáneo
+    ///     dejando el RMS de voz totalmente transparente.
+    ///   - Con MHL OFF (UCL alto / techo digital) el OC es la primera
+    ///     defensa contra suma multitono y transitorios fuertes: -12 dB
+    ///     mantiene el headroom de Byrne et al. (+12 dB pico/RMS).
+    ///
+    /// Comportamiento esperado:
+    ///   - MPO 98.75 dB SPL (MHL ON), voz 65 dB SPL → threshold OC ≈ 92.75
+    ///     dB SPL, picos típicos < threshold → atenuación ~0 dB.
+    ///   - MPO 115 dB SPL (MHL OFF), voz 65 dB SPL → threshold OC ≈ 103 dB
+    ///     SPL, picos < threshold → atenuación ~0 dB.
+    ///   - MPO 98.75 dB SPL + preset alto (output post-EQ ~92 dB SPL, picos
+    ///     ~104 dB SPL) → ratio 4:1 atenúa ~9 dB → peak final ≈ 95 dB SPL,
+    ///     ≥ 3 dB bajo el MPO clínico (no llega a hard-clamp).
     ///
     /// Validado en tools/sim_v3/validate_softlimiter.py (paridad con C++).
-    static constexpr float kSoftLimiterHeadroom = 0.2512f;
+    static constexpr float kSoftLimiterHeadroom    = 0.2512f; ///< -12 dB (MHL OFF / MPO alto)
+    static constexpr float kSoftLimiterHeadroomMhl = 0.5012f; ///< -6 dB  (MHL ON / MPO bajo)
+
+    /// Ventana de transición (dB SPL) sobre la que el headroom interpola
+    /// linealmente en dB entre kSoftLimiterHeadroomMhl (-6 dB) y
+    /// kSoftLimiterHeadroom (-12 dB). Centrada en 105 dB SPL (≈ frontera
+    /// MHL/normal) con ±5 dB de rampa → 10 dB de transición evita "click"
+    /// al activar/desactivar MHL durante la fase de fitting.
+    static constexpr float kSoftLimiterMpoLowDbSpl  = 100.0f;
+    static constexpr float kSoftLimiterMpoHighDbSpl = 110.0f;
+
+    /// Calcula el headroom lineal del OutputCompressor en función del MPO
+    /// clínico (dB SPL). Implementa la lógica condicional + rampa documentada
+    /// en kSoftLimiterHeadroom*. Si @p mpoDbSpl no es finito (NaN), devuelve
+    /// kSoftLimiterHeadroom (modo "MPO no clínico" / techo digital alto).
+    /// @param mpoDbSpl Threshold del MPO clínico en dB SPL (o NaN).
+    /// @return Headroom lineal (∈ [kSoftLimiterHeadroom, kSoftLimiterHeadroomMhl]).
+    static float computeSoftLimiterHeadroom(float mpoDbSpl) noexcept;
 
     // --- Módulos del pipeline ---
     AdaptiveFeedbackCanceller afc_; ///< AFC adaptativo (estima y resta feedback path)
