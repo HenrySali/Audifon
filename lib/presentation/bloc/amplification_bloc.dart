@@ -1535,16 +1535,13 @@ class AmplificationBloc
     List<double> gains,
     AudiogramDrivenBundle? bundle,
   ) {
-    // Override directo basado en severidad del audiograma (decisión del
-    // usuario, junio 2026): cuando MHL OFF, ignorar la prescripción
-    // NAL/DSL/preset y emitir gains FLAT según PTA del audiograma:
-    //   - PTA > 35 dB HL (audiograma severo) → 8 dB flat (mismo approach
-    //     que MHL — el usuario reportó que suena bien).
-    //   - PTA ≤ 35 dB HL (audiograma leve)   → 14 dB flat.
-    // MHL siempre maneja sus propios gains (8 dB hardcoded en Kotlin)
-    // así que cuando MHL está activo este override NO se aplica.
-    final flatOverride = _audiogramFlatGainsOverride();
-    if (flatOverride != null) return flatOverride;
+    // Cap por banda según severidad del audiograma + override manual
+    // del slider "Tope de ganancia" en Servicio Técnico
+    // (ver _audiogramSeverityGainCapDb). Preserva la forma de la curva
+    // clínica NAL/DSL pero limita el techo por banda al valor que el
+    // usuario validó auditivamente. Si el cap es null, no se aplica
+    // ningún tope (rango operativo del EQ se respeta como antes).
+    final severityCap = _audiogramSeverityGainCapDb();
 
     final n = gains.length;
     final out = List<double>.filled(n, 0.0, growable: false);
@@ -1568,6 +1565,14 @@ class AmplificationBloc
         }
       }
       out[i] = g;
+    }
+    // Cap por banda según severidad del audiograma + override manual.
+    // Aplicado ANTES del WCPF para que la escala proporcional opere
+    // sobre la curva ya acotada al techo seguro.
+    if (severityCap != null) {
+      for (var i = 0; i < n; i++) {
+        if (out[i] > severityCap) out[i] = severityCap;
+      }
     }
     // WCPF: escala proporcionalmente con pesos SII para respetar el
     // techo per-band del hardware sin destruir la forma de la curva.
@@ -3588,12 +3593,11 @@ class AmplificationBloc
     AudiogramDrivenBundle bundle,
     ManualAdjustmentDelta? delta,
   ) {
-    // Override directo basado en severidad del audiograma (ver
-    // _audiogramFlatGainsOverride). MHL OFF + audiograma con PTA > 35
-    // → flat 8 dB; PTA ≤ 35 → flat 14 dB. Cuando MHL ON, el override
-    // no aplica (Kotlin maneja MHL aparte).
-    final flatOverride = _audiogramFlatGainsOverride();
-    if (flatOverride != null) return flatOverride;
+    // Cap por banda según severidad del audiograma + override manual
+    // del slider "Tope de ganancia". Preserva la curva NAL/DSL del
+    // bundle pero limita el techo por banda al valor validado por el
+    // usuario. Si el cap es null, no se aplica tope.
+    final severityCap = _audiogramSeverityGainCapDb();
 
     final gains = List<double>.filled(
       AudiogramDrivenBundle.bandCount,
@@ -3622,6 +3626,14 @@ class AmplificationBloc
       }
       gains[i] = g;
     }
+    // Cap por banda según severidad + override manual. Aplicado ANTES
+    // del WCPF para que la escala proporcional opere sobre la curva ya
+    // acotada al techo seguro.
+    if (severityCap != null) {
+      for (var i = 0; i < AudiogramDrivenBundle.bandCount; i++) {
+        if (gains[i] > severityCap) gains[i] = severityCap;
+      }
+    }
     // Clamp final: techo de ganancia del hardware vía WCPF (escala
     // proporcionalmente con pesos SII para preservar la forma de la
     // curva). Backward compat: si los 12 techos son 50, retorna gains
@@ -3633,42 +3645,40 @@ class AmplificationBloc
     return List<double>.unmodifiable(gains);
   }
 
-  /// Override de severidad del audiograma (decisión del usuario,
-  /// junio 2026): cuando hay audiograma medido, devuelve gains FLAT
-  /// según PTA del audiograma actual; cuando no hay audiograma medido
-  /// o la pérdida es mínima, devuelve `null` (sin override → el bloc
-  /// usa los gains del preset/bundle).
+  /// Cap por banda según severidad del audiograma (decisión del usuario,
+  /// junio 2026, evolución del override flat anterior): preserva la
+  /// forma de la curva NAL/DSL prescrita por el bundle pero limita el
+  /// techo por banda según PTA-4 para evitar saturación con audiogramas
+  /// agresivos sin perder el carácter clínico.
+  ///
+  /// Devuelve `null` cuando no hay que hacer cap (sin audiograma, audiograma
+  /// incompleto, o pérdida mínima). Si retorna un cap > 0, significa que
+  /// los gains finales se deben clampear banda-a-banda contra ese tope.
   ///
   /// Reglas:
   /// - Sin `_currentAudiogram` o audiograma incompleto → `null`.
   /// - PTA = promedio de umbrales en 500/1000/2000/4000 Hz (PTA-4 estándar).
-  /// - PTA ≤ 20 dB HL (pérdida mínima/normal) → `null` (sin override).
-  /// - PTA > 35 dB HL → `[8.0]*12` (mismo approach que MHL: flat 8 dB).
-  /// - 20 < PTA ≤ 35 dB HL → `[14.0]*12`.
+  /// - PTA ≤ 20 dB HL (pérdida mínima/normal) → `null` (sin cap → preset
+  ///   normal con gains del bundle).
+  /// - PTA > 35 dB HL → cap **14 dB** por banda (audiograma severo:
+  ///   protección anti-saturación más agresiva, justo arriba del flat 8 dB
+  ///   de MHL pero permite ganar agudos).
+  /// - 20 < PTA ≤ 35 dB HL → cap **16 dB** por banda (pérdida leve:
+  ///   un poco más de margen, aún seguro contra saturación).
   ///
-  /// IMPORTANTE: el override aplica INDEPENDIENTEMENTE del estado de MHL.
-  /// Versiones anteriores retornaban `null` cuando MHL estaba activo,
-  /// asumiendo que el handler Kotlin de MHL ya pisaba los gains. Eso
-  /// fallaba porque al cambiar de preset/ambiente con MHL ON, el bloc
-  /// reaplica los gains del bundle (hasta 21 dB en agudos) y el motor
-  /// los recibe ANTES de que MHL los pise. El log de métricas mostró
-  /// `mpoFrac=1.0` sostenido en esos casos. Ahora el override actúa en
-  /// el bloc Dart, así los gains que llegan al motor ya están pisados a
-  /// flat 8/14 dB sin importar el path (preset, ambiente, audiograma).
+  /// Diferencia con la versión anterior (override flat): en lugar de
+  /// reemplazar TODOS los gains por un valor plano (que destruye la
+  /// curva clínica y deja al paciente sin compensación de agudos), esta
+  /// versión PRESERVA la prescripción NAL/DSL y solo recorta los picos
+  /// que estarían encima del cap. Resultado: graves bajos, agudos altos
+  /// pero acotados, sin saturación.
   ///
-  /// El usuario reportó tras un mes de iteración que la prescripción
-  /// NAL/DSL combinada con presets/ambientes saturaba sistemáticamente
-  /// con audiogramas severos, mientras que MHL (8 dB flat) sonaba bien.
-  /// Esta función generaliza el approach: usa la lógica de MHL como
-  /// fallback automático cuando el audiograma indica pérdida severa, y
-  /// 14 dB flat para pérdidas leves. La prescripción NAL/DSL queda en
-  /// el código pero no se aplica mientras este override esté activo.
-  ///
-  /// Cuando NO hay audiograma medido (boot inicial, default
-  /// `Audiogram.defaultAudiogram()` con todos los umbrales en 10 dB) o
-  /// PTA ≤ 20 dB, retorna `null` para que el modo "sin pérdida" no
-  /// amplifique de más y suene transparente.
-  List<double>? _audiogramFlatGainsOverride() {
+  /// El usuario reportó que el flat anterior "no era clínico" porque
+  /// amplificaba lo mismo en todas las bandas (no compensaba la pérdida
+  /// real por banda). Este cap por severidad mantiene la forma de la
+  /// curva (lo que el oído del paciente necesita) y solo previene los
+  /// niveles que disparaban el MPO/limiter al techo.
+  double? _audiogramSeverityGainCapDb() {
     final audiogram = _currentAudiogram;
     if (audiogram == null) return null;
     if (!_isAudiogramComplete(audiogram)) return null;
@@ -3689,9 +3699,21 @@ class AmplificationBloc
 
     if (pta <= 20.0) return null;
 
-    final flatDb = pta > 35.0 ? 8.0 : 14.0;
-    return List<double>.filled(AudiogramDrivenBundle.bandCount, flatDb,
-        growable: false);
+    // Override manual del usuario (slider en Servicio Técnico). Si el
+    // usuario fijó un valor explícito, lo respetamos. Si no, default
+    // 8 dB (severo) / 14 dB (leve) — los valores que el usuario validó
+    // auditivamente como seguros.
+    double? userOverride;
+    try {
+      userOverride = _settingsRepository.gainCapManualDb;
+    } catch (_) {
+      userOverride = null;
+    }
+    if (userOverride != null && userOverride.isFinite && userOverride > 0) {
+      return userOverride.clamp(4.0, 24.0).toDouble();
+    }
+
+    return pta > 35.0 ? 8.0 : 14.0;
   }
 
   /// Resuelve el MPO broadband enviado al bridge:

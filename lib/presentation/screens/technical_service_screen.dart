@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'diagnostic/calibration_step.dart';
 import 'bundle_export_screen.dart';
 import 'calibration_spectrum_screen.dart';
+import 'gain_cap_screen.dart';
 import 'gain_ceiling_calibration_screen.dart';
 import '../../biological_calibration/screens/biological_calibration_screen.dart';
 import '../../audiometry/screens/audiometry_screen.dart';
@@ -104,6 +105,27 @@ class TechnicalServiceScreen extends StatelessWidget {
                 builder: (_) => BlocProvider.value(
                   value: context.read<AmplificationBloc>(),
                   child: const GainCeilingCalibrationScreen(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Tope de ganancia manual (slider)
+          _ServiceCard(
+            icon: Icons.tune,
+            iconColor: Colors.greenAccent,
+            title: 'Tope de ganancia',
+            description:
+                'Ajustá el techo manual de amplificación por banda. Si saturás '
+                'bajalo, si querés más volumen subilo. Default automático según '
+                'audiograma (8 dB severo / 14 dB leve).',
+            buttonText: 'Ajustar tope',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => BlocProvider.value(
+                  value: context.read<AmplificationBloc>(),
+                  child: const GainCapScreen(),
                 ),
               ),
             ),

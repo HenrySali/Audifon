@@ -202,4 +202,17 @@ abstract class SettingsRepository {
   /// implementación rellena con `50.0` los faltantes o trunca los
   /// excedentes.
   Future<void> setHardwareGainCeilingPerBandDb(List<double> values);
+
+  /// Tope manual de ganancia por banda (slider "Tope de ganancia" en
+  /// Servicio Técnico). Cuando es no-null y > 0, el bloc lo usa como cap
+  /// por banda en lugar del default automático según severidad del
+  /// audiograma (8 dB severo / 14 dB leve).
+  ///
+  /// Default `null` (no override → automático). Rango válido `[4, 24]`.
+  /// El usuario lo sube si quiere más amplificación, lo baja si satura.
+  double? get gainCapManualDb;
+
+  /// Persiste el tope manual de ganancia. Pasar `null` para volver al
+  /// automático. Cualquier valor finito se clampea a `[4, 24]`.
+  Future<void> setGainCapManualDb(double? value);
 }

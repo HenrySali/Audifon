@@ -48,6 +48,11 @@ class _SettingsKeys {
   /// bandas en la primera lectura.
   static const String hardwareGainCeilingPerBandDb =
       'hardwareGainCeilingPerBandDb';
+
+  /// Tope manual de ganancia (slider "Tope de ganancia" en Servicio
+  /// Técnico). `null` = usar default automático según severidad.
+  /// Rango válido [4, 24] dB.
+  static const String gainCapManualDb = 'gainCapManualDb';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -396,6 +401,31 @@ class SettingsRepositoryImpl implements SettingsRepository {
     if (value < 0.0) return 0.0;
     if (value > 1.0) return 1.0;
     return value;
+  }
+
+  // ─── Tope manual de ganancia ─────────────────────────────────────────────
+
+  @override
+  double? get gainCapManualDb {
+    final raw = _box.get(_SettingsKeys.gainCapManualDb);
+    if (raw is num && raw.isFinite) {
+      final d = raw.toDouble();
+      if (d <= 0) return null; // 0 / negativo → sin override
+      if (d < 4.0) return 4.0;
+      if (d > 24.0) return 24.0;
+      return d;
+    }
+    return null;
+  }
+
+  @override
+  Future<void> setGainCapManualDb(double? value) async {
+    if (value == null || !value.isFinite || value <= 0) {
+      await _box.delete(_SettingsKeys.gainCapManualDb);
+      return;
+    }
+    final clamped = value < 4.0 ? 4.0 : (value > 24.0 ? 24.0 : value);
+    await _box.put(_SettingsKeys.gainCapManualDb, clamped);
   }
 
   /// Clampa un entero al rango válido del NR `[0, 3]`.
