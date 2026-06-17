@@ -35,6 +35,15 @@ class SessionLogService {
   StreamSubscription<AmplificationState>? _stateSub;
   AmplificationActive? _lastActive;
 
+  /// Timer 2 Hz de polling de métricas DSP del motor C++.
+  /// Captura `getDspStageMetrics()` cada 500 ms y guarda los campos
+  /// relevantes como evento `metrics` en el timeline. Permite analizar
+  /// post-mortem si el pipeline saturó (mpoLimitingFraction, peakSample,
+  /// clipCount), si el WDRC midió pre-DNN o post-DNN
+  /// (wdrcLevelSource), etc.
+  Timer? _metricsTimer;
+  AmplificationBloc? _bloc;
+
   Map<String, dynamic>? _initialSnapshot;
   Map<String, dynamic>? _finalSnapshot;
   final List<Map<String, dynamic>> _events = <Map<String, dynamic>>[];
@@ -76,6 +85,7 @@ class SessionLogService {
     final initial = state is AmplificationActive ? state : null;
 
     _recording = true;
+    _bloc = bloc;
     _startedAt = DateTime.now();
     _stoppedAt = null;
     _events.clear();
@@ -87,6 +97,16 @@ class SessionLogService {
     // pantalla, así sobrevive al pop de SessionLogScreen.
     _stateSub = bloc.stream.listen(_onStateChanged);
 
+    // Polling 2 Hz de métricas DSP del motor C++. Cada 500 ms se captura
+    // un snapshot con peakSample, clipCount, mpoLimitingFraction,
+    // wdrcLevelSource, levels por etapa, etc. Esto permite diagnosticar
+    // saturación post-mortem sin necesidad de que el usuario reporte el
+    // segundo exacto en el que oyó algo raro.
+    _metricsTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => _pollMetrics(),
+    );
+
     _changeController.add(null);
   }
 
@@ -97,6 +117,9 @@ class SessionLogService {
 
     _stateSub?.cancel();
     _stateSub = null;
+    _metricsTimer?.cancel();
+    _metricsTimer = null;
+    _bloc = null;
 
     _recording = false;
     _stoppedAt = DateTime.now();
@@ -202,6 +225,85 @@ class SessionLogService {
     if (start == null) return;
     final ms = DateTime.now().difference(start).inMilliseconds;
     _events.add(<String, dynamic>{'tMs': ms, 'type': type, ...data});
+  }
+
+  /// Polling 2 Hz de métricas DSP del motor C++.
+  ///
+  /// Lee `getDspStageMetrics()` del bridge y agrega un evento `metrics` al
+  /// timeline con los campos relevantes para diagnosticar saturación:
+  /// - `outputDb`, `peakSample`, `clipCount` → indicadores directos de
+  ///   saturación final (peak ≈ 1.0 y/o clipCount > 0 = clipping).
+  /// - `mpoFrac`, `mpoSus` → cuánto del bloque el MPO estuvo limitando.
+  ///   `mpoFrac` cerca de 1.0 sostenido = saturación crónica.
+  /// - `wdrcSrc` → "pre-dnn" o "local". Si está en "local" y la DNN está
+  ///   atenuando, el WDRC subestima el nivel real.
+  /// - `wdrcRegion` → 0 expansion, 1 linear, 2 compression. Si queda en
+  ///   linear con voz fuerte, no comprime.
+  /// - `inputDb`, `postNrDb`, `postEqDb`, `postWdrcDb`, `postVolDb` →
+  ///   trazabilidad por etapa para detectar dónde sube el nivel demasiado.
+  ///
+  /// Falla silenciosa: si el bridge devuelve null o lanza, no se loguea
+  /// nada (el motor está parado o el handler no responde).
+  Future<void> _pollMetrics() async {
+    if (!_recording) return;
+    final bloc = _bloc;
+    if (bloc == null) return;
+
+    try {
+      final m = await bloc.audioBridge.getDspStageMetrics();
+      if (!_recording || m == null) return;
+
+      double? d(String k) {
+        final v = m[k];
+        if (v is num && v.isFinite) return v.toDouble();
+        return null;
+      }
+
+      int? i(String k) {
+        final v = m[k];
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        return null;
+      }
+
+      final entry = <String, dynamic>{
+        if (d('inputLevel') != null)
+          'inputDb': double.parse(d('inputLevel')!.toStringAsFixed(1)),
+        if (d('postNrLevel') != null)
+          'postNrDb': double.parse(d('postNrLevel')!.toStringAsFixed(1)),
+        if (d('postEqLevel') != null)
+          'postEqDb': double.parse(d('postEqLevel')!.toStringAsFixed(1)),
+        if (d('postWdrcLevel') != null)
+          'postWdrcDb': double.parse(d('postWdrcLevel')!.toStringAsFixed(1)),
+        if (d('postVolumeLevel') != null)
+          'postVolDb': double.parse(d('postVolumeLevel')!.toStringAsFixed(1)),
+        if (d('outputLevel') != null)
+          'outputDb': double.parse(d('outputLevel')!.toStringAsFixed(1)),
+        if (d('peakSample') != null)
+          'peak': double.parse(d('peakSample')!.toStringAsFixed(3)),
+        if (i('clipCount') != null) 'clip': i('clipCount'),
+        if (d('wdrcGainFactor') != null)
+          'wdrcGain': double.parse(d('wdrcGainFactor')!.toStringAsFixed(2)),
+        if (i('wdrcRegion') != null) 'wdrcReg': i('wdrcRegion'),
+        if (d('mpoLimitingFraction') != null)
+          'mpoFrac': double.parse(d('mpoLimitingFraction')!.toStringAsFixed(2)),
+        if (m['mpoLimitingSustained'] is bool)
+          'mpoSus': m['mpoLimitingSustained'] as bool,
+        if (d('preDnnLevelDb') != null)
+          'preDnnDb': double.parse(d('preDnnLevelDb')!.toStringAsFixed(1)),
+        if (m['wdrcLevelSource'] is String)
+          'wdrcSrc': m['wdrcLevelSource'] as String,
+        if (i('environmentClass') != null) 'envCls': i('environmentClass'),
+      };
+
+      if (entry.isEmpty) return;
+
+      _pushEvent(type: 'metrics', data: entry);
+      _changeController.add(null);
+    } catch (e, st) {
+      developer.log('SessionLog: _pollMetrics falló: $e',
+          name: 'SessionLog', error: e, stackTrace: st);
+    }
   }
 
   String _stringify(Object? v) {

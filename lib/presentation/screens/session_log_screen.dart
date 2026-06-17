@@ -304,6 +304,44 @@ class _SessionLogScreenState extends State<SessionLogScreen> {
               ),
             );
           }
+          if (e['type'] == 'metrics') {
+            // Mostrar solo los campos críticos para no saturar la UI;
+            // el JSON completo se copia al portapapeles.
+            final out = e['outputDb'];
+            final peak = e['peak'];
+            final clip = e['clip'];
+            final mpo = e['mpoFrac'];
+            final src = e['wdrcSrc'];
+            final saturating = (peak is num && peak >= 0.99) ||
+                (clip is int && clip > 0) ||
+                (mpo is num && mpo >= 0.5);
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 70,
+                    child: Text(tStr,
+                        style: TextStyle(
+                            color: saturating ? Colors.redAccent : Colors.white38,
+                            fontSize: 11,
+                            fontFeatures: const [FontFeature.tabularFigures()])),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'out=${out ?? "?"}dB peak=${peak ?? "?"} clip=${clip ?? 0} '
+                      'mpoFrac=${mpo ?? 0} src=${src ?? "?"}',
+                      style: TextStyle(
+                        color: saturating ? Colors.redAccent : Colors.white54,
+                        fontSize: 11,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
             child: Row(
