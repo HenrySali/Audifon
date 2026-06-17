@@ -31,6 +31,7 @@ import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
 import 'diagnostic_analyzer_screen.dart';
 import 'diagnostico_dsp_screen.dart';
+import 'session_log_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
@@ -284,6 +285,29 @@ class _StatusBar extends StatelessWidget {
                             builder: (_) => BlocProvider.value(
                               value: context.read<AmplificationBloc>(),
                               child: const DiagnosticoDspScreen(),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Registro libre de eventos del bloc — sin grabar audio,
+                  // captura cambios de preset/ambiente/MHL/volumen/audiograma
+                  // mientras el técnico opera la app, copiable al portapapeles.
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.event_note,
+                          color: Colors.white70, size: 21),
+                      tooltip: 'Registro de sesión',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const SessionLogScreen(),
                             ),
                           ),
                         );
