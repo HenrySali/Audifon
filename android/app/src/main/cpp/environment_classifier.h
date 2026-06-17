@@ -28,12 +28,22 @@
 static constexpr float kEnvAlpha = 0.05f;
 
 /// Bloques de hold tras una transición de clase de entorno.
-/// 750 bloques × 4 ms/bloque = 3 segundos de hold.
+/// 1250 bloques × 4 ms/bloque = 5 segundos de hold.
 ///
-/// Histórico: el valor original (500 ms = 125 bloques) producía oscilación
-/// audible en transiciones SPEECH ↔ SPEECH_IN_NOISE. Subido a 3 s tras
-/// pruebas en escenas reales para mayor estabilidad subjetiva.
-static constexpr int kEnvHoldBlocks = 750;
+/// Histórico:
+/// - 500 ms (125 bloques): producía oscilación audible en transiciones
+///   SPEECH ↔ SPEECH_IN_NOISE.
+/// - 3 s (750 bloques): estable subjetivamente para adultos pero a 3 s en
+///   pediátrico el aparato seguía cambiando demasiado seguido en escenas
+///   reales (aula→patio→comedor del jardín en <1 min) y aumentaba la
+///   fatiga auditiva reportada (Hornsby/Bess; PMC 10023143).
+/// - 5 s (1250 bloques): valor pediátrico actual. Se alinea con el rango
+///   sugerido por AAA Pediatric Amplification 2013 y la práctica
+///   conservadora documentada en The Hearing Journal 2014 ("Stop and
+///   Verify"). Phonak Sky usa "extensive smoothing progression" (no
+///   publican número, pero implícito >3 s). Reduce número de cambios
+///   audibles por unidad de tiempo sin perder reactividad clínica.
+static constexpr int kEnvHoldBlocks = 1250;
 
 /// Umbral de nivel para entorno silencioso (dB SPL).
 /// Recalibrado (FIX clasificador, splOffset=93 dB del mic celular): un

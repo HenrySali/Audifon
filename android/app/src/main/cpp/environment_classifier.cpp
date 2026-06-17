@@ -4,7 +4,7 @@
 /// Algoritmo:
 /// 1. Suavizar nivel y SNR con EMA (α=0.05, ~800 ms time constant)
 /// 2. Clasificar según umbrales de nivel y SNR
-/// 3. Aplicar hold timer (kEnvHoldBlocks = 750 bloques = 3 s) para estabilidad
+/// 3. Aplicar hold timer (kEnvHoldBlocks = 1250 bloques = 5 s) para estabilidad
 /// 4. Proveer parámetros NR y WDRC según entorno detectado
 ///
 /// Portado del firmware C (environment_classifier.c) a C++ nativo para Android.
@@ -116,7 +116,7 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     }
 
     // Step 3: Hold timer — prevenir oscilación rápida entre estados
-    // kEnvHoldBlocks = 750 bloques × 4 ms = 3 segundos
+    // kEnvHoldBlocks = 1250 bloques × 4 ms = 5 segundos (pediátrico)
     if (holdCounter_ > 0) {
         holdCounter_--;
         return current;
@@ -126,7 +126,7 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     if (newClass != current) {
         prevClass_ = current;
         currentClass_.store(static_cast<int>(newClass), std::memory_order_relaxed);
-        holdCounter_ = kEnvHoldBlocks;  // 3 s — alineado con header
+        holdCounter_ = kEnvHoldBlocks;  // 5 s — pediátrico, alineado con header
     }
 
     return static_cast<EnvironmentClass>(currentClass_.load(std::memory_order_relaxed));

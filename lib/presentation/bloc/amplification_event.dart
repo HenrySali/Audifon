@@ -46,10 +46,17 @@ class ChangeProfile extends AmplificationEvent {
   /// Nombre del perfil a activar.
   final String profile;
 
-  const ChangeProfile({required this.profile});
+  /// Si `true`, este cambio viene del polling Smart continuo
+  /// (`smart-continuo-dnn-modulado`) y NO debe disparar el mutex que
+  /// apaga Smart. Si `false` (default), se asume cambio manual del
+  /// usuario (chip selector) y, si Smart está ON, se apaga
+  /// automáticamente.
+  final bool fromSmartPoll;
+
+  const ChangeProfile({required this.profile, this.fromSmartPoll = false});
 
   @override
-  List<Object?> get props => [profile];
+  List<Object?> get props => [profile, fromSmartPoll];
 }
 
 /// Solicita cambiar el volumen maestro.
@@ -463,4 +470,44 @@ class ManualEqAdjust extends AmplificationEvent {
 /// Requisitos: 14.1, 14.9
 class ResetManualDelta extends AmplificationEvent {
   const ResetManualDelta();
+}
+
+
+/// Toggle del Smart Scene Engine continuo (smart-continuo-dnn-modulado).
+///
+/// Activa o desactiva el clasificador automático C++
+/// (`updateAutoClassify`) y el polling Dart 1 Hz que mapea
+/// `getDspStageMetrics()['environmentClass']` → `ChangeProfile` con cap
+/// de DNN intensity por escena.
+///
+/// Cuando se activa:
+///  - Llama a `updateAutoClassify(true)` (el clasificador C++ pasa a
+///    correr cada bloque y `m.environmentClass` se actualiza en vivo).
+///  - Arranca un Timer 1 Hz que polea métricas y, ante cambio de clase
+///    estable (el hold de 5 s en C++ ya garantiza estabilidad),
+///    despacha `ChangeProfile` con el perfil mapeado.
+///  - Aplica el cap de DNN intensity por escena con
+///    `effective = min(userIntensity, sceneCap[envClass])`.
+///
+/// Cuando se desactiva:
+///  - Cancela el Timer.
+///  - Llama a `updateAutoClassify(false)`.
+///  - Restaura la intensidad de DNN del usuario (uncap).
+///
+/// Reglas de mutex (smart-continuo-dnn-modulado):
+///  - MHL Prescripción ON: el handler de MHL apaga Smart automáticamente
+///    (`_smartEnabledBeforeMhl` snapshot). Al apagar MHL, si el snapshot
+///    era `true`, Smart se reactiva.
+///  - Modo Música ON: análogo (`_smartEnabledBeforeMusic`).
+///  - Cambio manual de profile (`ChangeProfile` despachado por el
+///    chip selector): si Smart estaba ON, el handler lo apaga sin
+///    snapshot — el usuario decide cuándo reactivarlo.
+class ToggleSmart extends AmplificationEvent {
+  /// true para activar Smart continuo, false para desactivar.
+  final bool activate;
+
+  const ToggleSmart({required this.activate});
+
+  @override
+  List<Object?> get props => [activate];
 }

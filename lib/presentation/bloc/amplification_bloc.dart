@@ -184,6 +184,24 @@ class AmplificationBloc
   /// este campo será su single-source-of-truth.
   bool _smartEnabled = false;
 
+  /// Timer del polling Smart continuo (smart-continuo-dnn-modulado).
+  /// Se arma a 1 Hz cuando [_smartEnabled] = true; cancelado en cualquier
+  /// otro caso. La fuente de la clase es
+  /// `getDspStageMetrics()['environmentClass']` — la 4-clases real del
+  /// `EnvironmentClassifier` C++.
+  Timer? _smartPollTimer;
+
+  /// Última clase de entorno conocida desde el polling. Usada para
+  /// no despachar `ChangeProfile` redundante (idempotencia) y para
+  /// alimentar el chip indicador de escena en `main_screen.dart`.
+  /// Expuesto como [lastEnvClass] para BlocBuilder/listeners.
+  int? _lastEnvClass;
+
+  /// Lectura pública del último `environmentClass` reportado por el
+  /// polling Smart (smart-continuo-dnn-modulado). Devuelve `null`
+  /// cuando el polling no está activo o todavía no hubo lectura.
+  int? get lastEnvClass => _lastEnvClass;
+
   /// Snapshot del [_smartEnabled] al activar MHL Prescripción o Modo
   /// Música. Permite restaurar el estado previo al desactivar el modo.
   ///
@@ -367,6 +385,10 @@ class AmplificationBloc
     // attack/release). Réplica simétrica de [_onToggleMhlPrescription]; el
     // cruce con MHL (Req 1.4) ejecuta la rama OFF de MHL primero.
     on<ToggleMusicMode>(_onToggleMusicMode);
+    // smart-continuo-dnn-modulado: handler del Smart Scene Engine
+    // continuo. Activa/desactiva el clasificador C++ + el polling Dart
+    // 1 Hz que mapea escena → profile + cap de DNN intensity.
+    on<ToggleSmart>(_onToggleSmart);
     // tecnico-paciente-feature-parity — task 4.5: handler del slider
     // "Comodidad". Recalcula WDRC con `_effectiveCompressionRatio(bundle)`
     // sobre el bundle activo y reaplica solo `compressionRatio` al motor;
@@ -929,6 +951,18 @@ class AmplificationBloc
     final currentState = state;
     if (currentState is! AmplificationActive) return;
 
+    // smart-continuo-dnn-modulado: mutex con Smart toggle.
+    // Si el cambio NO viene del polling Smart (`fromSmartPoll = false`)
+    // y Smart está ON, lo apagamos. Decisión de producto: el usuario
+    // decide; Smart NO se reactiva solo cuando el usuario vuelve a un
+    // perfil distinto. El mismo evento pasa al polling Smart con
+    // `fromSmartPoll = true` y este branch se salta para no auto-
+    // apagarse en cada tick.
+    if (!event.fromSmartPoll && _smartEnabled) {
+      _smartEnabled = false;
+      _stopSmartPolling();
+    }
+
     try {
       // Obtener el nuevo perfil
       final newProfile =
@@ -1339,6 +1373,32 @@ class AmplificationBloc
 
       await _audioBridge.startAudio(config);
       _subscribeToStreams();
+
+      // smart-continuo-dnn-modulado: cargar el modelo DNN denoiser
+      // (`gtcrn.onnx`) en el motor recién arrancado. Antes de este push,
+      // el técnico solo cargaba el DNN cuando se abría la pantalla
+      // SmartSceneScreen (`_initDnnDenoiser` en `initState`). Si el
+      // usuario nunca abría esa pantalla, la DNN nunca se inicializaba
+      // y el cap por escena no procesaba audio.
+      //
+      // Patient-style: el handler Kotlin `initDnnDenoiser` es idempotente
+      // y tolerante a engine recién arrancado (200 ms del bootDelay
+      // ya bastan en la práctica), así que un único intento aquí es
+      // suficiente. La SmartSceneScreen sigue intentándolo en su
+      // polling de 500 ms como red de seguridad.
+      try {
+        await const MethodChannel('com.psk.hearing_aid/audio')
+            .invokeMethod<bool>('initDnnDenoiser');
+      } catch (e, st) {
+        developer.log(
+          '_onStartAmplification: initDnnDenoiser falló: $e — la '
+          'SmartSceneScreen reintentará al abrir.',
+          name: 'AmplificationBloc',
+          level: 800,
+          error: e,
+          stackTrace: st,
+        );
+      }
 
       emit(AmplificationActive(
         inputLevelDb: 0.0,
@@ -2230,6 +2290,11 @@ class AmplificationBloc
     final restoreSmart = _smartEnabledBeforeMhl ?? false;
     _smartEnabledBeforeMhl = null;
     _smartEnabled = restoreSmart;
+    if (restoreSmart) {
+      // smart-continuo-dnn-modulado: si Smart estaba ON antes de MHL,
+      // reactivar el clasificador C++ y el polling 1 Hz.
+      _startSmartPolling();
+    }
 
     // Leer nrLevel desde Settings con default tolerante (Req 1.7, 1.9).
     int restoredNrLevel;
@@ -2806,6 +2871,11 @@ class AmplificationBloc
     final restoreSmart = _smartEnabledBeforeMusic ?? false;
     _smartEnabledBeforeMusic = null;
     _smartEnabled = restoreSmart;
+    if (restoreSmart) {
+      // smart-continuo-dnn-modulado: simétrico a _onToggleMhlPrescription
+      // OFF — si Smart estaba ON antes de Música, reactivar.
+      _startSmartPolling();
+    }
 
     // Leer nrLevel desde Settings con default tolerante (Req 1.8, 1.9).
     int restoredNrLevel;
@@ -4140,6 +4210,197 @@ class AmplificationBloc
   /// `_cancelSubscriptions()` (por ejemplo desde `close()` tras un
   /// `_onStopAmplification`) sea idempotente.
   ///
+  // ═══════════════════════════════════════════════════════════════════
+  // smart-continuo-dnn-modulado: Smart Scene continuo + DNN por escena
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Cap de DNN intensity por escena. Aplicado SOLO mientras Smart está
+  /// ON. Cuando Smart se apaga (o MHL/Música activos), la intensidad
+  /// del usuario se restaura sin cap.
+  ///
+  /// Tabla:
+  ///   - QUIET            → 0.00  (DNN off — sin artefactos audibles)
+  ///   - SPEECH           → 0.40  (limpieza suave, transparencia voz)
+  ///   - SPEECH_IN_NOISE  → 0.70  (limpieza media; el VAD cuida la voz)
+  ///   - NOISE            → 0.85  (limpieza fuerte — ambiente desagradable)
+  ///
+  /// Devuelve `null` para clases fuera de [0, 3]: el caller debe usar
+  /// `userIntensity` sin cap (no aplica DNN cap).
+  static double? _sceneDnnCap(int envClass) {
+    switch (envClass) {
+      case 0: return 0.00;  // QUIET
+      case 1: return 0.40;  // SPEECH
+      case 2: return 0.70;  // SPEECH_IN_NOISE
+      case 3: return 0.85;  // NOISE
+      default: return null;
+    }
+  }
+
+  /// Restaura la intensidad de DNN al valor del usuario (Settings).
+  /// Se llama al apagar Smart, al activar MHL/Música, y antes de que
+  /// un cambio manual de profile tome el control.
+  Future<void> _restoreUserDnnIntensity() async {
+    double user;
+    try {
+      user = _settingsRepository.dnnIntensity;
+    } catch (_) {
+      user = 0.6;
+    }
+    try {
+      await const MethodChannel('com.psk.hearing_aid/audio')
+          .invokeMethod<void>('setDnnEnabled', {'enabled': user > 0.0});
+      await _audioBridge.setDnnIntensity(user);
+    } catch (e, st) {
+      developer.log(
+        '_restoreUserDnnIntensity falló: $e',
+        name: 'AmplificationBloc',
+        level: 800,
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
+  /// Activa el clasificador C++ (`updateAutoClassify(true)`) y arranca
+  /// el polling 1 Hz. Idempotente: cancela el timer previo antes de
+  /// armar uno nuevo.
+  void _startSmartPolling() {
+    _smartPollTimer?.cancel();
+    _lastEnvClass = null;
+    // Despertar el clasificador C++. El handler Kotlin
+    // `updateAutoClassify(true)` llama a `nativeBridge
+    // .setAutoClassifyEnabled(true)` que setea el flag atómico que
+    // gate-keepea `envClassifier_.update()` en `dsp_pipeline.cpp`.
+    () async {
+      try {
+        await const MethodChannel('com.psk.hearing_aid/audio')
+            .invokeMethod<void>('updateAutoClassify', {'enabled': true});
+      } catch (e, st) {
+        developer.log(
+          '_startSmartPolling: updateAutoClassify(true) falló: $e',
+          name: 'AmplificationBloc',
+          level: 800,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }();
+    _smartPollTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _onSmartPoll(),
+    );
+  }
+
+  /// Cancela el polling 1 Hz, apaga el clasificador C++, y restaura la
+  /// intensidad de DNN del usuario (uncap). Idempotente.
+  void _stopSmartPolling() {
+    _smartPollTimer?.cancel();
+    _smartPollTimer = null;
+    _lastEnvClass = null;
+    () async {
+      try {
+        await const MethodChannel('com.psk.hearing_aid/audio')
+            .invokeMethod<void>('updateAutoClassify', {'enabled': false});
+      } catch (_) { /* tolerante */ }
+      await _restoreUserDnnIntensity();
+    }();
+  }
+
+  /// Tick del polling Smart. Lee la clase del entorno, aplica cap de
+  /// DNN, y dispara `ChangeProfile` si la clase cambió.
+  Future<void> _onSmartPoll() async {
+    if (!_smartEnabled) return;
+    Map<String, dynamic>? metrics;
+    try {
+      metrics = await _audioBridge.getDspStageMetrics();
+    } catch (_) {
+      return; // motor parado → próximo tick
+    }
+    if (metrics == null) return;
+    final cls = metrics['environmentClass'];
+    if (cls is! int) return;
+    if (cls == _lastEnvClass) return; // idempotente
+    _lastEnvClass = cls;
+
+    // Cap de DNN por escena. Se aplica ANTES del ChangeProfile para
+    // que el cross-fade del EQ/WDRC ocurra contra el nivel de NR
+    // correcto. El cap NO se persiste — el slider del usuario sigue
+    // siendo la fuente de verdad; el cap solo se aplica al motor.
+    final cap = _sceneDnnCap(cls);
+    if (cap != null) {
+      double user;
+      try {
+        user = _settingsRepository.dnnIntensity;
+      } catch (_) {
+        user = 0.6;
+      }
+      final effective = user < cap ? user : cap;
+      try {
+        await const MethodChannel('com.psk.hearing_aid/audio')
+            .invokeMethod<void>(
+                'setDnnEnabled', {'enabled': effective > 0.0});
+        await _audioBridge.setDnnIntensity(effective);
+      } catch (e, st) {
+        developer.log(
+          '_onSmartPoll: aplicar cap DNN falló: $e',
+          name: 'AmplificationBloc',
+          level: 800,
+          error: e,
+          stackTrace: st,
+        );
+      }
+    }
+
+    // Resolver perfil del técnico (Silencioso/Conversación/Ruidoso) y
+    // despachar `ChangeProfile`. La función `resolveEnvironmentProfile`
+    // ya maneja el contrato de 4 clases (QUIET/SPEECH/SPEECH_IN_NOISE/
+    // NOISE) → 3 perfiles del técnico.
+    final profile = _resolveEnvironmentProfile(cls);
+    if (profile == null) return;
+    final st = state;
+    String? activeProfileName;
+    if (st is AmplificationActive) {
+      activeProfileName = st.activeProfile;
+    } else if (st is AmplificationPaused) {
+      activeProfileName = st.lastActiveProfile;
+    }
+    if (profile == activeProfileName) return; // ya activo
+    add(ChangeProfile(profile: profile, fromSmartPoll: true));
+  }
+
+  /// Mapea la 4-clases del `EnvironmentClassifier` C++ → perfil del
+  /// técnico. Réplica del helper `resolveEnvironmentProfile` de
+  /// `smart_preset_resolver.dart` (mantenido inline para no acoplar el
+  /// bloc a la screen).
+  String? _resolveEnvironmentProfile(int envClass) {
+    switch (envClass) {
+      case 0: return 'Silencioso';
+      case 1: return 'Conversación';
+      case 2:
+      case 3: return 'Ruidoso';
+      default: return null;
+    }
+  }
+
+  /// Handler del evento `ToggleSmart`.
+  Future<void> _onToggleSmart(
+    ToggleSmart event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final activate = event.activate;
+    if (activate == _smartEnabled) return; // idempotente
+
+    _smartEnabled = activate;
+    if (activate) {
+      _startSmartPolling();
+    } else {
+      _stopSmartPolling();
+    }
+  }
+
+  /// Cancela las suscripciones a los streams del [AudioBridge] y
+  /// nullea los handles. Idempotente.
+  ///
   /// Requisitos: 3.6
   Future<void> _cancelSubscriptions() async {
     final inputSub = _inputLevelSubscription;
@@ -4157,6 +4418,8 @@ class AmplificationBloc
 
   @override
   Future<void> close() async {
+    _smartPollTimer?.cancel();
+    _smartPollTimer = null;
     await _cancelSubscriptions();
     return super.close();
   }

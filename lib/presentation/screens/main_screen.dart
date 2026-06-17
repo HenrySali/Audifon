@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -686,6 +688,12 @@ class _ActiveView extends StatelessWidget {
           const SizedBox(height: 16),
           // Reporte de procesamiento en tiempo real
           _ProcessingReport(state: state),
+          const SizedBox(height: 16),
+          // smart-continuo-dnn-modulado: toggle Smart continuo + chip de
+          // escena en vivo. Toggle controla [_smartEnabled] vía
+          // ToggleSmart event. Chip lee `bloc.lastEnvClass` con un
+          // `Timer.periodic` interno (1 Hz) para reflejar la escena real.
+          const _SmartSceneToggleCard(),
           const SizedBox(height: 16),
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
@@ -2708,6 +2716,190 @@ class _ConversationModeToggleCardState
         value: _enabled,
         activeColor: Colors.cyanAccent,
         onChanged: _busy ? null : (v) => _onChanged(v),
+      ),
+    );
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// smart-continuo-dnn-modulado: Smart Scene continuo + chip de escena en vivo
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Card con el toggle del Smart Scene Engine continuo + chip de escena.
+///
+/// El toggle controla `_smartEnabled` del bloc vía evento `ToggleSmart`.
+/// El chip se actualiza a 1 Hz vía Timer interno leyendo
+/// `bloc.lastEnvClass`. Cuando Smart está OFF, el chip se oculta y solo
+/// queda el toggle apagado.
+///
+/// Visibilidad: solo se muestra en `AmplificationActive` (motor corriendo).
+/// La pre-selección en IDLE NO incluye este card — el clasificador
+/// necesita el motor activo para emitir clases.
+class _SmartSceneToggleCard extends StatefulWidget {
+  const _SmartSceneToggleCard();
+
+  @override
+  State<_SmartSceneToggleCard> createState() => _SmartSceneToggleCardState();
+}
+
+class _SmartSceneToggleCardState extends State<_SmartSceneToggleCard> {
+  Timer? _refresh;
+  bool _smart = false;
+  int? _envClass;
+
+  @override
+  void initState() {
+    super.initState();
+    final bloc = context.read<AmplificationBloc>();
+    _smart = bloc.isSmartEnabled;
+    _envClass = bloc.lastEnvClass;
+    _refresh = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    final bloc = context.read<AmplificationBloc>();
+    final newSmart = bloc.isSmartEnabled;
+    final newCls = bloc.lastEnvClass;
+    if (newSmart != _smart || newCls != _envClass) {
+      setState(() {
+        _smart = newSmart;
+        _envClass = newCls;
+      });
+    }
+  }
+
+  Future<void> _onToggle(bool v) async {
+    final bloc = context.read<AmplificationBloc>();
+    bloc.add(ToggleSmart(activate: v));
+    setState(() => _smart = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1a1a2e),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome, color: Color(0xFF00e5ff), size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Smart (ambiente automático)',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Clasifica el entorno en vivo y elige el perfil.',
+                      style: TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _smart,
+                onChanged: _onToggle,
+                activeColor: const Color(0xFF00e5ff),
+              ),
+            ],
+          ),
+          if (_smart) ...[
+            const SizedBox(height: 10),
+            _SceneChip(envClass: _envClass),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Chip que muestra la clase de entorno detectada por el
+/// `EnvironmentClassifier` C++ (4 clases reales).
+///
+/// Mapeo:
+///   - 0 QUIET            → 🟢 Silencio
+///   - 1 SPEECH           → 🟡 Voz
+///   - 2 SPEECH_IN_NOISE  → 🟠 Voz + ruido
+///   - 3 NOISE            → 🔴 Ruidoso
+///   - null/otro          → ⏳ Detectando…
+class _SceneChip extends StatelessWidget {
+  final int? envClass;
+  const _SceneChip({required this.envClass});
+
+  @override
+  Widget build(BuildContext context) {
+    final String emoji;
+    final String label;
+    final Color color;
+    switch (envClass) {
+      case 0:
+        emoji = '🟢';
+        label = 'Silencio';
+        color = const Color(0xFF4CAF50);
+        break;
+      case 1:
+        emoji = '🟡';
+        label = 'Voz';
+        color = const Color(0xFFFFC107);
+        break;
+      case 2:
+        emoji = '🟠';
+        label = 'Voz + ruido';
+        color = const Color(0xFFFF9800);
+        break;
+      case 3:
+        emoji = '🔴';
+        label = 'Ruidoso';
+        color = const Color(0xFFF44336);
+        break;
+      default:
+        emoji = '⏳';
+        label = 'Detectando…';
+        color = const Color(0xFF9E9E9E);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 6),
+          Text(
+            'Ambiente: $label',
+            style: TextStyle(
+              color: color,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
