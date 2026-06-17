@@ -1526,10 +1526,13 @@ class AmplificationBloc
   ///   perfil (longitudes distintas), usa el MPO broadband como cota.
   /// - Si [bundle] == null, no hay perfil MPO del cual derivar headroom →
   ///   clamp conservador solo al rango operativo (caso documentado).
+  /// - Aplica siempre el techo de ganancia del hardware (`gainCeiling`)
+  ///   como clamp final absoluto.
   List<double> _clampGainsToHeadroom(
     List<double> gains,
     AudiogramDrivenBundle? bundle,
   ) {
+    final gainCeiling = _settingsRepository.hardwareGainCeilingDb;
     final n = gains.length;
     final out = List<double>.filled(n, 0.0, growable: false);
     final double? broadband =
@@ -1550,6 +1553,10 @@ class AmplificationBloc
         if (headroom < g) {
           g = math.max(headroom, AudiogramDrivenBundle.gainMinDb);
         }
+      }
+      // Clamp final: techo de ganancia del hardware (gain ceiling).
+      if (g > gainCeiling) {
+        g = gainCeiling;
       }
       out[i] = g;
     }
@@ -1975,7 +1982,10 @@ class AmplificationBloc
       _lastNl3Result = nl3Result;
 
       // Aplicar al engine nativo (debe completarse en ≤ 200 ms).
-      await _audioBridge.updateEqGains(newGains);
+      // Se pasa por _clampGainsToHeadroom para respetar headroom MPO
+      // y el techo de ganancia del hardware (gain ceiling).
+      final clampedNewGains = _clampGainsToHeadroom(newGains, _lastBundle);
+      await _audioBridge.updateEqGains(clampedNewGains);
 
       // Emitir estado con nuevo modo activo y MHL desactivado.
       emit(currentState.copyWith(
@@ -3551,10 +3561,15 @@ class AmplificationBloc
   /// Suma el delta sobre los `gainsDb` del bundle, aplica el clamp
   /// genérico `[0, 50] dB` y luego un clamp adicional por headroom
   /// MPO: `gainsDb[i] ≤ mpoProfileDbSpl[i] - input - 3 dB` (Req 10.2).
+  ///
+  /// Adicionalmente, aplica el techo de ganancia del hardware
+  /// (`hardwareGainCeilingDb`) como clamp final absoluto. Si el techo
+  /// es 50 (default — sin calibrar), no recorta nada.
   List<double> _resolveFinalGains(
     AudiogramDrivenBundle bundle,
     ManualAdjustmentDelta? delta,
   ) {
+    final gainCeiling = _settingsRepository.hardwareGainCeilingDb;
     final gains = List<double>.filled(
       AudiogramDrivenBundle.bandCount,
       0.0,
@@ -3579,6 +3594,10 @@ class AmplificationBloc
           _kHeadroomSafetyMarginDb;
       if (headroom < g) {
         g = math.max(headroom, AudiogramDrivenBundle.gainMinDb);
+      }
+      // Clamp final: techo de ganancia del hardware (gain ceiling).
+      if (g > gainCeiling) {
+        g = gainCeiling;
       }
       gains[i] = g;
     }

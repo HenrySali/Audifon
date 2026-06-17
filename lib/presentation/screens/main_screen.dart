@@ -335,7 +335,10 @@ class _StatusBar extends StatelessWidget {
                       onPressed: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => const TechnicalServiceScreen(),
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const TechnicalServiceScreen(),
+                            ),
                           ),
                         );
                       },

@@ -155,4 +155,22 @@ abstract class SettingsRepository {
 
   /// Persiste el estado del toggle "Modo Conversación".
   Future<void> setConversationModeEnabled(bool value);
+
+  // --- Gain Ceiling (calibración de ganancia máxima del hardware) ----------
+  // El técnico usa un slider para encontrar el punto de distorsión del
+  // auricular conectado. Ese valor se persiste como techo absoluto de
+  // ganancia por banda. Default 50.0 (sin restricción — usuario no calibró).
+
+  /// Techo de ganancia máxima del hardware en dB.
+  ///
+  /// Valor en `[0.0, 50.0]`. Default `50.0` cuando la key está ausente
+  /// (equivalente a "sin límite": el hardware soporta todo el rango del EQ).
+  /// Lectura sincrónica para uso en clamps hot-path.
+  double get hardwareGainCeilingDb;
+
+  /// Persiste el techo de ganancia máxima del hardware.
+  ///
+  /// El valor se clampa a `[0.0, 50.0]`; valores no finitos se reemplazan
+  /// por el default `50.0`.
+  Future<void> setHardwareGainCeilingDb(double value);
 }

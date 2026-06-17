@@ -35,6 +35,9 @@ class _SettingsKeys {
 
   /// Modo Conversación (SCO + 16 kHz). Default false.
   static const String conversationModeEnabled = 'conversationModeEnabled';
+
+  /// Techo de ganancia máxima del hardware (dB). Default 50.0.
+  static const String hardwareGainCeilingDb = 'hardwareGainCeilingDb';
 }
 
 /// Implementación del repositorio de configuración usando Hive.
@@ -249,6 +252,28 @@ class SettingsRepositoryImpl implements SettingsRepository {
   @override
   Future<void> setConversationModeEnabled(bool value) async {
     await _box.put(_SettingsKeys.conversationModeEnabled, value);
+  }
+
+  // --- Gain Ceiling (calibración de ganancia máxima del hardware) ----------
+
+  @override
+  double get hardwareGainCeilingDb {
+    final raw = _box.get(_SettingsKeys.hardwareGainCeilingDb);
+    if (raw is! num || raw.isNaN) return 50.0;
+    final d = raw.toDouble();
+    if (!d.isFinite) return 50.0;
+    if (d < 0.0) return 0.0;
+    if (d > 50.0) return 50.0;
+    return d;
+  }
+
+  @override
+  Future<void> setHardwareGainCeilingDb(double value) async {
+    double v = value;
+    if (v.isNaN || !v.isFinite) v = 50.0;
+    if (v < 0.0) v = 0.0;
+    if (v > 50.0) v = 50.0;
+    await _box.put(_SettingsKeys.hardwareGainCeilingDb, v);
   }
 
   /// Lee una key con un valor numérico esperado en `[0.0, 1.0]`. Trata

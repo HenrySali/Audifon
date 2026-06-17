@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'diagnostic/calibration_step.dart';
 import 'bundle_export_screen.dart';
 import 'calibration_spectrum_screen.dart';
+import 'gain_ceiling_calibration_screen.dart';
 import '../../biological_calibration/screens/biological_calibration_screen.dart';
 import '../../audiometry/screens/audiometry_screen.dart';
 import '../../data/services/remote_config_service.dart';
 import '../../feedback_checklist/screens/feedback_export_screen.dart';
 import '../../security/security_settings_repository.dart';
+import '../bloc/amplification_bloc.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -83,6 +86,27 @@ class TechnicalServiceScreen extends StatelessWidget {
                 'Usar en cada nuevo dispositivo o cambio de auriculares.',
             buttonText: 'Iniciar Calibración',
             onTap: () => _openCalibration(context),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Calibración de Ganancia Máxima (Gain Ceiling)
+          _ServiceCard(
+            icon: Icons.speed,
+            iconColor: Colors.orangeAccent,
+            title: 'Calibración de Ganancia Máxima',
+            description:
+                'Determiná el techo de ganancia del auricular conectado. '
+                'Subí hasta escuchar distorsión y marcá el límite. '
+                'Ningún preset ni configuración superará ese techo.',
+            buttonText: 'Calibrar Ceiling',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => BlocProvider.value(
+                  value: context.read<AmplificationBloc>(),
+                  child: const GainCeilingCalibrationScreen(),
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 12),
 
