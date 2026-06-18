@@ -592,7 +592,13 @@ class AudioMethodChannel(
             attackMs = lastAttackMs,
             releaseMs = lastReleaseMs,
             nrLevel = nrForMode,
-            mpoThresholdDbSpl = lastMpoDbSpl
+            mpoThresholdDbSpl = lastMpoDbSpl,
+            // FIX: el mic SCO (VoiceCommunication 16 kHz) captura con ~15 dB
+            // menos de nivel que el mic normal (VoicePerformance 48 kHz).
+            // Sin recalibrar, el WDRC "cree" que la señal es más fuerte de lo
+            // que realmente es → comprime la voz → sale inaudible.
+            // splOffset 105 = calibración para mic SCO (vs 120 para mic normal).
+            splOffset = if (conversationMode) 105f else 120f
         )
 
         // Re-attach NoiseSuppressor al nuevo engine.
