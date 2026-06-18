@@ -10,6 +10,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
+import '../bloc/amplification_state.dart';
 
 class GainCapScreen extends StatefulWidget {
   const GainCapScreen({super.key});
@@ -43,20 +44,24 @@ class _GainCapScreenState extends State<GainCapScreen> {
     final bloc = context.read<AmplificationBloc>();
     await bloc.settingsRepository
         .setGainCapManualDb(_autoMode ? null : _value);
-    // FIX: forzar re-cálculo y re-aplicación de gains al motor. Sin esto,
-    // el nuevo cap solo se persiste pero el sonido no cambia hasta que otro
-    // evento (cambio de perfil, reinicio) recalcule el bundle.
+
     final bundle = bloc.lastBundle;
-    if (bundle != null) {
+    final isMotorActive = bloc.state is AmplificationActive;
+
+    if (bundle != null && isMotorActive) {
       bloc.add(ApplyAudiogramDrivenBundle(bundle: bundle));
     }
+
     if (!mounted) return;
+
+    final appliedNow = bundle != null && isMotorActive;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(_autoMode
-            ? 'Tope automático restaurado'
-            : 'Tope fijado en ${_value!.toStringAsFixed(1)} dB'),
-        backgroundColor: Colors.green.shade700,
+            ? 'Tope automático restaurado${appliedNow ? '' : ' (se aplicará al iniciar)'}'
+            : 'Tope fijado en ${_value!.toStringAsFixed(1)} dB${appliedNow ? '' : ' (se aplicará al iniciar)'}'),
+        backgroundColor:
+            appliedNow ? Colors.green.shade700 : Colors.orange.shade700,
         duration: const Duration(seconds: 2),
       ),
     );
