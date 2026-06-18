@@ -214,8 +214,8 @@ class ScenePersonalizedPresetGenerator {
         );
       case SceneClass.voiceInNoiseMid:
         return const _SceneTuning(
-          compressionRatio: 2.0,
-          compressionKnee: 47.0,
+          compressionRatio: 1.8,
+          compressionKnee: 50.0,
           expansionKnee: 35.0,
           nrLevel: 2,
           tnrEnabled: false,
@@ -223,8 +223,8 @@ class ScenePersonalizedPresetGenerator {
         );
       case SceneClass.voiceInNoiseLow:
         return const _SceneTuning(
-          compressionRatio: 2.5,
-          compressionKnee: 45.0,
+          compressionRatio: 1.7,
+          compressionKnee: 50.0,
           expansionKnee: 35.0,
           nrLevel: 3,
           tnrEnabled: true,
@@ -232,8 +232,8 @@ class ScenePersonalizedPresetGenerator {
         );
       case SceneClass.noiseLowDominant:
         return const _SceneTuning(
-          compressionRatio: 2.5,
-          compressionKnee: 45.0,
+          compressionRatio: 1.7,
+          compressionKnee: 50.0,
           expansionKnee: 35.0,
           nrLevel: 3,
           tnrEnabled: true,
@@ -241,7 +241,7 @@ class ScenePersonalizedPresetGenerator {
         );
       case SceneClass.noiseHighDominant:
         return const _SceneTuning(
-          compressionRatio: 2.0,
+          compressionRatio: 1.8,
           compressionKnee: 50.0,
           expansionKnee: 35.0,
           nrLevel: 3,

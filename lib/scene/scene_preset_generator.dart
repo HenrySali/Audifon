@@ -60,31 +60,31 @@ class SceneGenericPresetGenerator {
           nrLevel: 2,
           tnrEnabled: false,
           volumeDeltaDb: -1.0,
-          compressionRatioOverride: 2.0,
-          compressionKneeOverride: 47.0,
+          compressionRatioOverride: 1.8,
+          compressionKneeOverride: 50.0,
         );
       case SceneClass.voiceInNoiseLow:
         return const _SceneTuning(
           nrLevel: 3,
           tnrEnabled: true,
           volumeDeltaDb: -2.0,
-          compressionRatioOverride: 2.5,
-          compressionKneeOverride: 45.0,
+          compressionRatioOverride: 1.7,
+          compressionKneeOverride: 50.0,
         );
       case SceneClass.noiseLowDominant:
         return const _SceneTuning(
           nrLevel: 3,
           tnrEnabled: true,
           volumeDeltaDb: -3.0,
-          compressionRatioOverride: 2.5,
-          compressionKneeOverride: 45.0,
+          compressionRatioOverride: 1.7,
+          compressionKneeOverride: 50.0,
         );
       case SceneClass.noiseHighDominant:
         return const _SceneTuning(
           nrLevel: 3,
           tnrEnabled: false,
           volumeDeltaDb: -2.0,
-          compressionRatioOverride: 2.0,
+          compressionRatioOverride: 1.8,
           compressionKneeOverride: 50.0,
         );
       case SceneClass.music:
