@@ -617,13 +617,37 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     // ─── DSP processing in-place on output buffer ────────────────────────
-    // Pasamos `lastPreDnnLevelDb_` (medido en la sección Pre-DNN Level
-    // Measurement de arriba) como tercer parámetro `externalLevelDb`. Esto
-    // hace que el WDRC del pipeline use el nivel real de entrada (antes de
-    // la DNN) en lugar de medir el RMS post-DNN, evitando que opere en
-    // región de expansión cuando debería comprimir
-    // (Requirements 1.2, 5.1 — DSP chain optimization, task 2.4).
-    pipeline_.processBlock(outPtr, numFrames, lastPreDnnLevelDb_);
+    // Speech-aware level estimation para el WDRC:
+    //
+    // Caso A (silencio/voz limpia, DNN no atenúa o no está activo):
+    //   pre-DNN ≈ post-DNN. Pasamos pre-DNN al WDRC para mantener el
+    //   contrato de dsp-chain-optimization (Req 1.3) y evitar que opere
+    //   en región de expansión.
+    //
+    // Caso B (ruido fuerte, DNN atenúa > 3 dB):
+    //   pre-DNN refleja el nivel del RUIDO + voz; post-DNN refleja el
+    //   nivel de la VOZ ya limpia. Si pasamos pre-DNN, el WDRC comprime
+    //   fuerte y la voz sale apagada. Pasamos post-DNN para que el WDRC
+    //   "vea" la voz target y le aplique la ganancia clínica correcta.
+    //
+    // Ref clínica: Phonak Sky/Oticon Velox utilizan estimación de nivel
+    // post-NR para WDRC en escenarios ruidosos (speech-aware compression).
+    float postDnnLevelDb;
+    {
+        float sumSq = 0.0f;
+        for (int i = 0; i < numFrames; ++i) {
+            sumSq += outPtr[i] * outPtr[i];
+        }
+        float rms = std::sqrt(sumSq / static_cast<float>(numFrames));
+        if (rms < 1e-10f) rms = 1e-10f;
+        postDnnLevelDb = 20.0f * std::log10(rms) + config_.splOffset;
+    }
+    const float dnnAttenDb = lastPreDnnLevelDb_ - postDnnLevelDb;
+    const float wdrcInputLevelDb =
+        (dnnDenoiser_.isEnabled() && dnnAttenDb > 3.0f)
+            ? postDnnLevelDb
+            : lastPreDnnLevelDb_;
+    pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb);
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
     sceneAnalyzer_.process(inPtr, numFrames);
