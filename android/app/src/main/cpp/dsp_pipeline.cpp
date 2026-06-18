@@ -58,9 +58,16 @@ void DspPipeline::init(const AudioConfig& config) {
     splOffset_.store(config.splOffset, std::memory_order_relaxed);
 
     // Inicializar AFC (Adaptive Feedback Canceller) — estima el feedback path
-    // y resta la estimación del mic antes de que entre al pipeline. Preventivo.
-    // Activado por default; solo resta (seguro). El FBS queda como respaldo.
+    // y resta la estimación del mic antes de que entre al pipeline.
+    //
+    // DESHABILITADO: en el caso de uso real (audio celu → BT audífono
+    // externo) NO hay path acústico mic↔parlante. El NLMS adapta coefs
+    // al detectar transitorios (golpes al mic, clicks) y, post-evento,
+    // produce ringing residual que el EQ pediátrico (gains 19-26 dB)
+    // amplifica hasta hacerlo audible como "trompeta sostenida".
+    // Validado: simulate_tecnico_vs_v3_v2.py (AFC OFF → -73 dBFS inaudible).
     afc_.init(config.sampleRate);
+    afc_.setEnabled(false);
 
     // Inicializar EQ con sample rate
     eq_.init(config.sampleRate);
