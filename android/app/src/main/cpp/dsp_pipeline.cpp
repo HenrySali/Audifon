@@ -78,9 +78,24 @@ void DspPipeline::init(const AudioConfig& config) {
 
     // Inicializar Feedback Suppressor (anti-howling) — rompe el lazo Larsen
     // que aparece a ganancia alta (mic+parlante cercanos en el teléfono).
-    // Activado por default como el TNR; solo atenúa (notch + guard ≤ 0 dB).
+    //
+    // DESHABILITADO POR DEFAULT (bug "trompeta al final del ruido"):
+    // En el caso de uso real del proyecto el audio sale por BT → audífono
+    // externo, NO por el parlante del celular. NO hay path acústico de
+    // feedback (mic celu ↔ parlante celu). El FBS engancha notches al
+    // detectar tonalidad sostenida (golpes al mic, vocales largas, click
+    // de teclado), los mantiene 1500 ms y baja el guard a -24 dB →
+    // "trompeta sostenida" en la salida. Validado en
+    // tools/sim_v3/simulate_trompeta_fbs.py:
+    //   - 2 notches enganchados con golpes inocuos
+    //   - 86% del run con notches activos
+    //   - Guard atenuado -24 dB durante 2.55 s de un run de 3 s
+    //
+    // El AFC (NLMS adaptivo) ya cubre el feedback eléctrico residual del
+    // DSP. Si en el futuro se usa el celu como audífono directo (mic celu
+    // → parlante celu), reactivar este flag desde un toggle dev/clínico.
     fbs_.init(config.sampleRate);
-    fbs_.setEnabled(true);
+    fbs_.setEnabled(false);
     fbs_.setDepthDb(-18.0f);
 
     // Inicializar Output Compressor (freno de amplificación pre-MPO) — baja la
