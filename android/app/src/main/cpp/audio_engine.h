@@ -293,6 +293,25 @@ private:
     /// por kHeadroomRestoreLinear. NO es estado persistente entre bloques.
     bool  headroomApplied_ = false;
 
+    // ─── Post-DNN Spectral Makeup Tilt (dnn-voice-level-recovery, Paso 2 simplificado) ──
+    /// Biquad peaking que recupera energía 2-4 kHz post-DNN cuando el modelo
+    /// GTCRN sobre-suprime esa banda (mask-based → solo atenúa, no enhance).
+    /// Centrado en 3 kHz, Q=0.7, gain +3 dB. Aplicado SOLO cuando
+    /// `dnnAttenDb > 3 dB` (DNN realmente atenuó algo, hay ruido a recuperar).
+    /// Coeficientes calculados al sample rate efectivo en `start()`.
+    /// Ref clínico: Healy 2017 (PMC5464956) — IRM masking sobre-suprime
+    /// formantes y consonantes; recuperar 2-4 kHz post-NR es estándar
+    /// (Oticon DNN 2.0 white paper, Phonak DEEPSONIC).
+    float makeupB0_ = 1.0f;
+    float makeupB1_ = 0.0f;
+    float makeupB2_ = 0.0f;
+    float makeupA1_ = 0.0f;
+    float makeupA2_ = 0.0f;
+    float makeupX1_ = 0.0f;
+    float makeupX2_ = 0.0f;
+    float makeupY1_ = 0.0f;
+    float makeupY2_ = 0.0f;
+
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;
 

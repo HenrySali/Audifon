@@ -4230,8 +4230,8 @@ class AmplificationBloc
     switch (envClass) {
       case 0: return 0.00;  // QUIET
       case 1: return 0.40;  // SPEECH
-      case 2: return 0.70;  // SPEECH_IN_NOISE
-      case 3: return 0.85;  // NOISE
+      case 2: return 0.55;  // SPEECH_IN_NOISE — voz dominante post-DNN
+      case 3: return 0.70;  // NOISE — preserva voz residual (Crukley/Healy)
       default: return null;
     }
   }
