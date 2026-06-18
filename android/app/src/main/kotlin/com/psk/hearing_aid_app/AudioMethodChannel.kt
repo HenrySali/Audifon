@@ -106,6 +106,8 @@ class AudioMethodChannel(
     private var lastCompRatio: Float = 2f
     private var lastAttackMs: Float = 5f
     private var lastReleaseMs: Float = 100f
+    private var lastDnnEnabled: Boolean = true
+    private var lastDnnIntensity: Float = 0.6f
 
     // ─────────────────────────────────────────────────────────────────────
     // Inicialización
@@ -256,11 +258,13 @@ class AudioMethodChannel(
                 }
                 "setDnnEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false
+                    lastDnnEnabled = enabled
                     nativeBridge.nativeSetDnnEnabled(enabled)
                     result.success(null)
                 }
                 "setDnnIntensity" -> {
                     val intensity = (call.argument<Double>("intensity") ?: 1.0).toFloat()
+                    lastDnnIntensity = intensity
                     nativeBridge.nativeSetDnnIntensity(intensity)
                     result.success(null)
                 }
@@ -570,22 +574,25 @@ class AudioMethodChannel(
         )
 
         // Re-attach NoiseSuppressor al nuevo engine.
-        try {
-            val sessionId = nativeBridge.nativeGetInputSessionId()
-            if (sessionId > 0 && NoiseSuppressor.isAvailable()) {
-                noiseSuppressor = NoiseSuppressor.create(sessionId)
-                noiseSuppressor?.enabled = true
-                Log.i(TAG, "NoiseSuppressor re-attached to session $sessionId")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "NoiseSuppressor re-attach failed: ${e.message}")
-            noiseSuppressor = null
-        }
+        // DESHABILITADO: el NoiseSuppressor de Android es demasiado agresivo
+        // para conversación con audífono — corta la voz débil junto al ruido.
+        // Nuestro DNN GTCRN es más selectivo (VAD-driven) y preserva la voz.
+        // El InputPreset VoiceCommunication ya activa el AEC del HAL (que sí
+        // es útil para cancelar eco del parlante), pero NO activamos el NS
+        // adicional encima.
+        // Ref: auditoría bioingeniero 2026-06-18, bug #3 (doble denoising).
 
         // Re-init DNN: el motor anterior se destruyó, así que el .onnx hay
         // que cargarlo en el nuevo `g_engine`.
         try {
             nativeBridge.nativeInitDnnDenoiser(context.assets)
+            // FIX bug #1 (auditoría bioingeniero 2026-06-18): re-habilitar el
+            // DNN con la intensidad que el usuario tenía ANTES del restart.
+            // Sin esto, el DNN queda en enabled_=false y el paciente pierde
+            // la reducción de ruido silenciosamente.
+            nativeBridge.nativeSetDnnEnabled(lastDnnEnabled)
+            nativeBridge.nativeSetDnnIntensity(lastDnnIntensity)
+            Log.i(TAG, "setConversationMode: DNN re-enabled=$lastDnnEnabled intensity=$lastDnnIntensity")
         } catch (t: Throwable) {
             Log.w(TAG, "setConversationMode: re-initDnnDenoiser failed: ${t.message}")
         }
