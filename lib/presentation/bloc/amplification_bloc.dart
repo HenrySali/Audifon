@@ -1638,9 +1638,9 @@ class AmplificationBloc
     // techo per-band del hardware sin destruir la forma de la curva.
     // Si la longitud no es 12 (caso defensivo), el helper acepta peso
     // uniforme; si los 12 techos son 50 (sin calibrar), retorna el
-    // input intacto (backward compat).
+    // input intacto (backward compat). Si no hay calibración (null), omitir.
     final ceiling = _settingsRepository.hardwareGainCeilingPerBandDb;
-    if (ceiling.length == n) {
+    if (ceiling != null && ceiling.length == n) {
       return fitPrescriptionToCeiling(out, ceiling);
     }
     return List<double>.unmodifiable(out);
@@ -3707,9 +3707,9 @@ class AmplificationBloc
     // Clamp final: techo de ganancia del hardware vía WCPF (escala
     // proporcionalmente con pesos SII para preservar la forma de la
     // curva). Backward compat: si los 12 techos son 50, retorna gains
-    // intactos.
+    // intactos. Si no hay calibración (null), se omite.
     final ceiling = _settingsRepository.hardwareGainCeilingPerBandDb;
-    if (ceiling.length == AudiogramDrivenBundle.bandCount) {
+    if (ceiling != null && ceiling.length == AudiogramDrivenBundle.bandCount) {
       return fitPrescriptionToCeiling(gains, ceiling);
     }
     return List<double>.unmodifiable(gains);
