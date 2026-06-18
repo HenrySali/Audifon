@@ -558,10 +558,32 @@ class AudioMethodChannel(
         val bufferSize = if (conversationMode) 64 else 256
         // CRÍTICO: flag de Modo Conversación ANTES de start() (ruteo SCO).
         nativeBridge.nativeSetConversationMode(conversationMode)
+
+        // FIX bug #2 (auditoría bioingeniero): a 16 kHz las bandas 10 (6 kHz)
+        // y 11 (8 kHz) del EQ degeneran (8 kHz = Nyquist exacto → sin(π)=0 →
+        // filtro inestable; 6 kHz con Q warping severo). Poner 0 dB en esas
+        // bandas evita amplificación degenerada que oscurece la voz.
+        // Al volver a 48 kHz se restauran las gains originales.
+        val eqForMode = if (conversationMode) {
+            lastEqGains.copyOf().also { gains ->
+                if (gains.size >= 12) {
+                    gains[10] = 0f  // 6000 Hz → 0 dB (evitar Q warping)
+                    gains[11] = 0f  // 8000 Hz → 0 dB (Nyquist exacto)
+                }
+            }
+        } else {
+            lastEqGains
+        }
+
+        // FIX bug #5: restaurar nrLevel del usuario (no hardcodear 0).
+        // En modo conversación NR=2 permite que el denoiser limpie ruido
+        // ambiente mientras preserva la voz cercana.
+        val nrForMode = if (conversationMode) 2 else 0
+
         nativeBridge.start(
             sampleRate = sampleRate,
             bufferSize = bufferSize,
-            eqGains = lastEqGains,
+            eqGains = eqForMode,
             volumeDb = lastVolumeDb,
             expansionKnee = lastExpKnee,
             expansionRatio = lastExpRatio,
@@ -569,7 +591,7 @@ class AudioMethodChannel(
             compressionRatio = lastCompRatio,
             attackMs = lastAttackMs,
             releaseMs = lastReleaseMs,
-            nrLevel = 0,
+            nrLevel = nrForMode,
             mpoThresholdDbSpl = lastMpoDbSpl
         )
 
