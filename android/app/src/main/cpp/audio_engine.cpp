@@ -272,37 +272,6 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     // ─── Step 5b: Initialize Smart Scene Engine analyzer (Fase 1) ────────
     sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);
 
-    // ─── Step 5c: Compute post-DNN spectral makeup tilt coefficients ─────
-    // Biquad peaking centrado en 3 kHz, Q=0.7, gain=+3 dB. Aplicado solo
-    // cuando el DNN atenuó >3 dB. Ataca la sobre-supresión de 2-4 kHz
-    // (formantes/consonantes) inherente a GTCRN (mask-based: solo atenúa).
-    // Spec: dnn-voice-level-recovery (Paso 2 simplificado en pipeline,
-    // no en worker DNN).
-    {
-        const float fc    = 3000.0f;
-        const float Q     = 0.7f;
-        const float gainDb = 3.0f;
-        const float A     = std::pow(10.0f, gainDb / 40.0f);
-        const float w0    = 2.0f * 3.14159265358979323846f * fc /
-                            static_cast<float>(effectiveSampleRate);
-        const float sin_w0 = std::sin(w0);
-        const float cos_w0 = std::cos(w0);
-        const float alpha  = sin_w0 / (2.0f * Q);
-        const float b0 = 1.0f + alpha * A;
-        const float b1 = -2.0f * cos_w0;
-        const float b2 = 1.0f - alpha * A;
-        const float a0 = 1.0f + alpha / A;
-        const float a1 = -2.0f * cos_w0;
-        const float a2 = 1.0f - alpha / A;
-        const float inv_a0 = 1.0f / a0;
-        makeupB0_ = b0 * inv_a0;
-        makeupB1_ = b1 * inv_a0;
-        makeupB2_ = b2 * inv_a0;
-        makeupA1_ = a1 * inv_a0;
-        makeupA2_ = a2 * inv_a0;
-        makeupX1_ = makeupX2_ = makeupY1_ = makeupY2_ = 0.0f;
-    }
-
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
     setInputStream(inputStream_.get());
     setOutputStream(outputStream_.get());
@@ -678,35 +647,6 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         (dnnDenoiser_.isEnabled() && dnnAttenDb > 3.0f)
             ? postDnnLevelDb
             : lastPreDnnLevelDb_;
-
-    // ─── Post-DNN Spectral Makeup Tilt (dnn-voice-level-recovery Paso 2) ─
-    // Cuando el DNN atenuó > 3 dB en este bloque (= había ruido a limpiar),
-    // el GTCRN típicamente sobre-suprime las bandas 2-4 kHz (consonantes y
-    // formantes) además del ruido. Aplicamos un peaking biquad +3 dB en
-    // 3 kHz para recuperar esa energía perdida ANTES del WDRC, así la voz
-    // post-DNN llega con cuerpo a la cadena de amplificación.
-    //
-    // Si el DNN no atenuó (silencio o DNN off), el biquad NO se aplica y
-    // el estado x1/x2/y1/y2 se mantiene en cero — comportamiento idéntico
-    // al pre-fix para QUIET y SPEECH limpia.
-    if (dnnDenoiser_.isEnabled() && dnnAttenDb > 3.0f) {
-        for (int i = 0; i < numFrames; ++i) {
-            const float x = outPtr[i];
-            float y = makeupB0_ * x + makeupB1_ * makeupX1_ + makeupB2_ * makeupX2_
-                    - makeupA1_ * makeupY1_ - makeupA2_ * makeupY2_;
-            // Sanitización ante NaN/Inf — reset estado y bypass este sample.
-            if (!std::isfinite(y)) {
-                makeupX1_ = makeupX2_ = makeupY1_ = makeupY2_ = 0.0f;
-                y = x;
-            }
-            makeupX2_ = makeupX1_;
-            makeupX1_ = x;
-            makeupY2_ = makeupY1_;
-            makeupY1_ = y;
-            outPtr[i] = y;
-        }
-    }
-
     pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb);
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
