@@ -29,21 +29,29 @@ static constexpr int kEnvNrLevelTable[] = {
 };
 
 /// Tabla de compression knee por clase de entorno (dB SPL).
-/// Entornos más ruidosos → knee más bajo → compresión más temprana.
+/// PEDIATRIC + DSL v5 Noise alignment (Scollie 2007, Crukley 2012):
+/// en escenas ruidosas se SUBE el knee (no se baja) para que el WDRC
+/// solo comprima los picos REALMENTE altos de voz (post-DNN), preservando
+/// la dinámica fisiológica de las consonantes. Combina con kEnvWdrcRatioTable
+/// que también baja el ratio en NOISE.
 static constexpr float kEnvWdrcKneeTable[] = {
     55.0f,  // QUIET:           Compresión suave, knee alto
-    50.0f,  // SPEECH:          Compresión estándar
-    45.0f,  // SPEECH_IN_NOISE: Compresión más temprana
-    40.0f   // NOISE:           Compresión agresiva, knee bajo
+    52.0f,  // SPEECH:          Compresión estándar
+    50.0f,  // SPEECH_IN_NOISE: Knee alto — voz dominante post-DNN
+    50.0f   // NOISE:           Knee alto — solo comprime voz fuerte
 };
 
 /// Tabla de compression ratio por clase de entorno.
-/// Entornos más ruidosos → ratio más alto → compresión más fuerte.
+/// PEDIATRIC + DSL v5 Noise (Scollie/Crukley): "low compression ratios to
+/// minimize distortion" en NOISE. El DNN ya entregó voz limpia al WDRC
+/// (commit speech-aware d95611a), así que el ratio bajo preserva la
+/// dinámica de las consonantes en lugar de aplastarlas.
+/// Ref: https://pubmed.ncbi.nlm.nih.gov/22617498/ (Crukley & Scollie 2012)
 static constexpr float kEnvWdrcRatioTable[] = {
     1.5f,   // QUIET:           Ratio suave
     2.0f,   // SPEECH:          Ratio estándar
-    2.5f,   // SPEECH_IN_NOISE: Ratio moderado
-    3.0f    // NOISE:           Ratio fuerte
+    1.8f,   // SPEECH_IN_NOISE: Ratio bajo — preserva consonantes
+    1.7f    // NOISE:           DSL v5 Noise: low ratio
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
