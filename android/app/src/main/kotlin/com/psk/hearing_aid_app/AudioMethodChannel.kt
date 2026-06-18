@@ -584,7 +584,7 @@ class AudioMethodChannel(
             sampleRate = sampleRate,
             bufferSize = bufferSize,
             eqGains = eqForMode,
-            volumeDb = if (conversationMode) lastVolumeDb + 6f else lastVolumeDb,
+            volumeDb = if (conversationMode) lastVolumeDb + 10f else lastVolumeDb,
             expansionKnee = lastExpKnee,
             expansionRatio = lastExpRatio,
             compressionKnee = lastCompKnee,
