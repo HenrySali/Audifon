@@ -78,6 +78,17 @@ class AudioMethodChannel(
     /** NoiseSuppressor del sistema Android (Fase 1 noise gate HW). */
     private var noiseSuppressor: NoiseSuppressor? = null
 
+    /** Monitor de ruta de audio: detecta caída a speaker al desconectar BT. */
+    private val routeMonitor = AudioRouteMonitor(context).apply {
+        onRoutedToSpeaker = {
+            Log.w(TAG, "Audio routed to speaker — applying safe volume to prevent saturation")
+            // Bajar el volumen a un nivel seguro para speaker inmediatamente.
+            nativeBridge.setVolume(AudioRouteMonitor.SAFE_SPEAKER_VOLUME_DB)
+            // Notificar a Dart para que la UI avise al usuario.
+            emitState("routed_to_speaker")
+        }
+    }
+
     /** Sink para emitir nivel de entrada a Flutter. */
     private var levelEventSink: EventChannel.EventSink? = null
 
@@ -447,7 +458,8 @@ class AudioMethodChannel(
 
         emitState("active")
 
-        // ─── NoiseSuppressor del sistema (Fase 1 — reducción de ruido HW) ───
+        // ─── Route monitor: detectar caída a speaker al desconectar BT ───
+        routeMonitor.start()
         // Usa el audio session ID del input stream Oboe para attachear el
         // efecto del framework Android. No requiere MODE_IN_COMMUNICATION.
         // Si no está disponible (dispositivo viejo o HAL sin soporte), se
@@ -475,6 +487,9 @@ class AudioMethodChannel(
      * También detiene el foreground service.
      */
     private fun handleStopAudio(result: MethodChannel.Result) {
+        // ─── Detener el monitor de ruta de audio ─────────────────────────
+        routeMonitor.stop()
+
         // ─── Release NoiseSuppressor ANTES de detener el engine ──────────
         noiseSuppressor?.release()
         noiseSuppressor = null
