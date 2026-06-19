@@ -8,6 +8,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 
 /**
  * Monitorea cambios de ruta de audio y dispara [onRoutedToSpeaker] cuando
@@ -89,23 +90,27 @@ class AudioRouteMonitor(private val context: Context) {
         // 2) AudioDeviceCallback (API 23+): detecta desconexiones y también
         //    re-conexiones (útil para restaurar volumen cuando vuelve el BT).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val cb = object : AudioManager.AudioDeviceCallback() {
-                override fun onAudioDevicesRemoved(devices: Array<out AudioDeviceInfo>?) {
-                    devices?.forEach { dev ->
-                        if (dev.isSink && isHeadsetType(dev.type)) {
-                            Log.w(TAG, "Output headset removed: ${dev.productName} (type=${dev.type})")
-                            // Verificar si queda algún headset output
-                            if (!hasHeadsetOutput()) {
-                                onRoutedToSpeaker?.invoke()
-                            }
+            registerDeviceCallback()
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun registerDeviceCallback() {
+        val cb = object : AudioManager.AudioDeviceCallback() {
+            override fun onAudioDevicesRemoved(devices: Array<out AudioDeviceInfo>?) {
+                devices?.forEach { dev ->
+                    if (dev.isSink && isHeadsetType(dev.type)) {
+                        Log.w(TAG, "Output headset removed: ${dev.productName} (type=${dev.type})")
+                        if (!hasHeadsetOutput()) {
+                            onRoutedToSpeaker?.invoke()
                         }
                     }
                 }
             }
-            audioManager.registerAudioDeviceCallback(cb, null) // main thread
-            deviceCallback = cb
-            Log.i(TAG, "Registered AudioDeviceCallback (API ${Build.VERSION.SDK_INT})")
         }
+        audioManager.registerAudioDeviceCallback(cb, null)
+        deviceCallback = cb
+        Log.i(TAG, "Registered AudioDeviceCallback (API ${Build.VERSION.SDK_INT})")
     }
 
     /**
@@ -122,13 +127,18 @@ class AudioRouteMonitor(private val context: Context) {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            (deviceCallback as? AudioManager.AudioDeviceCallback)?.let {
-                audioManager.unregisterAudioDeviceCallback(it)
-            }
-            deviceCallback = null
+            unregisterDeviceCallback()
         }
 
         Log.i(TAG, "Route monitor stopped")
+    }
+
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun unregisterDeviceCallback() {
+        (deviceCallback as? AudioManager.AudioDeviceCallback)?.let {
+            audioManager.unregisterAudioDeviceCallback(it)
+        }
+        deviceCallback = null
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
