@@ -30,6 +30,7 @@
 #include "feedback_suppressor.h"
 #include "output_compressor.h"
 #include "adaptive_feedback_canceller.h"
+#include "spectral_contrast_enhancer.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -163,6 +164,16 @@ public:
     /// que hacer hard-clamp (menos THD). Solo atenúa. Activado por default.
     void setOutputCompressorEnabled(bool enabled) { oc_.setEnabled(enabled); }
     bool isOutputCompressorEnabled() const { return oc_.isEnabled(); }
+
+    /// Habilita/deshabilita el Spectral Contrast Enhancer (SCE).
+    /// Realza la voz atenuando los valles espectrales entre formantes.
+    /// Solo atenúa valles → nunca amplifica → sin riesgo para MPO.
+    void setSceEnabled(bool enabled) { sce_.setEnabled(enabled); }
+    bool isSceEnabled() const { return sce_.isEnabled(); }
+
+    /// Intensidad del SCE. factor ∈ [0, 1]: 0=bypass, 0.5=-6dB valles, 1=max.
+    void setSceFactor(float factor) { sce_.setFactor(factor); }
+    float getSceFactor() const { return sce_.getFactor(); }
 
     /// Ratio del compresor de salida (input:output). Default: 4.0 (4:1).
     void setOutputCompressorRatio(float ratio) { oc_.setRatio(ratio); }
@@ -345,6 +356,7 @@ private:
     // --- Módulos del pipeline ---
     AdaptiveFeedbackCanceller afc_; ///< AFC adaptativo (estima y resta feedback path)
     NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)
+    SpectralContrastEnhancer sce_; ///< SCE: realza voz atenuando valles (solo atenúa)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)

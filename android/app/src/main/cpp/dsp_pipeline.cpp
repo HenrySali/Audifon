@@ -77,6 +77,13 @@ void DspPipeline::init(const AudioConfig& config) {
     // El NR solo atenúa, así que esto no introduce riesgo de clipping.
     nr_.init(config.sampleRate);
 
+    // Inicializar SCE (Spectral Contrast Enhancer) — realza voz atenuando
+    // valles entre formantes. Solo atenúa. Deshabilitado por default; se
+    // activa desde Dart con setSceEnabled(true).
+    sce_.init(config.sampleRate);
+    sce_.setEnabled(true);   // Activado por default (mejora inteligibilidad)
+    sce_.setFactor(0.4f);    // Moderado: -4 dB en valles (conservador)
+
     // Inicializar TNR (Transient Noise Reducer) — para impulsos abruptos
     tnr_.init(config.sampleRate);
     tnr_.setEnabled(true); // Activado por default
@@ -329,6 +336,15 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
     // La protección contra overflow la provee el MPO (threshold 110 dB SPL = 0.316 lineal).
     // Adaptive EQ scaling fue eliminado: causaba doble atenuación con MPO y reducía
     // la amplificación prescrita innecesariamente (validado: audioXpress OTC DSP paper).
+
+    // ─── 3.5. Spectral Contrast Enhancement (SCE) ──────────────────────
+    // Atenúa valles entre formantes para que la voz "resalte" más sobre el
+    // ruido residual. Solo atenúa → no puede disparar el MPO ni amplificar
+    // ruido. Se inserta DESPUÉS del NR (que ya quitó el grueso del ruido)
+    // y ANTES del EQ (que amplifica la prescripción). Así el EQ amplifica
+    // una señal con mayor contraste voz/ruido.
+    sce_.process(buffer, blockSize);
+
     eq_.process(buffer, blockSize);
 
     // Métrica: nivel post-EQ + peak
