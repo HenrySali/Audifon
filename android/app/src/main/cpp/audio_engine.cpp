@@ -775,16 +775,15 @@ void AudioEngine::onErrorAfterClose(oboe::AudioStream *stream,
 
     // ─── PROTECCIÓN ANTI-SATURACIÓN AL PERDER EL STREAM ─────────────────
     // Cuando Oboe cierra el stream (BT desconectado, dispositivo removido),
-    // el motor va a intentar reconectar — probablemente al speaker del celu.
-    // MUTEAR INMEDIATAMENTE para que la reconexión no dispare ruido/saturación
-    // por el speaker con las ganancias calibradas para auricular (20-50 dB).
-    // El volumen se restaura solo si el usuario lo sube manualmente después.
-    pipeline_.setVolume(-20.0f);  // -20 dB = mute efectivo (mínimo del rango)
-    LOGW("Stream lost — volume set to -20 dB (mute) to prevent speaker saturation");
+    // NO reconectar automáticamente. Si reconectamos al speaker, el audio
+    // amplificado (20-50 dB de EQ) sale a todo volumen y satura/distorsiona.
+    // Mejor detener el motor y dejar que el usuario re-encienda manualmente
+    // cuando reconecte el auricular.
+    pipeline_.setVolume(-20.0f);  // Mute instantáneo (por si queda un bloque en cola)
+    running_.store(false, std::memory_order_release);
+    LOGW("Stream lost — engine STOPPED (no reconnection to prevent speaker saturation)");
 
-    reconnecting_.store(true, std::memory_order_release);
-    reconnectAttempts_.store(0, std::memory_order_release);
-    attemptReconnection();
+    // NO llamar attemptReconnection() — dejamos el motor parado.
 }
 
 void AudioEngine::attemptReconnection() {

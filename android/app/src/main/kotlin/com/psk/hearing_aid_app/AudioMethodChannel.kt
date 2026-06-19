@@ -81,11 +81,19 @@ class AudioMethodChannel(
     /** Monitor de ruta de audio: detecta caída a speaker al desconectar BT. */
     private val routeMonitor = AudioRouteMonitor(context).apply {
         onRoutedToSpeaker = {
-            Log.w(TAG, "Audio routed to speaker — applying safe volume to prevent saturation")
-            // Bajar el volumen a un nivel seguro para speaker inmediatamente.
-            nativeBridge.setVolume(AudioRouteMonitor.SAFE_SPEAKER_VOLUME_DB)
-            // Notificar a Dart para que la UI avise al usuario.
-            emitState("routed_to_speaker")
+            Log.w(TAG, "Audio routed to speaker — STOPPING engine to prevent saturation")
+            // DETENER el motor completamente. Bajar el volumen no alcanza
+            // porque el re-ruteo puede ser instantáneo y el audio amplificado
+            // (20-50 dB) sale por el speaker antes de que setVolume surta efecto.
+            // Parar el motor garantiza silencio absoluto inmediato.
+            nativeBridge.stop()
+            // Parar el foreground service también.
+            val serviceIntent = Intent(context, AudioForegroundService::class.java).apply {
+                action = AudioForegroundService.ACTION_STOP
+            }
+            context.startService(serviceIntent)
+            // Notificar a Dart para que la UI refleje que se apagó.
+            emitState("stopped_bt_disconnect")
         }
     }
 
