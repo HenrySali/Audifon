@@ -1389,6 +1389,14 @@ class AmplificationBloc
       try {
         await const MethodChannel('com.psk.hearing_aid/audio')
             .invokeMethod<bool>('initDnnDenoiser');
+        // FIX: habilitar el DNN con intensidad por defecto (0.6) al arrancar.
+        // Sin esto, el DNN queda inicializado pero en bypass (enabled=false)
+        // y el ruido no se filtra hasta que el usuario abra SmartSceneScreen.
+        await const MethodChannel('com.psk.hearing_aid/audio')
+            .invokeMethod<void>('setDnnEnabled', {'enabled': true});
+        final dnnIntensity =
+            _settingsRepository.dnnIntensity ?? 0.6;
+        await _audioBridge.setDnnIntensity(dnnIntensity);
       } catch (e, st) {
         developer.log(
           '_onStartAmplification: initDnnDenoiser falló: $e — la '
