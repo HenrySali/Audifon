@@ -101,17 +101,23 @@ jobs:
         run: |
           mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/oir-pro.apk
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: oir-pro-apk
-          path: build/app/outputs/flutter-apk/oir-pro.apk
+      # Upload deshabilitado: la cuota de artifacts de GitHub Free (500 MB)
+      # se llena rápido con APKs de ~60 MB. El APK queda en el Release
+      # (softprops/action-gh-release) que NO cuenta contra la cuota de
+      # artifacts. Si se necesita el APK como artifact, reactivar este step
+      # después de liberar espacio o upgrade de plan.
+      #
+      # - name: Upload APK artifact
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: oir-pro-apk
+      #     path: build/app/outputs/flutter-apk/oir-pro.apk
 
-      - name: Upload obfuscation symbols artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: oir-pro-debug-symbols
-          path: build/debug-info
+      # - name: Upload obfuscation symbols artifact
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: oir-pro-debug-symbols
+      #     path: build/debug-info
 
       - name: Create Release with APK
         uses: softprops/action-gh-release@v2
