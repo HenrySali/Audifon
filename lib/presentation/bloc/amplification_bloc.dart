@@ -744,6 +744,28 @@ class AmplificationBloc
       );
     }
 
+    // 1b) Inicializar y habilitar el DNN denoiser (GTCRN). El modelo se
+    //     carga desde assets y se habilita con la intensidad persistida.
+    //     Sin esto, el DNN queda en bypass permanente y el ruido no se
+    //     filtra. Tolerante: si falla, el motor sigue con NR Wiener.
+    try {
+      await const MethodChannel('com.psk.hearing_aid/audio')
+          .invokeMethod<bool>('initDnnDenoiser');
+      await const MethodChannel('com.psk.hearing_aid/audio')
+          .invokeMethod<void>('setDnnEnabled', {'enabled': true});
+      double dnnInt = 0.6;
+      try { dnnInt = _settingsRepository.dnnIntensity; } catch (_) {}
+      await _audioBridge.setDnnIntensity(dnnInt);
+    } catch (e, st) {
+      developer.log(
+        'Boot Phase 4: initDnnDenoiser falló: $e — NR Wiener activo.',
+        name: 'AmplificationBloc',
+        level: 800,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
     // 2) Emitir Active inicial ANTES de dispatchear el bundle. El
     //    handler `_onApplyBundle` reemitirá `Active` con `bundle:
     //    initialBundle` después de aplicar la cadena atómica al
