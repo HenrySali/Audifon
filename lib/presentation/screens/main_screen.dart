@@ -672,6 +672,9 @@ class _ActiveView extends StatelessWidget {
           // Slider de volumen (-20 a +10 dB) — Req 5.3
           _VolumeSlider(volumeDb: state.volumeDb),
           const SizedBox(height: 8),
+          // ─── Limpiador de ruido (DNN) en pantalla principal ─────────
+          const _DnnNoiseCleanerCard(),
+          const SizedBox(height: 8),
           // Slider de intensidad de amplificación (gainScale) — Req 13.5, 13.6, 13.11
           // Visible sólo en Modo Amplificador (el widget se auto-oculta en
           // Modo Diagnóstico vía BlocBuilder + operatingMode interno).
@@ -2900,6 +2903,146 @@ class _SceneChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+// =============================================================================
+// LIMPIADOR DE RUIDO (DNN) — Toggle + Slider en la pantalla principal
+// =============================================================================
+
+/// Control del filtro de ruido IA (DNN GTCRN) accesible directamente desde la
+/// pantalla principal. Toggle on/off + slider de intensidad. Autocontenido:
+/// maneja su estado interno y se comunica directo con el MethodChannel sin
+/// pasar por el AmplificationBloc (mismo patrón que _ConversationModeToggleCard).
+class _DnnNoiseCleanerCard extends StatefulWidget {
+  const _DnnNoiseCleanerCard();
+
+  @override
+  State<_DnnNoiseCleanerCard> createState() => _DnnNoiseCleanerCardState();
+}
+
+class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
+  static const _channel = MethodChannel('com.psk.hearing_aid/audio');
+
+  bool _enabled = true;
+  double _intensity = 0.6;
+
+  @override
+  void initState() {
+    super.initState();
+    // Leer el estado inicial del DNN desde el motor (best-effort).
+    _loadState();
+  }
+
+  Future<void> _loadState() async {
+    try {
+      final active = await _channel.invokeMethod<bool>('getDnnIsActive');
+      if (mounted && active != null) {
+        setState(() => _enabled = active);
+      }
+    } catch (_) {}
+    // Leer intensidad desde settings si está disponible.
+    try {
+      final bloc = context.read<AmplificationBloc>();
+      final intensity = bloc.settingsRepository.dnnIntensity;
+      if (mounted) setState(() => _intensity = intensity);
+    } catch (_) {}
+  }
+
+  Future<void> _setEnabled(bool enabled) async {
+    setState(() => _enabled = enabled);
+    try {
+      await _channel.invokeMethod<void>('setDnnEnabled', {'enabled': enabled});
+    } catch (_) {}
+  }
+
+  Future<void> _setIntensity(double value) async {
+    setState(() => _intensity = value);
+    try {
+      await _channel.invokeMethod<void>(
+        'setDnnIntensity',
+        {'intensity': value},
+      );
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final intensityPct = (_intensity * 100).round();
+    return Card(
+      color: const Color(0xFF16213e),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ─── Fila: Título + Toggle ─────────────────────────────────
+            Row(
+              children: [
+                const Icon(Icons.psychology, color: Colors.cyanAccent, size: 20),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Limpiador de ruido (IA)',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Switch(
+                  value: _enabled,
+                  onChanged: _setEnabled,
+                  activeColor: Colors.cyanAccent,
+                  inactiveThumbColor: Colors.white60,
+                  inactiveTrackColor: Colors.white12,
+                ),
+              ],
+            ),
+            // ─── Slider de intensidad ─────────────────────────────────
+            Opacity(
+              opacity: _enabled ? 1.0 : 0.4,
+              child: AbsorbPointer(
+                absorbing: !_enabled,
+                child: Row(
+                  children: [
+                    const Icon(Icons.tune, color: Colors.white60, size: 16),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'Fuerza',
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: _intensity,
+                        min: 0.0,
+                        max: 1.0,
+                        divisions: 20,
+                        label: '$intensityPct%',
+                        activeColor: Colors.cyanAccent,
+                        inactiveColor: Colors.white24,
+                        onChanged: (v) => setState(() => _intensity = v),
+                        onChangeEnd: _setIntensity,
+                      ),
+                    ),
+                    Text(
+                      '$intensityPct%',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
