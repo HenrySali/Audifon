@@ -1352,14 +1352,14 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
     const float userIntensity = intensity_.load(std::memory_order_acquire);
     const bool  vadActive     = voiceActive_.load(std::memory_order_acquire);
     const float voiceCap      = voiceCap_.load(std::memory_order_acquire);
-    // FIX: VAD cap deshabilitado — el VAD da falsos positivos en silencio
-    // (siempre vad=1) y reduce la intensidad efectiva del DNN a 0.70,
-    // haciendo que el filtro de ruido sea imperceptible. El modelo GTCRN
-    // ya preserva la voz internamente (su máscara espectral protege las
-    // frecuencias formánticas); el cap externo era redundante y con el
-    // VAD roto lo único que hacía era degradar la calidad del filtrado.
-    // Cuando se arregle el VAD, se puede re-habilitar esta línea.
-    const float target        = userIntensity;
+    // FIX artefactos musicales (ruido musical / "gargling"):
+    // Sin cap, el modelo GTCRN al 100% wet sobre-suprime las regiones espectrales
+    // de bajo nivel → genera ruido musical que suena PEOR que el ruido original.
+    // El VAD sigue roto (siempre vad=1), por eso no usamos la rampa asimétrica.
+    // Cap hard a 0.75: elimina el grueso del ruido ambiental sin alcanzar la zona
+    // de over-supresión. Cuando el VAD se corrija, volver a la rampa voiceActive_.
+    static constexpr float kMaxEffectiveIntensity = 0.75f;
+    const float target = std::min(userIntensity, kMaxEffectiveIntensity);
     (void)vadActive; (void)voiceCap; // suprimir warnings de unused
     // Pasos defensivos: si setInputSampleRate aún no corrió, los pasos son 0
     // y la rampa degenera en step instantáneo (effectiveIntensity_ salta a target).

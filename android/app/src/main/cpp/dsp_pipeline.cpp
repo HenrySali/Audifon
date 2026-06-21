@@ -169,7 +169,9 @@ void DspPipeline::init(const AudioConfig& config) {
 // Procesamiento principal
 // ─────────────────────────────────────────────────────────────────────────────
 
-void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevelDb) {
+void DspPipeline::processBlock(float* buffer, int blockSize,
+                               float externalLevelDb,
+                               bool  vadActive) {
     if (buffer == nullptr || blockSize <= 0) {
         return;
     }
@@ -261,25 +263,49 @@ void DspPipeline::processBlock(float* buffer, int blockSize, float externalLevel
         float estimatedSnr = EnvironmentClassifier::estimateSnrFromNr(
             sigEst, noiEst, kNrSubBands);
 
-        EnvironmentClass envClass = envClassifier_.update(inputLevelDb, estimatedSnr);
+        // Fase A — Causa B/E: usamos el VAD del SmartScene como entrada
+        // adicional al clasificador. El VAD vive en otro thread (audio
+        // callback del scene analyzer), pero la lectura del flag es un
+        // bool atómico cacheado en el último snapshot publicado, así que
+        // es seguro consumirlo desde acá. El clasificador usa este flag
+        // para:
+        //   1) bloquear bajadas a QUIET durante 1.5 s post-voz (mata el
+        //      flicker SPEECH↔QUIET por pausas naturales);
+        //   2) elevar el techo SPL admisible para SPEECH cuando hay voz
+        //      confirmada (no queremos que voz fuerte caiga en NOISE).
+        // Si autoClassifyEnabled_ se desactiva no leemos el VAD: ahorra
+        // un load atómico y mantiene el comportamiento "manual" puro.
+        EnvironmentClass envClass = envClassifier_.update(inputLevelDb,
+                                                          estimatedSnr,
+                                                          vadActive);
         int envClassInt = static_cast<int>(envClass);
 
-        // Si la clase cambió, actualizar NR y WDRC automáticamente
+        // Si la clase cambió, actualizar NR y WDRC automáticamente —
+        // pero NO si hay un preset Smart pinned (Fase B' / Causa C +
+        // pin manual). El clasificador sigue corriendo y publica la
+        // clase actual para la UI; sólo se evita machacar los targets
+        // del WDRC + NR que el usuario fijó al aplicar el preset.
         if (envClassInt != lastEnvClass_) {
             lastEnvClass_ = envClassInt;
 
-            // FIX Causa A (smart-scene-diagnostico-chasquido.md):
-            // ANTES: aquí se sustituía el knee, ratio y nrLevel directamente,
-            //        produciendo un escalón en un solo sample → CHASQUIDO.
-            // AHORA: solo fijamos los TARGETS. La rampa exponencial del WDRC
-            //        (kWdrcRampAlpha → ~200 ms) y el step discreto del NR
-            //        (kNrLevelStepBlocks → ~300 ms entre niveles) corren cada
-            //        bloque más abajo, antes de wdrc_.process().
-            EnvWdrcParams wdrcParams = envClassifier_.getRecommendedWdrcParams();
-            wdrcKneeTarget_  = wdrcParams.compressionKnee;
-            wdrcRatioTarget_ = wdrcParams.compressionRatio;
-            nrLevelTarget_   = envClassifier_.getRecommendedNrLevel();
-            nrLevelRampBlocksRemaining_ = kNrLevelInitialDelayBlocks;
+            if (!smartPresetPinned_.load(std::memory_order_acquire)) {
+                // FIX Causa A (smart-scene-diagnostico-chasquido.md):
+                // ANTES: aquí se sustituía el knee, ratio y nrLevel directamente,
+                //        produciendo un escalón en un solo sample → CHASQUIDO.
+                // AHORA: solo fijamos los TARGETS. La rampa exponencial del WDRC
+                //        (kWdrcRampAlpha → ~200 ms) y el step discreto del NR
+                //        (kNrLevelStepBlocks → ~300 ms entre niveles) corren cada
+                //        bloque más abajo, antes de wdrc_.process().
+                EnvWdrcParams wdrcParams = envClassifier_.getRecommendedWdrcParams();
+                wdrcKneeTarget_  = wdrcParams.compressionKnee;
+                wdrcRatioTarget_ = wdrcParams.compressionRatio;
+                nrLevelTarget_   = envClassifier_.getRecommendedNrLevel();
+                nrLevelRampBlocksRemaining_ = kNrLevelInitialDelayBlocks;
+            }
+            // Si está pinned, simplemente actualizamos lastEnvClass_ para
+            // que la UI vea la transición — pero NO tocamos los targets:
+            // los actuales (provenientes del preset Smart manual) se
+            // mantienen vigentes hasta que la UI desactive el pin.
         }
     }
 
@@ -488,6 +514,18 @@ void DspPipeline::setNrLevel(int level) {
     // Clamp al rango válido [0, 3]
     level = std::max(0, std::min(3, level));
     nr_.setLevel(level);
+
+    // Sincronizar el tracker de la rampa por escena: cuando un consumer
+    // externo (preset Smart manual, modo MHL/Música, override del usuario
+    // desde Configuración avanzada) fija el nivel directamente, alineamos
+    // `currentNrLevel_` y `nrLevelTarget_` para que el clasificador
+    // automático parta del valor real. Sin esto, cuando el clasificador
+    // detecta el próximo cambio de clase, su rampa empieza a moverse
+    // desde el nivel viejo guardado internamente y termina pasando por
+    // niveles intermedios que ya no corresponden.
+    currentNrLevel_                = level;
+    nrLevelTarget_                 = level;
+    nrLevelRampBlocksRemaining_    = 0;
 }
 
 void DspPipeline::setSplOffset(float offset) {

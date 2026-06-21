@@ -128,6 +128,10 @@ public:
 
     // ─── Environment Classifier (thread-safe) ───────────────────────────
     void setAutoClassifyEnabled(bool enabled);
+    /// Pin del preset Smart Scene aplicado manualmente — ver
+    /// DspPipeline::setSmartPresetPinned() para la semántica completa.
+    /// Wrapper directo al pipeline subyacente.
+    void setSmartPresetPinned(bool pinned);
     int getCurrentEnvironmentClass() const;
 
     // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────

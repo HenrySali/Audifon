@@ -472,6 +472,35 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAutoClassifyEnabled(
     g_engine->setAutoClassifyEnabled(enabled);
 }
 
+/// Pin del preset Smart Scene aplicado manualmente.
+///
+/// Cuando es true, el clasificador automático sigue corriendo y publica
+/// la clase actual en `nativeGetCurrentEnvironmentClass()`, pero NO
+/// machaca los targets del WDRC + NR cuando cambia la escena. El preset
+/// Smart manual (NR + WDRC + EQ) se mantiene vigente hasta que la UI
+/// libere el pin (false). Esto resuelve la Causa C documentada en
+/// docs/smart-scene-diagnostico-chasquido.md.
+///
+/// Thread-safe: store atómico release en DspPipeline::smartPresetPinned_.
+/// Si el motor no está activo (g_running=false) la llamada se ignora —
+/// el siguiente nativeStart inicia con pin=false, y la UI puede volver a
+/// llamar este setter después del start.
+///
+/// @param pinned true para fijar el preset manual, false para que el
+///               clasificador automático vuelva a controlar WDRC + NR.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetSmartPresetPinned(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean pinned) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setSmartPresetPinned(pinned);
+}
+
 /// Actualiza el offset de calibración SPL (dBFS → dB SPL).
 /// Thread-safe: usa std::atomic internamente.
 ///

@@ -205,6 +205,7 @@ class AudioMethodChannel(
                 "updateWdrcParams" -> handleUpdateWdrcParams(call, result)
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
                 "updateAutoClassify" -> handleUpdateAutoClassify(call, result)
+                "setSmartPresetPinned" -> handleSetSmartPresetPinned(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
                 "setMpoThresholdDbSpl" -> handleSetMpoThresholdDbSpl(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
@@ -743,6 +744,26 @@ class AudioMethodChannel(
             ?: return result.error("INVALID_ARGS", "Missing 'enabled' argument", null)
 
         nativeBridge.setAutoClassifyEnabled(enabled)
+        result.success(null)
+    }
+
+    /**
+     * Pin del preset Smart Scene aplicado manualmente.
+     *
+     * Cuando es true, el clasificador automático sigue corriendo y publica
+     * la clase actual en `getCurrentEnvironmentClass()`, pero NO machaca
+     * los targets del WDRC + NR cuando cambia la escena. El preset Smart
+     * manual (NR + WDRC + EQ) se mantiene vigente hasta que la UI libere
+     * el pin (false). Resuelve la Causa C documentada en
+     * docs/smart-scene-diagnostico-chasquido.md.
+     *
+     * Argumentos: { "pinned": Boolean }
+     */
+    private fun handleSetSmartPresetPinned(call: MethodCall, result: MethodChannel.Result) {
+        val pinned = call.argument<Boolean>("pinned")
+            ?: return result.error("INVALID_ARGS", "Missing 'pinned' argument", null)
+
+        nativeBridge.setSmartPresetPinned(pinned)
         result.success(null)
     }
 

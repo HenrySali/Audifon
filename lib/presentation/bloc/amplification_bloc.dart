@@ -1504,6 +1504,27 @@ class AmplificationBloc
     try {
       final presetName = event.presetName ?? 'Custom';
 
+      // FIX Causa B' (smart-scene-diagnostico-chasquido.md):
+      // Si el preset NO viene de Smart Scene (no empieza con "SmartScene"),
+      // liberamos el pin del preset Smart en el motor. Esto permite que
+      // el clasificador automático retome el control del WDRC + NR
+      // automáticamente cuando el usuario cambia a un preset custom o
+      // factory tras haber aplicado uno Smart. Sin esto, el pin quedaba
+      // pegado y el preset nuevo se mezclaba con los WDRC/NR fijados
+      // por el Smart anterior.
+      // Tolerante a fallos del bridge.
+      if (!presetName.startsWith('SmartScene')) {
+        try {
+          await const MethodChannel('com.psk.hearing_aid/audio')
+              .invokeMethod<void>(
+            'setSmartPresetPinned',
+            <String, dynamic>{'pinned': false},
+          );
+        } catch (_) {
+          // No bloquear el flujo del preset por un fallo del bridge.
+        }
+      }
+
       // 1. Persistir el preset SIEMPRE (independiente del estado).
       await _settingsRepository.setLastEqPreset({
         'name': presetName,
@@ -4321,8 +4342,9 @@ class AmplificationBloc
     );
   }
 
-  /// Cancela el polling 1 Hz, apaga el clasificador C++, y restaura la
-  /// intensidad de DNN del usuario (uncap). Idempotente.
+  /// Cancela el polling 1 Hz, apaga el clasificador C++, libera el pin
+  /// del preset Smart, y restaura la intensidad de DNN del usuario
+  /// (uncap). Idempotente.
   void _stopSmartPolling() {
     _smartPollTimer?.cancel();
     _smartPollTimer = null;
@@ -4331,6 +4353,16 @@ class AmplificationBloc
       try {
         await const MethodChannel('com.psk.hearing_aid/audio')
             .invokeMethod<void>('updateAutoClassify', {'enabled': false});
+      } catch (_) { /* tolerante */ }
+      // FIX Causa B' (smart-scene-diagnostico-chasquido.md): liberar el
+      // pin para que el clasificador automático del próximo encendido
+      // arranque limpio (sin un pin stale del Smart anterior).
+      try {
+        await const MethodChannel('com.psk.hearing_aid/audio')
+            .invokeMethod<void>(
+          'setSmartPresetPinned',
+          <String, dynamic>{'pinned': false},
+        );
       } catch (_) { /* tolerante */ }
       await _restoreUserDnnIntensity();
     }();

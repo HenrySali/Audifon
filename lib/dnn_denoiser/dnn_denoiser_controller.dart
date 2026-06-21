@@ -42,7 +42,7 @@ class DnnDenoiserController {
 
   // ─── Defaults conservadores ──────────────────────────────────────────
   static const bool _defaultEnabled = false;
-  static const double _defaultIntensity = 1.0;
+  static const double _defaultIntensity = 0.65;  // 0.65 evita artefactos; cap C++ a 0.75
 
   /// Cliente del MethodChannel (inyectable para tests).
   final MethodChannel _channel;

@@ -49,7 +49,20 @@ static constexpr int kEnvHoldBlocks = 1250;
 /// Recalibrado (FIX clasificador, splOffset=93 dB del mic celular): un
 /// ambiente tranquilo ronda 40-48 dB SPL; la voz normal ~60-65 dB SPL queda
 /// claramente por encima. Antes 45 dB SPL.
-static constexpr float kEnvLevelQuietThreshold = 48.0f;
+///
+/// HISTÉRESIS QUIET (Fase A — Causa B del doc smart-scene-diagnostico):
+/// Antes había un solo umbral fijo 48 dB SPL → cualquier respiración o
+/// pausa breve durante un enunciado tiraba el smoothedLevel debajo de 48
+/// → cambio a QUIET → al volver la voz: cambio a SPEECH → chasquido + 2
+/// transiciones por turno conversacional. Ahora se separan:
+///   - kEnvLevelQuietEnter: para ENTRAR a QUIET el nivel debe caer por
+///     debajo de 44 dB SPL (más estricto que antes).
+///   - kEnvLevelQuietExit:  para SALIR de QUIET basta superar 49 dB SPL
+///     (igual al threshold viejo + 1 dB de margen).
+/// Banda muerta de 5 dB → mata el flicker SPEECH↔QUIET por pausas.
+static constexpr float kEnvLevelQuietThreshold = 48.0f; // legacy alias
+static constexpr float kEnvLevelQuietEnter     = 44.0f;
+static constexpr float kEnvLevelQuietExit      = 49.0f;
 
 /// Umbral de nivel máximo para clasificar como habla (dB SPL).
 /// Recalibrado: con el SNR real (razón señal/ruido del NR) el discriminador
@@ -132,8 +145,23 @@ public:
     ///
     /// @param inputLevelDbSpl Nivel de entrada RMS en dB SPL [0, 120]
     /// @param estimatedSnrDb SNR estimado en dB [-20, 40]
+    /// @param vadActive   Voz humana confirmada por el SmartScene VAD en
+    ///                    el bloque actual. Default false para preservar
+    ///                    backward-compat con callers que aún no pasan
+    ///                    este flag (paciente / V3 lo recibirán al clonar
+    ///                    el motor).
+    ///                    Cuando es true:
+    ///                      - bloquea cualquier transición a QUIET durante
+    ///                        kVoiceMemoryBlocks bloques (~1.5 s) post-voz,
+    ///                        eliminando el flicker QUIET↔SPEECH causado
+    ///                        por las pausas inter-silábicas naturales del
+    ///                        habla;
+    ///                      - facilita el onset SPEECH (relaja el techo
+    ///                        de nivel implícito por kEnvLevelSpeechMax).
     /// @return Clasificación actual del entorno
-    EnvironmentClass update(float inputLevelDbSpl, float estimatedSnrDb);
+    EnvironmentClass update(float inputLevelDbSpl,
+                            float estimatedSnrDb,
+                            bool  vadActive = false);
 
     /// Obtiene la clasificación actual (thread-safe, lectura atómica).
     /// @return Clase de entorno actual (0-3)
@@ -174,6 +202,18 @@ private:
     float smoothedSnrDb_ = 0.0f;      ///< SNR suavizado EMA (dB)
     int holdCounter_ = 0;             ///< Bloques restantes en hold
     EnvironmentClass prevClass_ = EnvironmentClass::QUIET;
+
+    // Memoria de voz reciente (Fase A — Causa B): contador de bloques
+    // restantes durante los cuales NO bajamos a QUIET. Se recarga a
+    // kVoiceMemoryBlocks cada vez que update() recibe vadActive=true.
+    // 1.5 s ≈ 375 bloques @ 4 ms — más largo que la pausa promedio
+    // entre frases (~700 ms) hubiera generado falsos QUIET muy seguido,
+    // pero más corto que ~3 s (riesgo de quedar pegado en SPEECH cuando
+    // la persona termina de hablar). Validado en literature de pediatric
+    // amplification: la "extensive smoothing progression" de Phonak Sky
+    // funciona en este orden de magnitud.
+    static constexpr int kVoiceMemoryBlocks = 375;
+    int voiceMemoryCounter_ = 0;
 
     // --- Estado publicado (legible desde cualquier hilo) ---
     std::atomic<int> currentClass_{static_cast<int>(EnvironmentClass::QUIET)};

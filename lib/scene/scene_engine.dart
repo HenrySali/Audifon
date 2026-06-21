@@ -313,6 +313,29 @@ class SceneEngine {
     required AmplificationBloc bloc,
   }) async {
     final preset = result.preset;
+
+    // FIX Causa C/B' (smart-scene-diagnostico-chasquido.md):
+    // ANTES de despachar el preset, fijamos el "pin" del preset Smart en
+    // el motor nativo. Mientras el pin esté activo, el clasificador
+    // automático SIGUE corriendo (publica la clase actual para la UI)
+    // pero NO machaca los targets del WDRC + NR cuando cambia la escena.
+    // El preset Smart manual queda firme hasta que la UI:
+    //   - desactive Smart Scene (libera el pin desde
+    //     AmplificationBloc._stopSmartPolling),
+    //   - aplique un preset distinto que no provenga de Smart Scene
+    //     (libera el pin desde _onUpdateEqGains cuando el presetName no
+    //     empieza con "SmartScene").
+    // Tolerante a fallos del bridge: si falla, el preset igual se aplica
+    // (la UI lo verá), pero el clasificador automático puede pisarlo.
+    try {
+      await _channel.invokeMethod<void>(
+        'setSmartPresetPinned',
+        <String, dynamic>{'pinned': true},
+      );
+    } catch (_) {
+      // Persistencia no bloquea el apply; loguea pero sigue.
+    }
+
     bloc.add(UpdateEqGains(gains: preset.gains, presetName: preset.name));
 
     // FIX Causa C (smart-scene-diagnostico-chasquido.md):

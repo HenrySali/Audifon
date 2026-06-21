@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data' show ByteData;
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:hive/hive.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -12,6 +14,18 @@ import '../../domain/repositories/qc_audit_repository.dart';
 /// Documentado en Req 15.14: "operador, fecha, equipo de medición,
 /// audiogramas probados, tabla de mediciones, pass/fail final".
 const String qcAuditTrailBoxName = 'audit_trail_box';
+
+/// Path del asset Regular de la fuente Unicode usada en el PDF.
+///
+/// Roboto está declarado bajo `flutter.fonts` en `pubspec.yaml`, lo que
+/// permite cargarlo con `rootBundle.load(...)`. Se usa Roboto en vez de
+/// la Helvetica por defecto del PDF estándar porque Helvetica es Type1
+/// sin soporte Unicode — los acentos del español (á é í ó ú ñ ¿ ¡) se
+/// renderizan como `?` o cuadrados vacíos. Roboto soporta Latin-1 y
+/// Latin Extended-A completos. Licencia Apache-2.0
+/// (https://github.com/googlefonts/roboto-2/blob/main/LICENSE).
+const String _qcPdfFontRegularAsset = 'assets/fonts/Roboto-Regular.ttf';
+const String _qcPdfFontBoldAsset = 'assets/fonts/Roboto-Bold.ttf';
 
 /// Implementación Hive + `package:pdf` del repositorio de auditoría QC
 /// (tarea 15.3 de `audiogram-driven-presets`).
@@ -81,18 +95,44 @@ class QcAuditRepositoryImpl implements QcAuditRepository {
 
   // ─── PDF generation ────────────────────────────────────────────────────
 
+  /// Carga las TTFs de Roboto desde el bundle. Se inyecta como callback
+  /// en los tests para evitar tocar `rootBundle` (que sin
+  /// `TestWidgetsFlutterBinding` no está disponible).
+  ///
+  /// Cuando el caller no provee un loader, se usa `rootBundle.load(...)`.
+  /// El loader devuelve `(regularBytes, boldBytes)` ya como `ByteData`.
+  static Future<(ByteData, ByteData)> _defaultFontLoader() async {
+    final regular = await rootBundle.load(_qcPdfFontRegularAsset);
+    final bold = await rootBundle.load(_qcPdfFontBoldAsset);
+    return (regular, bold);
+  }
+
+  /// Loader inyectable de fuentes para los tests. Por defecto usa
+  /// `rootBundle.load(...)`. Los tests pueden pasar una versión que lea
+  /// las TTFs desde disco directamente (ver
+  /// `test/data/repositories/qc_audit_repository_impl_test.dart`).
+  Future<(ByteData, ByteData)> Function() fontLoader = _defaultFontLoader;
+
   @override
   Future<List<int>> generatePdf(QcAuditRecord record) async {
+    final (regularData, boldData) = await fontLoader();
+    final theme = pw.ThemeData.withFont(
+      base: pw.Font.ttf(regularData),
+      bold: pw.Font.ttf(boldData),
+    );
+
     final doc = pw.Document(
       title: 'QC Loopback — ${record.appVersion}',
       author: record.operator,
       subject: 'Audiogram-driven presets — Tramo 3 (Prescription → Hearing aid)',
+      theme: theme,
     );
 
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(28),
+        theme: theme,
         build: (pw.Context ctx) => <pw.Widget>[
           _buildPdfHeader(record),
           pw.SizedBox(height: 12),

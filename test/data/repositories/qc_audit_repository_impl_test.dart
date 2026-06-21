@@ -8,18 +8,37 @@
 ///   - Generación de PDF: bytes != null, length > 0 y magic header
 ///     `%PDF-` (RFC 8118 / ISO 32000-1 §7.5.2 — todo PDF válido empieza
 ///     con esa firma).
+///   - Smoke test Unicode: nombres con acentos del español
+///     ("José Núñez", "María Ángel") generan un PDF válido sin
+///     fallar el render. El test inyecta un `fontLoader` que lee la
+///     TTF de Roboto desde disco para evitar `rootBundle` (que no está
+///     disponible sin `TestWidgetsFlutterBinding`).
 ///
 /// Hive se inicializa contra un directorio temporal por test para
 /// aislamiento entre runs.
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 
 import 'package:hearing_aid_app/data/repositories/qc_audit_repository_impl.dart';
 import 'package:hearing_aid_app/domain/entities/qc_audit_record.dart';
+
+/// Lee las TTFs de Roboto desde disco (relativo al package root, que es
+/// el cwd cuando corre `flutter test`). Reemplaza `rootBundle.load(...)`
+/// para los tests porque sin un `TestWidgetsFlutterBinding` instalado
+/// `rootBundle` no resuelve assets.
+Future<(ByteData, ByteData)> _diskFontLoader() async {
+  final reg = await File('assets/fonts/Roboto-Regular.ttf').readAsBytes();
+  final bld = await File('assets/fonts/Roboto-Bold.ttf').readAsBytes();
+  return (
+    ByteData.view(Uint8List.fromList(reg).buffer),
+    ByteData.view(Uint8List.fromList(bld).buffer),
+  );
+}
 
 QcAuditRecord _buildSampleRecord({
   DateTime? timestamp,
@@ -75,6 +94,9 @@ void main() {
     Hive.init(tempDir.path);
     box = await Hive.openBox<dynamic>(qcAuditTrailBoxName);
     repo = QcAuditRepositoryImpl(box);
+    // Inyectamos un loader que lee Roboto desde disco para no depender
+    // de `rootBundle` (que requiere `TestWidgetsFlutterBinding`).
+    repo.fontLoader = _diskFontLoader;
   });
 
   tearDown(() async {
@@ -247,5 +269,60 @@ void main() {
       expect(bytes[0], equals(0x25));
       expect(bytes[4], equals(0x2D));
     });
+
+    test(
+      'generatePdf renderiza acentos del español sin romper el PDF '
+      '(smoke test Unicode con Roboto)',
+      () async {
+        // Forzamos el peor caso: nombres y notas con todos los
+        // diacríticos comunes del español. Con Helvetica (default sin
+        // Unicode) `package:pdf` lanza `Helvetica has no Unicode
+        // support` o renderiza cuadrados; con Roboto debe pasar limpio.
+        final unicodeRecord = QcAuditRecord.compute(
+          timestamp: DateTime.utc(2026, 5, 12, 10, 30, 45, 123),
+          operator: 'José Núñez',
+          operatorCertification: 'MN 5678 — María Ángel',
+          appVersion: '1.4.2',
+          appCommitHash: 'a1b2c3d',
+          hearingAidModel: 'PSK Mobile v1 — ñoño',
+          hearingAidSerial: 'PSK-Ä-0001',
+          hearingAidFirmware: 'fw-3.2.1',
+          micModel: 'GRAS 40AG ¡!',
+          micSerial: 'MIC-9876',
+          micCalibrationDate: DateTime.utc(2026, 1, 15),
+          couplerModel: 'Acoplador 2 cm³ (¿IEC?)',
+          splMeterModel: 'B&K 2270',
+          splMeterSerial: 'BK-5555',
+          measurements: <QcMeasurement>[
+            QcMeasurement.compute(
+              audiogramName: 'Bisgaard Ñ4',
+              frequencyHz: 1000,
+              inputLevelDbSpl: 65.0,
+              expectedDbSpl: 75.0,
+              measuredDbSpl: 76.5,
+            ),
+          ],
+          notes: 'áéíóú ñ ÁÉÍÓÚ Ñ ¿? ¡! — render Unicode OK.',
+        );
+
+        final bytes = await repo.generatePdf(unicodeRecord);
+
+        // Magic header `%PDF-` debe seguir intacto.
+        expect(bytes.length, greaterThan(0));
+        expect(bytes[0], equals(0x25));
+        expect(bytes[1], equals(0x50));
+        expect(bytes[2], equals(0x44));
+        expect(bytes[3], equals(0x46));
+        expect(bytes[4], equals(0x2D));
+        // El PDF debe terminar con `%%EOF` (ISO 32000-1 §7.5.5). Esto
+        // garantiza que el render llegó hasta el final y no abortó a
+        // mitad cuando topó con el primer codepoint > 0x7F.
+        final tail = String.fromCharCodes(
+          bytes.sublist(bytes.length - 6),
+        );
+        expect(tail.contains('%%EOF'), isTrue,
+            reason: 'PDF debe terminar con %%EOF (ISO 32000-1 §7.5.5)');
+      },
+    );
   });
 }

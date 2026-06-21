@@ -191,6 +191,27 @@ class NativeAudioBridge {
     }
 
     /**
+     * Pin del preset Smart Scene aplicado manualmente.
+     *
+     * Cuando es true, el clasificador automático sigue corriendo y
+     * publica la clase actual en `getCurrentEnvironmentClass()`, pero
+     * NO machaca los targets del WDRC + NR cuando cambia la escena.
+     * El preset Smart manual (NR + WDRC + EQ) se mantiene vigente
+     * hasta que la UI libere el pin (false). Resuelve la Causa C
+     * documentada en docs/smart-scene-diagnostico-chasquido.md.
+     *
+     * Thread-safe, puede llamarse desde cualquier hilo. Si el motor
+     * no está activo, la llamada se ignora silenciosamente.
+     *
+     * @param pinned true para fijar el preset manual, false para que
+     *               el clasificador automático vuelva a controlar
+     *               WDRC + NR.
+     */
+    fun setSmartPresetPinned(pinned: Boolean) {
+        nativeSetSmartPresetPinned(pinned)
+    }
+
+    /**
      * Actualiza el offset de calibración SPL.
      * Thread-safe, puede llamarse desde cualquier hilo.
      *
@@ -292,6 +313,8 @@ class NativeAudioBridge {
     private external fun nativeSetNrLevel(level: Int)
 
     private external fun nativeSetAutoClassifyEnabled(enabled: Boolean)
+
+    private external fun nativeSetSmartPresetPinned(pinned: Boolean)
 
     private external fun nativeSetSplOffset(offset: Float)
 

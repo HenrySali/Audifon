@@ -93,7 +93,15 @@ public:
     /// @param externalLevelDb Nivel pre-DNN en dB SPL ≥ 0 para que lo use el
     ///        WDRC, o -1.0f (default) para medir localmente. Valores NaN/Inf
     ///        se tratan como sentinel y disparan medición local.
-    void processBlock(float* buffer, int blockSize, float externalLevelDb = -1.0f);
+    /// @param vadActive Voz humana confirmada por el SmartScene VAD del
+    ///        AudioEngine. Default false. El clasificador de entorno usa
+    ///        este flag como memoria de voz reciente para evitar el flicker
+    ///        SPEECH↔QUIET por las pausas naturales del habla. Si el caller
+    ///        no tiene un VAD disponible (paciente / V3 cuando aún no
+    ///        clonaron el motor), pasar false da el comportamiento previo.
+    void processBlock(float* buffer, int blockSize,
+                      float externalLevelDb = -1.0f,
+                      bool  vadActive       = false);
 
     // --- Métodos de actualización de parámetros (thread-safe, lock-free) ---
 
@@ -243,6 +251,39 @@ public:
     /// @param enabled true para habilitar, false para deshabilitar
     void setAutoClassifyEnabled(bool enabled);
 
+    /// Pin del preset Smart Scene aplicado manualmente.
+    ///
+    /// Cuando el usuario aplica un preset Smart desde la UI, NR + WDRC + EQ
+    /// quedan configurados con valores específicos para la escena detectada.
+    /// Sin pin, el clasificador automático sigue corriendo y, en cada cambio
+    /// de clase, machaca los targets del WDRC y NR — el preset queda "a
+    /// medias" y la voz se desbalancea aleatoriamente (síntoma reportado en
+    /// docs/smart-scene-diagnostico-chasquido.md, Causa C).
+    ///
+    /// Con `pinned=true`:
+    ///   - El clasificador SIGUE corriendo y publica la clase actual en
+    ///     `getCurrentEnvironmentClass()` (la UI puede mostrar "Aula",
+    ///     "Calle", etc.).
+    ///   - Los targets del WDRC + NR NO se actualizan al cambiar de clase
+    ///     mientras el pin esté activo. El preset Smart que el usuario
+    ///     aplicó manualmente se mantiene.
+    ///
+    /// Liberación esperada del pin desde Dart:
+    ///   - Apagar Smart Scene desde la UI.
+    ///   - Aplicar un preset distinto (custom, factory) que no provenga
+    ///     de Smart Scene.
+    ///   - Iniciar una nueva sesión de detección Smart Scene.
+    ///
+    /// Thread-safe: store atómico release.
+    void setSmartPresetPinned(bool pinned) {
+        smartPresetPinned_.store(pinned, std::memory_order_release);
+    }
+
+    /// True si actualmente hay un preset Smart Scene aplicado manualmente.
+    bool isSmartPresetPinned() const {
+        return smartPresetPinned_.load(std::memory_order_acquire);
+    }
+
     /// Obtiene la clase de entorno actual (thread-safe).
     /// @return 0=QUIET, 1=SPEECH, 2=SPEECH_IN_NOISE, 3=NOISE
     int getCurrentEnvironmentClass() const;
@@ -377,6 +418,11 @@ private:
     /// como min(linear(threshold,offset), 0.85).
     std::atomic<float> mpoThresholdDbSpl_{std::numeric_limits<float>::quiet_NaN()};
     std::atomic<bool> autoClassifyEnabled_{true}; ///< Clasificación automática habilitada
+    /// Pin del preset Smart Scene aplicado manualmente. Ver
+    /// setSmartPresetPinned() para la semántica completa. Default false:
+    /// retrocompat — si nadie llama al setter, el comportamiento es el
+    /// mismo que antes de Fase B' (clasificador automático libre).
+    std::atomic<bool> smartPresetPinned_{false};
     std::atomic<bool> nrBypassed_{false};     ///< true: saltear NR Wiener (un denoiser externo lo reemplaza)
 
     // --- Estado de salida (legible desde cualquier hilo) ---

@@ -66,6 +66,7 @@ void EnvironmentClassifier::reset() {
     smoothedLevelDb_ = 0.0f;
     smoothedSnrDb_ = 0.0f;
     holdCounter_ = 0;
+    voiceMemoryCounter_ = 0;
     prevClass_ = EnvironmentClass::QUIET;
     currentClass_.store(static_cast<int>(EnvironmentClass::QUIET),
                         std::memory_order_relaxed);
@@ -76,7 +77,19 @@ void EnvironmentClassifier::reset() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
-                                               float estimatedSnrDb) {
+                                               float estimatedSnrDb,
+                                               bool  vadActive) {
+    // Step 0: memoria de voz — recarga si el VAD del SmartScene confirma
+    // voz en el bloque actual; en otro caso, decae monotónicamente. Mientras
+    // voiceMemoryCounter_ > 0, ningún path de la decisión puede transitar
+    // a QUIET (eliminamos el flicker SPEECH↔QUIET por pausas naturales).
+    if (vadActive) {
+        voiceMemoryCounter_ = kVoiceMemoryBlocks;
+    } else if (voiceMemoryCounter_ > 0) {
+        --voiceMemoryCounter_;
+    }
+    const bool voiceRecent = voiceMemoryCounter_ > 0;
+
     // Step 1: Suavizado EMA del nivel y SNR
     smoothedLevelDb_ += kEnvAlpha * (inputLevelDbSpl - smoothedLevelDb_);
     smoothedSnrDb_ += kEnvAlpha * (estimatedSnrDb - smoothedSnrDb_);
@@ -86,6 +99,16 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     // Para ENTRAR a SPEECH: SNR debe ser > kEnvSnrSpeechEnter (6 dB)
     // Para SALIR de SPEECH: SNR debe caer < kEnvSnrSpeechExit (4 dB)
     // Zona muerta [4, 6] dB: mantiene el estado actual.
+    //
+    // Histéresis QUIET (Fase A — Causa B):
+    //   - ENTRAR a QUIET: level < 44 dB SPL (más estricto)
+    //   - SALIR de QUIET: level > 49 dB SPL
+    //   - Banda muerta de 5 dB → no oscila por respiración / pausa breve.
+    //
+    // Memoria de voz (vadActive en últimos kVoiceMemoryBlocks):
+    //   - voiceRecent=true bloquea CUALQUIER transición a QUIET. La voz
+    //     vuelve a aparecer tras la pausa y ya estamos en SPEECH (no
+    //     hubo flicker → no hubo chasquido).
     EnvironmentClass newClass;
     float level = smoothedLevelDb_;
     float snr = smoothedSnrDb_;
@@ -93,7 +116,12 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     EnvironmentClass current = static_cast<EnvironmentClass>(
         currentClass_.load(std::memory_order_relaxed));
 
-    if (level < kEnvLevelQuietThreshold) {
+    const bool inQuiet = (current == EnvironmentClass::QUIET);
+    const float quietBoundary = inQuiet ? kEnvLevelQuietExit
+                                        : kEnvLevelQuietEnter;
+    const bool levelSaysQuiet = (level < quietBoundary) && !voiceRecent;
+
+    if (levelSaysQuiet) {
         newClass = EnvironmentClass::QUIET;
     } else if (current == EnvironmentClass::SPEECH) {
         // Ya estamos en SPEECH — solo salir si SNR cae bajo el umbral de salida
@@ -104,8 +132,13 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
             newClass = EnvironmentClass::SPEECH; // mantener
         }
     } else if (current == EnvironmentClass::NOISE) {
-        // Ya estamos en NOISE — solo salir si SNR sube sobre el umbral de entrada
-        if (snr > kEnvSnrSpeechEnter && level <= kEnvLevelSpeechMax) {
+        // Ya estamos en NOISE — solo salir si SNR sube sobre el umbral de
+        // entrada. Cuando hay voz reciente confirmada por el VAD usamos
+        // el techo elevado (88 dB SPL) para que voz muy fuerte legítima
+        // no quede atascada en NOISE / SPEECH_IN_NOISE — caso típico:
+        // alguien habla cerca del mic del celular saturando el AGC.
+        const float speechCeil = voiceRecent ? 88.0f : kEnvLevelSpeechMax;
+        if (snr > kEnvSnrSpeechEnter && level <= speechCeil) {
             newClass = EnvironmentClass::SPEECH;
         } else if (snr > kEnvSnrSpeechExit) {
             newClass = EnvironmentClass::SPEECH_IN_NOISE;
@@ -113,8 +146,13 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
             newClass = EnvironmentClass::NOISE; // mantener
         }
     } else {
-        // SPEECH_IN_NOISE o estado inicial — usar umbrales normales
-        if (snr > kEnvSnrSpeechEnter && level <= kEnvLevelSpeechMax) {
+        // SPEECH_IN_NOISE o estado inicial — usar umbrales normales.
+        // Si vadActive (voz confirmada por SmartScene), permitimos
+        // promoción a SPEECH aunque el nivel esté por encima del techo
+        // habitual: la voz humana puede llegar a 80-85 dB SPL en hablas
+        // muy cercanas y sigue siendo SPEECH (no NOISE).
+        const float speechCeil = voiceRecent ? 88.0f : kEnvLevelSpeechMax;
+        if (snr > kEnvSnrSpeechEnter && level <= speechCeil) {
             newClass = EnvironmentClass::SPEECH;
         } else if (snr < kEnvSnrNoiseThreshold) {
             newClass = EnvironmentClass::NOISE;

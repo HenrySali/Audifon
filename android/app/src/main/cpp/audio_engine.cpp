@@ -375,6 +375,10 @@ void AudioEngine::setAutoClassifyEnabled(bool enabled) {
     pipeline_.setAutoClassifyEnabled(enabled);
 }
 
+void AudioEngine::setSmartPresetPinned(bool pinned) {
+    pipeline_.setSmartPresetPinned(pinned);
+}
+
 int AudioEngine::getCurrentEnvironmentClass() const {
     return pipeline_.getCurrentEnvironmentClass();
 }
@@ -647,7 +651,21 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         (dnnDenoiser_.isEnabled() && dnnAttenDb > 3.0f)
             ? postDnnLevelDb
             : lastPreDnnLevelDb_;
-    pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb);
+
+    // Fase A — Causa B/E (smart-scene-diagnostico-chasquido.md):
+    // Pasamos al pipeline el `voice_active` que el SceneAnalyzer publicó
+    // tras procesar el bloque ANTERIOR. Es la última información de VAD
+    // disponible en este punto del callback (el `sceneAnalyzer_.process()`
+    // que cubre el bloque actual corre unas líneas más abajo). Latencia
+    // de 1 bloque (≈5 ms a 48 kHz / 256 frames) — despreciable frente al
+    // hold del clasificador (5 s) y a la memoria de voz (1.5 s).
+    //
+    // El clasificador usa este flag para evitar bajadas espurias a QUIET
+    // por las pausas naturales del habla y para promover voz fuerte
+    // (≤ 88 dB SPL) a SPEECH en lugar de NOISE.
+    const bool vadFromLastBlock = sceneAnalyzer_.getVad().isVoiceActive();
+    pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb,
+                           vadFromLastBlock);
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
     sceneAnalyzer_.process(inPtr, numFrames);
