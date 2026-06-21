@@ -132,10 +132,7 @@ static constexpr int kDnnRingCapacity = 1024;
 /// energía de voz que el modelo atenúa, sin romper el invariante "DNN solo
 /// atenúa" (la mezcla solo cambia el peso entre dry y wet).
 /// Spec: dnn-voice-level-recovery (Paso 1).
-/// Subido 0.7→1.0: el VAD ya distingue correctamente ruido vs voz (fix DD-bias).
-/// El cap de 0.7 ya no es necesario como protección adicional y limitaba
-/// la atenuación efectiva del DNN incluso con vad=0.
-static constexpr float kDefaultVoiceCap = 1.0f;
+static constexpr float kDefaultVoiceCap = 0.7f;
 
 /// Constantes de la rampa asimétrica entre `intensity` del usuario y el cap.
 /// Attack rápido (40 ms) cuando aparece voz; release lento (300 ms) cuando
@@ -294,9 +291,7 @@ private:
     // Estado expuesto vía atomics (lectura desde getters, escritura desde setters/worker).
     std::atomic<bool>     enabled_{false};
     std::atomic<bool>     active_{false};
-    // Default 0.4 (spec dsp-chain-optimization R3.1): valor previo 1.0
-    // suprimía voz junto al ruido; 0.4 preserva mejor la inteligibilidad.
-    std::atomic<float>    intensity_{0.4f};
+    std::atomic<float>    intensity_{1.0f};
     std::atomic<uint64_t> processedFrames_{0};
     std::atomic<uint64_t> droppedFrames_{0};
     std::atomic<uint32_t> lastInferenceUs_{0};

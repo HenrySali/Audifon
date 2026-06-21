@@ -47,10 +47,6 @@
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
-#include <sys/resource.h>
-#endif
-
 #define DNN_LOG_TAG "DnnDenoiser"
 #define DNN_LOGI(...) __android_log_print(ANDROID_LOG_INFO,  DNN_LOG_TAG, __VA_ARGS__)
 #define DNN_LOGW(...) __android_log_print(ANDROID_LOG_WARN,  DNN_LOG_TAG, __VA_ARGS__)
@@ -1044,15 +1040,6 @@ struct DnnDenoiser::Impl {
     /// Loop principal del worker.
     void workerLoop() {
         DNN_LOGI("Worker thread started");
-#ifndef _WIN32
-        // Establecer prioridad alta para el worker thread (-16).
-        // Evita que Android mueva el hilo a cores LITTLE lentos bajo carga.
-        if (setpriority(PRIO_PROCESS, 0, -16) == 0) {
-            DNN_LOGI("Worker thread priority set to -16 successfully");
-        } else {
-            DNN_LOGW("Failed to set worker thread priority");
-        }
-#endif
         std::vector<float> hopBuf(kDnnHopSize, 0.0f);
 
         while (workerRun.load(std::memory_order_acquire)) {
@@ -1328,9 +1315,16 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
 
     if (underrun) {
         // El worker no alcanzó la tasa: salida = dry original (buffer no se toca).
-        // Reseteamos el crossfade a 0 para que, al recuperarse la tasa en bloques siguientes,
-        // la transición de vuelta a wet sea suave y sin clicks espectrales.
-        crossfadeGain_ = 0.0f;
+        // Avanzar el crossfade en cada sample.
+        for (int i = 0; i < blockSize; ++i) {
+            if (crossfadeGain_ < crossfadeTarget_) {
+                crossfadeGain_ = std::min(crossfadeTarget_,
+                                          crossfadeGain_ + kCrossfadeStep);
+            } else if (crossfadeGain_ > crossfadeTarget_) {
+                crossfadeGain_ = std::max(crossfadeTarget_,
+                                          crossfadeGain_ - kCrossfadeStep);
+            }
+        }
         // Si quedó wet parcial, descartarlo: ya no nos sirve (sale tarde).
         if (wetWritten > 0) {
             droppedFrames_.fetch_add(1, std::memory_order_relaxed);
@@ -1352,15 +1346,8 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
     const float userIntensity = intensity_.load(std::memory_order_acquire);
     const bool  vadActive     = voiceActive_.load(std::memory_order_acquire);
     const float voiceCap      = voiceCap_.load(std::memory_order_acquire);
-    // FIX artefactos musicales (ruido musical / "gargling"):
-    // Sin cap, el modelo GTCRN al 100% wet sobre-suprime las regiones espectrales
-    // de bajo nivel → genera ruido musical que suena PEOR que el ruido original.
-    // El VAD sigue roto (siempre vad=1), por eso no usamos la rampa asimétrica.
-    // Cap hard a 0.75: elimina el grueso del ruido ambiental sin alcanzar la zona
-    // de over-supresión. Cuando el VAD se corrija, volver a la rampa voiceActive_.
-    static constexpr float kMaxEffectiveIntensity = 0.75f;
-    const float target = std::min(userIntensity, kMaxEffectiveIntensity);
-    (void)vadActive; (void)voiceCap; // suprimir warnings de unused
+    const float target        = vadActive ? std::min(userIntensity, voiceCap)
+                                          : userIntensity;
     // Pasos defensivos: si setInputSampleRate aún no corrió, los pasos son 0
     // y la rampa degenera en step instantáneo (effectiveIntensity_ salta a target).
     const float stepAttack  = stepAttackPerSample_;
