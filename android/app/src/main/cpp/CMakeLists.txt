@@ -67,14 +67,11 @@ add_library(
 )
 
 # Enlazar con Oboe, librerías del sistema Android, y OnnxRuntime
-# NOTA: oboe::oboe_static incorpora Oboe directamente en libhearing_aid_dsp.so.
-# Con oboe::oboe (shared), el APK debug local no incluye liboboe.so → crash.
-# El CI (release) también funciona con static; no hay desventaja.
 target_link_libraries(
     hearing_aid_dsp
     android
     log
-    oboe::oboe_static
+    oboe::oboe
     onnxruntime
 )
 

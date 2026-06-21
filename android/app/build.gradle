@@ -111,6 +111,16 @@ android {
             )
         }
     }
+
+    // Fuerza que liboboe.so (Oboe via Prefab) quede empaquetado dentro
+    // del APK en todos los build types. Sin esto, el build debug produce
+    // un APK que no incluye liboboe.so → UnsatisfiedLinkError al arrancar.
+    // El build release del CI también se beneficia de esta regla.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 flutter {
