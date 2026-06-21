@@ -117,8 +117,8 @@ public:
     /// La diferencia con threshold low (0.30) sigue dando 20 puntos
     /// de banda muerta — suficiente para evitar flicker en transición
     /// silencio → voz → silencio.
-    static constexpr float kVoiceThresholdHigh = 0.50f;
-    static constexpr float kVoiceThresholdLow  = 0.30f;
+    static constexpr float kVoiceThresholdHigh = 0.62f;  // subido 0.50→0.62: ruido con armónicos daba score 0.44-0.72
+    static constexpr float kVoiceThresholdLow  = 0.42f;  // subido proporcional para mantener banda muerta 0.20
 
     /// Gate por nivel absoluto: por debajo de este SPL forzamos silencio.
     static constexpr float kMinSpeechDbSpl = 30.0f;
@@ -146,7 +146,7 @@ public:
     /// sobre tonos limpios pero rechazaba voz real continua. Lo bajamos
     /// a 0.18 — sigue por encima del piso de respiración (≤ 0.10) y de
     /// tipeo / golpes (≤ 0.05), pero acepta voz real.
-    static constexpr float kVoicingMinPitch = 0.18f;
+    static constexpr float kVoicingMinPitch = 0.30f;  // subido 0.18→0.30: ruido con armónicos daba pitch 0.15-0.55
 
     /// Frames consecutivos con pitch > kVoicingMinPitch necesarios.
     /// 5 frames * ~5-10 ms ≈ 25-50 ms — duración mínima de una vocal corta.
