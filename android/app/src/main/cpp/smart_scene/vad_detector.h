@@ -146,7 +146,7 @@ public:
     /// sobre tonos limpios pero rechazaba voz real continua. Lo bajamos
     /// a 0.18 — sigue por encima del piso de respiración (≤ 0.10) y de
     /// tipeo / golpes (≤ 0.05), pero acepta voz real.
-    static constexpr float kVoicingMinPitch = 0.30f;  // subido 0.18→0.30: ruido con armónicos daba pitch 0.15-0.55
+    static constexpr float kVoicingMinPitch = 0.40f;  // subido 0.30→0.40: motores/buses dan pitch 0.30-0.55
 
     /// Frames consecutivos con pitch > kVoicingMinPitch necesarios.
     /// 5 frames * ~5-10 ms ≈ 25-50 ms — duración mínima de una vocal corta.
@@ -217,8 +217,8 @@ public:
     /// Suma debe ser 1.0. LRT pesa más por ser el feature más robusto
     /// teóricamente. Pitch baja del 0.5 anterior al 0.25 — el pre-blanqueo
     /// lo hace utilizable pero ya no es el feature dominante.
-    static constexpr float kWeightLrt    = 0.35f;
-    static constexpr float kWeightPitch  = 0.25f;
+    static constexpr float kWeightLrt    = 0.45f;  // subido: feature más robusto contra ruido tonal
+    static constexpr float kWeightPitch  = 0.15f;  // bajado: motores dan pitch falso
     static constexpr float kWeightMidSnr = 0.25f;
     static constexpr float kWeightLtsd   = 0.15f;
 
