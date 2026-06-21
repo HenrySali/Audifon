@@ -148,6 +148,20 @@ public:
     /// tipeo / golpes (≤ 0.05), pero acepta voz real.
     static constexpr float kVoicingMinPitch = 0.40f;  // subido 0.30→0.40: motores/buses dan pitch 0.30-0.55
 
+    // ─── Fix DD-SNR bias: decay del xi_prev bajo ruido estacionario ────────
+    /// Cuando el espectro es altamente estacionario (ruido brownish/tráfico),
+    /// el estimador DD acumula un bias positivo permanente en xi_prev porque
+    /// el ruido coloreado tiene energía real en la banda vocal (0.75-5.5 kHz).
+    /// Esto infla el LRT artificialmente incluso sin voz.
+    ///
+    /// Fix basado en Gerkmann & Hendriks (EURASIP ASP 2019): cuando
+    /// stationarity_ supera kXiDecayStatThresh, aplicamos un decay suave
+    /// al xi_prev por frame. Factor 0.90 = tau ≈ 10 frames ≈ 50-100 ms.
+    /// Voz real mantiene stationarity_ < 0.75 (los formantes modulan la
+    /// energía espectral). Ruido brownish/tráfico da stationarity_ > 0.82.
+    static constexpr float kXiDecayStatThresh       = 0.80f;  ///< Umbral: cubre stat 0.819-0.875 de los logs.
+    static constexpr float kXiDecayStationaryAlpha  = 0.90f;  ///< Decay por frame: 10% de reducción de xi.
+
     /// Frames consecutivos con pitch > kVoicingMinPitch necesarios.
     /// 5 frames * ~5-10 ms ≈ 25-50 ms — duración mínima de una vocal corta.
     static constexpr int kVoicingMinFrames = 5;
@@ -212,6 +226,29 @@ public:
     /// proxy donde la masa espectral cae brevemente debajo del umbral.
     /// 0.10 = constante de tiempo ≈ 10 frames ≈ 50 ms a 5 ms/frame.
     static constexpr float kCentroidEmaAlpha = 0.10f;
+
+    // ─── Fix LRT bias: peso dinámico del LRT bajo ruido estacionario ──────
+    /// Cuando el a-priori SNR (xi_prev) está biased por ruido brownish/tráfico,
+    /// el LRT normalizado no es confiable. Este gate reduce su peso efectivo.
+    ///
+    /// Condición de activación: stationarity_ > kLrtStatGateThresh AND
+    /// pitchDensity_ < kLrtPitchDensityGate. Esto cubre los logs reales donde
+    /// stat=0.82-0.87 y density=0.03-0.17 con ruido puro.
+    ///
+    /// Inspirado en rVAD-fast (Tan 2020): aplica flatness post-denoising como
+    /// feature de voicing; aquí hacemos el equivalente sin denoising explícito.
+    static constexpr float kLrtStatGateThresh     = 0.80f;  ///< Activa cuando stat > 0.80 (ruido estacionario).
+    static constexpr float kLrtPitchDensityGate   = 0.15f;  ///< Desactiva si density > 0.15 (voz sostenida).
+    static constexpr float kLrtBiasedWeightFactor = 0.30f;  ///< Factor: 0.45 * 0.30 = 0.135 de peso efectivo.
+
+    // ─── Fix voiceLikelyByLrt: umbrales más altos + pitch density gate ─────
+    /// El bypass original (lrt>3.0 && midSnr>6.0) se activa con ruido brownish
+    /// que da lrt=1.0-7.1 y midSnr=4.5-9.6. Se sube y se agrega density gate.
+    /// Los datos de logs muestran density=0.03-0.17 para ruido puro;
+    /// voz real sostenida da density > 0.25 tras los primeros 200 ms.
+    static constexpr float kVoiceLikelyLrtThresh    = 4.0f;   ///< Subido de 3.0 → 4.0.
+    static constexpr float kVoiceLikelyMidSnrThresh = 9.0f;   ///< Subido de 6.0 → 9.0.
+    static constexpr float kVoiceLikelyPitchDensMin = 0.20f;  ///< NUEVO — density mínima para el bypass.
 
     // ─── Pesos de la combinación ────────────────────────────────────────
     /// Suma debe ser 1.0. LRT pesa más por ser el feature más robusto

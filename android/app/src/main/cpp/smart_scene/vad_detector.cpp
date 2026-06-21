@@ -164,7 +164,21 @@ void VadDetector::process(const float* samples,
     const float ltsdNorm = std::clamp((ltsdDb_ - 8.0f) / 12.0f, 0.0f, 1.0f);
     const float pitchNorm = pitchStrength_;
 
-    float instantaneous = kWeightLrt    * lrtNorm
+    // FIX B — Peso dinámico del LRT bajo ruido estacionario con baja density.
+    // Cuando el a-priori SNR (xi_prev) está biased por ruido brownish/tráfico,
+    // el LRT normalizado sube aunque no haya voz. Si el espectro es estacionario
+    // Y la pitch density es baja (sin voz sostenida), el LRT no es confiable:
+    // reducimos su peso efectivo.
+    // Esto es análogo al paso de flatness post-denoising de rVAD-fast (Tan 2020):
+    // bajo ruido brownish post-supresión, la flatness es alta porque no hay
+    // formantes; aquí lo proxiamos con stationarity_ + pitchDensity_.
+    const bool lrtBiased = (stationarity_  > kLrtStatGateThresh) &&
+                           (pitchDensity_  < kLrtPitchDensityGate);
+    const float effectiveLrtWeight = lrtBiased
+                                         ? (kWeightLrt * kLrtBiasedWeightFactor)
+                                         : kWeightLrt;
+
+    float instantaneous = effectiveLrtWeight * lrtNorm
                         + kWeightPitch  * pitchNorm
                         + kWeightMidSnr * msnrNorm
                         + kWeightLtsd   * ltsdNorm;
@@ -321,7 +335,9 @@ void VadDetector::process(const float* samples,
         // porque al inicio del primer enunciado el ringbuffer está vacío
         // y bloquearíamos los primeros 200 ms de voz tras el silencio.
         const bool voiceLikelyByLrt =
-            (lrtScore_ > 3.0f) && (midSnrDb_ > 6.0f);
+            (lrtScore_ > kVoiceLikelyLrtThresh) &&
+            (midSnrDb_ > kVoiceLikelyMidSnrThresh) &&
+            (pitchDensity_ >= kVoiceLikelyPitchDensMin);
         const bool onsetCondOk = voicingOk || voiceLikelyByLrt;
         if (smoothedScore_ > kVoiceThresholdHigh && onsetCondOk) {
             ++onsetSustain_;
@@ -440,6 +456,17 @@ void VadDetector::updateAprioriSnr(const float bandEnergyDb[kSceneNumBands],
         xiPrev_[b] = kAlphaDD * xiPrev_[b] + (1.0f - kAlphaDD) * instant;
         if (!std::isfinite(xiPrev_[b]) || xiPrev_[b] < 0.0f) {
             xiPrev_[b] = 0.0f;
+        }
+        // FIX A — Anti-bias DD-SNR bajo ruido estacionario coloreado.
+        // Con ruido brownish/tráfico (1/f²), el xi_prev acumula un bias
+        // positivo sostenido que infla el LRT artificialmente incluso sin voz.
+        // Cuando el espectro es altamente estacionario (stationarity_ > umbral),
+        // aplicamos un decay suave para que xi_prev converja hacia el piso real.
+        // Voz real mantiene stationarity_ < 0.75 por la modulación de formantes.
+        // Ref: Gerkmann & Hendriks, EURASIP J. Audio SP (2019) — bias del DD
+        //      en presencia de ruido coloreado de banda limitada.
+        if (stationarity_ > kXiDecayStatThresh) {
+            xiPrev_[b] *= kXiDecayStationaryAlpha;
         }
     }
 }
