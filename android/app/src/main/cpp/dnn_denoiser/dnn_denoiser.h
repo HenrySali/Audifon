@@ -132,7 +132,10 @@ static constexpr int kDnnRingCapacity = 1024;
 /// energía de voz que el modelo atenúa, sin romper el invariante "DNN solo
 /// atenúa" (la mezcla solo cambia el peso entre dry y wet).
 /// Spec: dnn-voice-level-recovery (Paso 1).
-static constexpr float kDefaultVoiceCap = 0.7f;
+/// Subido 0.7→1.0: el VAD ya distingue correctamente ruido vs voz (fix DD-bias).
+/// El cap de 0.7 ya no es necesario como protección adicional y limitaba
+/// la atenuación efectiva del DNN incluso con vad=0.
+static constexpr float kDefaultVoiceCap = 1.0f;
 
 /// Constantes de la rampa asimétrica entre `intensity` del usuario y el cap.
 /// Attack rápido (40 ms) cuando aparece voz; release lento (300 ms) cuando
