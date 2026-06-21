@@ -556,6 +556,20 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
              "DNN[user=%.2f, eff=%.2f, vad=%d]",
              numFrames, maxSample,
              userIntensity, effectiveIntensity, vadActive ? 1 : 0);
+
+        // VAD diagnostics — temporal para debug de ruido continuo
+        const auto& vad = sceneAnalyzer_.getVad();
+        LOGI("VAD diag: score=%.3f pitch=%.3f lrt=%.3f midSnr=%.1fdB "
+             "ltsd=%.1fdB stat=%.3f zcr=%.3f density=%.2f hangover=%d",
+             vad.getScore(),
+             vad.getPitchStrength(),
+             vad.getLrtScore(),
+             vad.getMidSnrDb(),
+             vad.getLtsdDb(),
+             vad.getStationarity(),
+             vad.getZcrRatio(),
+             vad.getPitchDensity(),
+             vad.isHangoverActive() ? 1 : 0);
     }
 
     // ─── Pre-DNN Level Measurement (DSP chain optimization, R1.1, R1.2) ─
