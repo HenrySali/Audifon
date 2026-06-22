@@ -41,6 +41,10 @@
 /// Número de bandas del análisis SCE (alineado con el EQ de 12 bandas).
 static constexpr int kSceBandCount = 12;
 
+/// Máximo blockSize soportado por el SCE. Bloques más grandes usan bypass.
+/// 256 = tamaño normal del callback de audio. Modo Conversación puede dar 384.
+static constexpr int kSceMaxBlockSize = 256;
+
 /// Frecuencias centrales de las 12 bandas del SCE (mismas que el EQ).
 static constexpr float kSceFrequencies[kSceBandCount] = {
     250.0f, 500.0f, 750.0f, 1000.0f, 1500.0f, 2000.0f,
@@ -101,15 +105,19 @@ public:
     void process(float* buffer, int blockSize) {
         if (!enabled_.load(std::memory_order_acquire)) return;
         if (blockSize <= 0 || buffer == nullptr) return;
+        // Guard: el SCE usa buffers internos de tamaño fijo.
+        // Si blockSize > kSceMaxBlockSize, bypass silencioso para evitar crash.
+        if (blockSize > kSceMaxBlockSize) return;
 
         const float factor = factor_.load(std::memory_order_acquire);
         if (factor < 0.001f) return; // Bypass efectivo
 
         // ─── Paso 1: Medir energía RMS por banda ────────────────────────
-        float bandBuf[kSceBandCount][256]; // max block size
+        // Buffer dinámico para soportar cualquier blockSize (no asumir max 256).
+        std::vector<std::vector<float>> bandBuf(kSceBandCount, std::vector<float>(blockSize, 0.0f));
         for (int b = 0; b < kSceBandCount; b++) {
             // Filtrar la señal por la banda b
-            filterBand(buffer, bandBuf[b], blockSize, b);
+            filterBand(buffer, bandBuf[b].data(), blockSize, b);
 
             // Calcular RMS de la banda
             float sum = 0.0f;
@@ -153,8 +161,7 @@ public:
         // ─── Paso 4: Aplicar — reconstruir señal con gains por banda ────
         // Método aditivo: señal_out = sum(banda[b] * gain[b])
         // Esto es correcto porque las bandas cubren el espectro completo.
-        float output[256]; // max block size
-        std::memset(output, 0, blockSize * sizeof(float));
+        std::vector<float> output(blockSize, 0.0f);
         for (int b = 0; b < kSceBandCount; b++) {
             for (int i = 0; i < blockSize; i++) {
                 output[i] += bandBuf[b][i] * bandGain[b];
@@ -162,7 +169,7 @@ public:
         }
 
         // Copiar al buffer de salida
-        std::memcpy(buffer, output, blockSize * sizeof(float));
+        std::memcpy(buffer, output.data(), blockSize * sizeof(float));
     }
 
 private:
