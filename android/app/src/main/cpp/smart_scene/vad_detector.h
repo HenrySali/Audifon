@@ -117,8 +117,8 @@ public:
     /// La diferencia con threshold low (0.30) sigue dando 20 puntos
     /// de banda muerta — suficiente para evitar flicker en transición
     /// silencio → voz → silencio.
-    static constexpr float kVoiceThresholdHigh = 0.62f;  // subido 0.50→0.62: ruido con armónicos daba score 0.44-0.72
-    static constexpr float kVoiceThresholdLow  = 0.42f;  // subido proporcional para mantener banda muerta 0.20
+    static constexpr float kVoiceThresholdHigh = 0.55f;  // bajado 0.62→0.55: voz SCO da score 0.50-0.57
+    static constexpr float kVoiceThresholdLow  = 0.35f;
 
     /// Gate por nivel absoluto: por debajo de este SPL forzamos silencio.
     static constexpr float kMinSpeechDbSpl = 30.0f;
@@ -192,9 +192,10 @@ public:
 
     /// ZCR gate (NAIST breath detection, Aalto): respiración / fricativas
     /// dan tasa de cruces por cero alta sobre el buffer pre-blanqueado.
-    /// 0.06 = ~ 9 cruces por bloque post-HPF. Voz vocal: 0.005-0.025;
-    /// fricativa de habla legítima: 0.025-0.05; breath / viento: > 0.06.
-    static constexpr float kZcrUnvoicedRatio   = 0.06f;
+    /// Subido 0.06→0.35: SCO Bluetooth codifica voz con ZCR 0.57-0.71
+    /// (8kHz codec), lo que activaba el gate y cortaba la voz en Modo Conversación.
+    /// Ruido estacionario da ZCR 0.02-0.12, sigue siendo bloqueado.
+    static constexpr float kZcrUnvoicedRatio   = 0.35f;
 
     /// Tilt gate: voz tiene tilt fuertemente negativo (-6..-12 dB/oct).
     /// Respiración / roce / viento tienen tilt cercano a 0 o positivo.
