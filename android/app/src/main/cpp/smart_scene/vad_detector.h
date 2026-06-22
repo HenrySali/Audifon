@@ -126,8 +126,8 @@ public:
     /// Gate por estacionariedad: si el espectro vocal cambia menos de
     /// `1 - kStationarityGate` durante la ventana stat, lo declaramos
     /// "ruido continuo" y bloqueamos voice_active.
-    static constexpr float kStationarityGate = 0.80f;  // bajado 0.85→0.80: ruido brownish da stat 0.82-0.89
-    static constexpr float kMidSnrGateDb     = 8.0f;  // subido 4.0→8.0: ruido brownish da midSnr 5-10dB
+    static constexpr float kStationarityGate = 0.75f;  // bajado 0.80→0.75: logs brown noise muestran stat 0.78-0.86
+    static constexpr float kMidSnrGateDb     = 6.0f;  // bajado 8.0→6.0: logs brown noise muestran midSnr 4.0-10.0 dB
 
     /// Hangover en frames después de que el score cae bajo el threshold.
     /// 12 frames * 5-10 ms ≈ 60-120 ms — cubre pausas inter-silábicas
