@@ -237,6 +237,29 @@ abstract class AudioBridge {
   /// Requisitos: 6.3
   Future<int> getDiagnosticRecordingProgress();
 
+  /// Aplica un preset completo del Smart Scene de forma atómica.
+  ///
+  /// Fase G — applyScenePreset único: reemplaza 4+ llamadas separadas
+  /// (updateEqGains + updateWdrcParams + updateNrLevel + updateTnrEnabled +
+  /// setMpoThresholdDbSpl + setSmartPresetPinned) por una sola llamada
+  /// MethodChannel. El motor C++ lo aplica en orden seguro (MPO → WDRC →
+  /// EQ → NR → TNR → pin) sin ventana de incoherencia entre llamadas.
+  ///
+  /// [gains] debe contener exactamente 12 valores en dB, rango [0, 50].
+  /// [wdrcParams] parámetros WDRC completos.
+  /// [nrLevel] nivel de NR [0, 3].
+  /// [tnrEnabled] true para activar TNR.
+  /// [mpoThresholdDbSpl] MPO broadband en dB SPL.
+  /// [pinPreset] true para fijar el pin del preset Smart.
+  Future<void> applyScenePreset({
+    required List<double> gains,
+    required WdrcParams wdrcParams,
+    required int nrLevel,
+    required bool tnrEnabled,
+    required double mpoThresholdDbSpl,
+    bool pinPreset = true,
+  });
+
   /// Obtiene un snapshot de las métricas por etapa del pipeline DSP.
   ///
   /// Devuelve un `Map<String, dynamic>` con las claves expuestas por el

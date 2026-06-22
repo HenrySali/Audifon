@@ -31,6 +31,7 @@ class NativeAudioBridge {
         private const val LEVEL_POLL_INTERVAL_MS = 100L
 
         init {
+            System.loadLibrary("oboe")
             System.loadLibrary("hearing_aid_dsp")
             Log.i(TAG, "Native library 'hearing_aid_dsp' loaded")
         }
@@ -367,6 +368,27 @@ class NativeAudioBridge {
      * Dart parsea con `SceneSnapshot.fromBytes`.
      */
     external fun nativeGetSceneSnapshot(): ByteArray
+
+    // ─── Fase G — applyScenePreset único ────────────────────────────────
+
+    /**
+     * Aplica un preset completo del Smart Scene de forma atómica.
+     * Reemplaza 4+ llamadas separadas (EqGains + WdrcParams + NrLevel +
+     * TnrEnabled + MpoThreshold + SmartPresetPinned) por una sola.
+     *
+     * @param params FloatArray[19]: [0..11]=gains EQ, [12]=expKnee,
+     *        [13]=expRatio, [14]=compKnee, [15]=compRatio,
+     *        [16]=attackMs, [17]=releaseMs, [18]=mpoDbSpl.
+     * @param nrLevel Nivel de NR [0, 3].
+     * @param tnrEnabled true=TNR ON.
+     * @param pinPreset true=fijar pin del preset Smart.
+     */
+    external fun nativeApplyScenePreset(
+        params: FloatArray,
+        nrLevel: Int,
+        tnrEnabled: Boolean,
+        pinPreset: Boolean
+    )
 
     // ─── Calibration Spectrum Validator (Fase 2) ────────────────────────
 

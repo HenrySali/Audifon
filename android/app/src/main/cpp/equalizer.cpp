@@ -13,6 +13,14 @@
 /// suavizado, eliminando el transitorio del hard-swap de coeficientes en
 /// Direct Form I. processBiquadSample sanitiza NaN/Inf para impedir que un
 /// blow-up del IIR se auto-propague indefinidamente.
+///
+/// Fase D — Commit transaccional + crossfade:
+/// - setGains() escribe un EqSnapshot completo con doble buffer atómico.
+/// - checkForNewSnapshot() detecta el cambio en el hilo de audio y prepara
+///   crossfade copiando los coeficientes "viejos" antes de que stepGainRamp
+///   los recalcule.
+/// - El crossfade lineal (5 bloques ~20 ms) elimina el click del transitorio
+///   de 12 biquads DF-I en serie al cambiar preset.
 
 #include "equalizer.h"
 
@@ -26,14 +34,19 @@
 
 Equalizer::Equalizer() {
     for (int i = 0; i < kEqBandCount; ++i) {
-        gains_[i].store(0.0f, std::memory_order_relaxed);
         appliedGains_[i] = 0.0f;
         rampGains_[i] = 0.0f;
         states_[i].reset();
         // Coeficientes por defecto: pass-through (b0=1, resto=0)
         coeffs_[i] = BiquadCoeffs{};
     }
-    gainsChanged_.store(false, std::memory_order_relaxed);
+    // Snapshots: ambos arrancan con seq=0 y gains=0.
+    for (auto& snap : snapshots_) {
+        std::memset(snap.gains, 0, sizeof(snap.gains));
+        snap.seq = 0;
+    }
+    readSnapshotSeq_.store(0, std::memory_order_relaxed);
+    writeSnapshotSeq_.store(0, std::memory_order_relaxed);
 }
 
 // ============================================================================
@@ -46,44 +59,66 @@ void Equalizer::init(int sampleRate) {
     // Resetear estados de filtro
     for (int i = 0; i < kEqBandCount; ++i) {
         states_[i].reset();
+        prevStates_[i] = BiquadPrevState{};
+        crossfader_.active[i] = false;
+        crossfader_.progress[i] = 0.0f;
         appliedGains_[i] = 0.0f;
-        // El valor suavizado arranca desde el target actual para no rampear
+        // El valor suavizado arranca desde el snapshot actual para no rampear
         // desde 0 en cada init() (el engine puede reiniciarse con un preset ya
-        // cargado). Así init() = estado limpio, sin transitorio espurio.
-        rampGains_[i] = gains_[i].load(std::memory_order_relaxed);
+        // cargado).
+        const auto seq = readSnapshotSeq_.load(std::memory_order_relaxed);
+        const int snapIdx = (seq % 2 == 0) ? 0 : 1;
+        rampGains_[i] = snapshots_[snapIdx].gains[i];
         coeffs_[i] = BiquadCoeffs{};
     }
-
-    // Forzar recálculo de coeficientes en el próximo process()
-    gainsChanged_.store(true, std::memory_order_release);
 }
 
 // ============================================================================
-// Actualización de ganancias (thread-safe, llamado desde hilo de UI)
+// Commit transaccional (llamado desde hilo de UI, thread-safe)
 // ============================================================================
 
+uint64_t Equalizer::commitNewSnapshot(const float gains[kEqBandCount]) {
+    // Leer la secuencia actual de escritura y calcular el nuevo índice.
+    const uint64_t oldWriteSeq = writeSnapshotSeq_.load(std::memory_order_acquire);
+    const int writeIdx = (oldWriteSeq % 2 == 0) ? 1 : 0;  // alternar buffer
+    const uint64_t newSeq = oldWriteSeq + 1;
+
+    // Escribir el snapshot completo en el buffer de escritura.
+    snapshots_[writeIdx].store(gains, newSeq);
+
+    // Publicar: store release del nuevo índice.
+    writeSnapshotSeq_.store(newSeq, std::memory_order_release);
+    return newSeq;
+}
+
 void Equalizer::setGains(const float gains[kEqBandCount]) {
+    // Clamp al rango válido [0, 50] dB
+    float clamped[kEqBandCount];
     for (int i = 0; i < kEqBandCount; ++i) {
-        // Clamp al rango válido [0, 50] dB
         float g = gains[i];
         if (g < 0.0f) g = 0.0f;
         if (g > 50.0f) g = 50.0f;
-        gains_[i].store(g, std::memory_order_relaxed);
+        clamped[i] = g;
     }
-    // Señalar que hay cambio pendiente
-    gainsChanged_.store(true, std::memory_order_release);
+    commitNewSnapshot(clamped);
 }
 
 float Equalizer::getGain(int band) const {
     if (band < 0 || band >= kEqBandCount) return 0.0f;
-    return gains_[band].load(std::memory_order_relaxed);
+    // Leer el snapshot más reciente y devolver la ganancia de esa banda.
+    const auto seq = readSnapshotSeq_.load(std::memory_order_acquire);
+    const int snapIdx = (seq % 2 == 0) ? 0 : 1;
+    return snapshots_[snapIdx].gains[band];
 }
 
 float Equalizer::getMaxGain() const {
     float maxGain = 0.0f;
+    const auto seq = readSnapshotSeq_.load(std::memory_order_acquire);
+    const int snapIdx = (seq % 2 == 0) ? 0 : 1;
     for (int i = 0; i < kEqBandCount; ++i) {
-        float g = gains_[i].load(std::memory_order_relaxed);
-        if (g > maxGain) maxGain = g;
+        if (snapshots_[snapIdx].gains[i] > maxGain) {
+            maxGain = snapshots_[snapIdx].gains[i];
+        }
     }
     return maxGain;
 }
@@ -98,6 +133,55 @@ void Equalizer::processWithScale(float* buffer, int blockSize, float scale) {
     for (int i = 0; i < blockSize; ++i) {
         buffer[i] *= scale;
     }
+}
+
+// ============================================================================
+// Detección de nuevo snapshot + preparación de crossfade (hilo de audio)
+// ============================================================================
+
+void Equalizer::checkForNewSnapshot() {
+    const uint64_t writeSeq = writeSnapshotSeq_.load(std::memory_order_acquire);
+    const uint64_t readSeq = readSnapshotSeq_.load(std::memory_order_relaxed);
+
+    if (writeSeq == readSeq) {
+        // No hay snapshot nuevo — nada que hacer.
+        return;
+    }
+
+    // Hay un nuevo snapshot. El índice de lectura es: readSeq % 2; pero debemos
+    // leer desde el buffer que el writer escribió, que está en writeSeq % 2.
+    // Como writeSeq > readSeq, el writer escribió en (writeSeq % 2).
+    // Avanzamos readSeq y apuntamos al buffer de lectura correcto.
+    const int readIdx = (writeSeq % 2 == 0) ? 0 : 1;
+    const EqSnapshot& snap = snapshots_[readIdx];
+
+    // Preparar crossfade por banda: guardar los coeficientes y estados VIEJOS
+    // antes de que stepGainRamp() los recalcule con las nuevas ganancias.
+    for (int i = 0; i < kEqBandCount; ++i) {
+        const float newGain = snap.gains[i];
+        const float oldRamp = rampGains_[i];
+        // Solo activar crossfade si la diferencia es significativa (> 1 dB).
+        if (std::fabs(newGain - oldRamp) > 1.0f) {
+            // Preservar coeficientes y estado viejos para crossfade
+            prevStates_[i].coeffs = coeffs_[i];
+            prevStates_[i].state = states_[i];
+            prevStates_[i].valid = true;
+            crossfader_.active[i] = true;
+            crossfader_.progress[i] = 0.0f;
+        }
+    }
+
+    // Actualizar las ganancias target con el nuevo snapshot.
+    // stepGainRamp() empezará a rampear desde el valor suavizado actual
+    // hacia estos nuevos targets.
+    for (int i = 0; i < kEqBandCount; ++i) {
+        // Escribir la ganancia del snapshot en el atomic legacy para que
+        // stepGainRamp() la vea como nuevo target.
+        gains_[i].store(snap.gains[i], std::memory_order_relaxed);
+    }
+
+    // Actualizar la secuencia de lectura para marcar el snapshot como consumido.
+    readSnapshotSeq_.store(writeSeq, std::memory_order_release);
 }
 
 // ============================================================================
@@ -215,6 +299,35 @@ float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
     return output;
 }
 
+/// Aplica crossfade a una muestra: interpola linealmente entre la salida del
+/// filtro "viejo" (prevCoeffs, prevState) y la del filtro "nuevo" (newOutput).
+/// Avanza el progreso del crossfade en [progress] y lo desactiva cuando
+/// alcanza 1.0.
+static float applyCrossfade(float sample, float newOutput,
+                            const BiquadCoeffs& prevCoeffs,
+                            BiquadState& prevState,
+                            bool& active, float& progress) {
+    if (!active) {
+        return newOutput;  // Sin crossfade activo — pasar la nueva señal.
+    }
+
+    // Calcular la salida del filtro VIEJO con la muestra actual.
+    // Direct Form I con los coeficientes preservados antes del cambio.
+    const float oldOutput = Equalizer::processBiquadSample(sample, prevCoeffs, prevState);
+
+    // Interpolación lineal: cuando progress=0 → 100% old; progress=1 → 100% new.
+    const float blend = (1.0f - progress) * oldOutput + progress * newOutput;
+
+    // Avanzar el crossfade. Si llegó a 1.0, desactivar.
+    progress += EqCrossfader::kStep;
+    if (progress >= 1.0f) {
+        progress = 1.0f;
+        active = false;
+    }
+
+    return blend;
+}
+
 // ============================================================================
 // Procesamiento de bloque (llamado desde hilo de audio)
 // ============================================================================
@@ -222,27 +335,49 @@ float Equalizer::processBiquadSample(float sample, const BiquadCoeffs& coeffs,
 void Equalizer::process(float* buffer, int blockSize) {
     if (buffer == nullptr || blockSize <= 0) return;
 
-    // Avanzar la rampa de ganancias y recalcular coeficientes CADA bloque.
-    // Se ejecuta siempre (sin condicional sobre gainsChanged_) para que el
-    // valor suavizado converja al target de forma continua. El recálculo de
-    // coeficientes interno está gated por diferencia, así que cuando la rampa
-    // ya convergió el costo es solo 12 comparaciones (sin pow/sin/cos).
-    stepGainRamp();
-    gainsChanged_.store(false, std::memory_order_release);
+    // 0. Detectar nuevo snapshot transaccional y preparar crossfade.
+    checkForNewSnapshot();
 
-    // Aplicar cada banda en serie.
+    // 1. Avanzar la rampa de ganancias y recalcular coeficientes CADA bloque.
+    //    Se ejecuta siempre (sin condicional sobre gainsChanged_) para que el
+    //    valor suavizado converja al target de forma continua. El recálculo de
+    //    coeficientes interno está gated por diferencia, así que cuando la rampa
+    //    ya convergió el costo es solo 12 comparaciones (sin pow/sin/cos).
+    stepGainRamp();
+
+    // 2. Aplicar cada banda en serie, con crossfade donde esté activo.
     for (int band = 0; band < kEqBandCount; ++band) {
         // Si la ganancia aplicada (suavizada) es ~0 dB, este filtro es
         // pass-through (coeficientes identidad) → se puede saltear.
-        if (appliedGains_[band] < 0.01f) {
+        if (appliedGains_[band] < 0.01f && !crossfader_.active[band]) {
             continue;
         }
 
         const BiquadCoeffs& coeffs = coeffs_[band];
         BiquadState& state = states_[band];
+        const bool hasCrossfade = crossfader_.active[band];
 
-        for (int i = 0; i < blockSize; ++i) {
-            buffer[i] = processBiquadSample(buffer[i], coeffs, state);
+        if (hasCrossfade) {
+            // Crossfade activo: procesar cada muestra con ambos filtros y
+            // blendear.
+            BiquadPrevState& prev = prevStates_[band];
+            for (int i = 0; i < blockSize; ++i) {
+                const float newOutput = processBiquadSample(buffer[i], coeffs, state);
+                buffer[i] = applyCrossfade(
+                    buffer[i], newOutput,
+                    prev.coeffs, prev.state,
+                    crossfader_.active[band],
+                    crossfader_.progress[band]);
+            }
+            // Si el crossfade terminó durante este bloque, marcar prev como inválido.
+            if (!crossfader_.active[band]) {
+                prev.valid = false;
+            }
+        } else {
+            // Sin crossfade: procesamiento normal.
+            for (int i = 0; i < blockSize; ++i) {
+                buffer[i] = processBiquadSample(buffer[i], coeffs, state);
+            }
         }
     }
 }

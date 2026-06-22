@@ -652,6 +652,37 @@ void DspPipeline::setAutoClassifyEnabled(bool enabled) {
     autoClassifyEnabled_.store(enabled, std::memory_order_relaxed);
 }
 
+void DspPipeline::applyScenePreset(const ScenePreset& preset) {
+    // 0. Fijar el pin ANTES de los setters para que el clasificador
+    //    automático no pise los targets durante la aplicación.
+    //    El pin impide que EnvironmentClassifier::update() machaque
+    //    los targets del WDRC + NR mientras aplicamos el preset.
+    smartPresetPinned_.store(preset.pinPreset, std::memory_order_release);
+
+    // 1. MPO broadband — primero (red de seguridad).
+    setMpoThresholdDbSpl(preset.mpoThresholdDbSpl);
+
+    // 2. WDRC — compression knee/ratio vía rampa (suave, sin click).
+    //    Expansion knee/ratio, attack/release se aplican inmediato.
+    wdrc_.setExpansionKnee(preset.wdrc.expansionKnee);
+    wdrc_.setExpansionRatio(preset.wdrc.expansionRatio);
+    wdrc_.setAttackMs(preset.wdrc.attackMs);
+    wdrc_.setReleaseMs(preset.wdrc.releaseMs);
+    // Compression knee/ratio: targets de la rampa existente (kWdrcRampAlpha).
+    wdrcKneeTarget_  = preset.wdrc.compressionKnee;
+    wdrcRatioTarget_ = preset.wdrc.compressionRatio;
+
+    // 3. EQ — commit transaccional (12 ganancias en un snapshot atómico).
+    eq_.setGains(preset.gains);
+
+    // 4. NR level — directo (la rampa por escena está sync por
+    //    setNrLevel que alinea currentNrLevel_ y nrLevelTarget_).
+    setNrLevel(preset.nrLevel);
+
+    // 5. TNR — habilitar/deshabilitar.
+    tnr_.setEnabled(preset.tnrEnabled);
+}
+
 int DspPipeline::getCurrentEnvironmentClass() const {
     return envClassifier_.getCurrentClass();
 }

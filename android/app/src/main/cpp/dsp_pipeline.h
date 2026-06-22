@@ -52,6 +52,23 @@ struct WdrcParams {
     float releaseMs = 100.0f;          ///< ms — tiempo de liberación
 };
 
+/// Preset completo del Smart Scene, aplicado atómicamente al pipeline.
+///
+/// Fase G — applyScenePreset único: contiene todos los parámetros que
+/// antes se enviaban como 4 llamadas separadas (EQ, WDRC, NR, TNR).
+/// El caller (Dart SceneEngine.apply()) construye este struct y lo
+/// envía por un solo MethodChannel. El motor C++ lo aplica en orden
+/// seguro (MPO → WDRC → EQ → NR) sin ventana de incoherencia entre
+/// llamadas.
+struct ScenePreset {
+    float gains[12];             ///< Ganancias EQ (dB, [0, 50])
+    WdrcParams wdrc;             ///< Parámetros WDRC completos
+    int nrLevel = 0;             ///< Nivel de reducción de ruido [0, 3]
+    bool tnrEnabled = false;     ///< Transient Noise Reducer ON/OFF
+    float mpoThresholdDbSpl = 110.0f; ///< MPO broadband en dB SPL
+    bool pinPreset = true;       ///< Si true, fija el pin del preset Smart
+};
+
 /// Pipeline DSP principal — procesa bloques de audio en tiempo real.
 ///
 /// Uso típico:
@@ -287,6 +304,24 @@ public:
     /// Obtiene la clase de entorno actual (thread-safe).
     /// @return 0=QUIET, 1=SPEECH, 2=SPEECH_IN_NOISE, 3=NOISE
     int getCurrentEnvironmentClass() const;
+
+    /// Aplica un preset completo del Smart Scene de forma atómica.
+    ///
+    /// Fase G — applyScenePreset único: reemplaza 4 llamadas separadas
+    /// (setEqGains + setWdrcParams + setNrLevel + setTnrEnabled +
+    /// setMpoThresholdDbSpl + setSmartPresetPinned) por una sola llamada
+    /// que aplica todo en orden seguro (MPO → WDRC → EQ → NR → TNR → pin).
+    ///
+    /// Esto elimina la ventana de ~4-6 llamadas MethodChannel donde el
+    /// clasificador automático podía pisar targets intermedios, y garantiza
+    /// que el motor vea el preset completo de forma coherente.
+    ///
+    /// Thread-safe: todos los setters internos son atómicos. El pin se
+    /// fija ANTES de los setters para que el clasificador no pise los
+    /// targets durante la aplicación.
+    ///
+    /// @param preset Estructura con todos los parámetros del preset.
+    void applyScenePreset(const ScenePreset& preset);
 
     /// Acceso al analizador de espectro (para JNI bridge).
     SpectrumAnalyzer& getSpectrumAnalyzer() { return spectrumAnalyzer_; }

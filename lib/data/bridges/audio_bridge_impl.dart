@@ -368,6 +368,37 @@ class AudioBridgeImpl implements AudioBridge {
   /// Diagnostic Recording).
   static const String _logName = 'AudioBridgeImpl';
 
+  @override
+  Future<void> applyScenePreset({
+    required List<double> gains,
+    required WdrcParams wdrcParams,
+    required int nrLevel,
+    required bool tnrEnabled,
+    required double mpoThresholdDbSpl,
+    bool pinPreset = true,
+  }) async {
+    if (gains.length != 12) {
+      throw ArgumentError.value(
+        gains.length,
+        'gains.length',
+        'EQ requires exactly 12 bands, got ${gains.length}',
+      );
+    }
+    await _methodChannel.invokeMethod<void>('applyScenePreset', {
+      'gains': gains,
+      'expansionKnee': wdrcParams.expansionKnee,
+      'expansionRatio': wdrcParams.expansionRatio,
+      'compressionKnee': wdrcParams.compressionKnee,
+      'compressionRatio': wdrcParams.compressionRatio,
+      'attackMs': wdrcParams.attackMs,
+      'releaseMs': wdrcParams.releaseMs,
+      'mpoThresholdDbSpl': mpoThresholdDbSpl,
+      'nrLevel': nrLevel,
+      'tnrEnabled': tnrEnabled,
+      'pinPreset': pinPreset,
+    });
+  }
+
   /// Helper interno para setters void que no deben propagar errores del
   /// handler nativo. Replica el patrón `_safeInvoke` del paciente
   /// (`AudioBridge._safeInvoke`).

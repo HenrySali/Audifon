@@ -230,6 +230,36 @@ class AudioMethodChannel(
                     val data = nativeBridge.nativeGetSceneSnapshot()
                     result.success(data)
                 }
+                // Fase G — applyScenePreset único
+                "applyScenePreset" -> {
+                    val gains = call.argument<List<Double>>("gains") ?: List(12) { 0.0 }
+                    val expKnee = call.argument<Double>("expansionKnee") ?: 35.0
+                    val expRatio = call.argument<Double>("expansionRatio") ?: 2.0
+                    val compKnee = call.argument<Double>("compressionKnee") ?: 55.0
+                    val compRatio = call.argument<Double>("compressionRatio") ?: 2.0
+                    val attackMs = call.argument<Double>("attackMs") ?: 5.0
+                    val releaseMs = call.argument<Double>("releaseMs") ?: 100.0
+                    val mpoDbSpl = call.argument<Double>("mpoThresholdDbSpl") ?: 110.0
+                    val nrLevel = call.argument<Int>("nrLevel") ?: 0
+                    val tnrEnabled = call.argument<Boolean>("tnrEnabled") ?: false
+                    val pinPreset = call.argument<Boolean>("pinPreset") ?: true
+
+                    val params = FloatArray(19) { i ->
+                        when {
+                            i < 12 -> gains.getOrElse(i) { 0.0 }.toFloat()
+                            i == 12 -> expKnee.toFloat()
+                            i == 13 -> expRatio.toFloat()
+                            i == 14 -> compKnee.toFloat()
+                            i == 15 -> compRatio.toFloat()
+                            i == 16 -> attackMs.toFloat()
+                            i == 17 -> releaseMs.toFloat()
+                            i == 18 -> mpoDbSpl.toFloat()
+                            else -> 0f
+                        }
+                    }
+                    nativeBridge.nativeApplyScenePreset(params, nrLevel, tnrEnabled, pinPreset)
+                    result.success(null)
+                }
                 // Calibration Spectrum Validator (Fase 2)
                 "configureToneAnalyzer" -> {
                     val sr = call.argument<Int>("sampleRate") ?: 48000

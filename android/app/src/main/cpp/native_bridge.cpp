@@ -472,6 +472,77 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAutoClassifyEnabled(
     g_engine->setAutoClassifyEnabled(enabled);
 }
 
+/// Aplica un preset completo del Smart Scene de forma atómica.
+///
+/// Fase G — applyScenePreset único: reemplaza 4+ llamadas separadas
+/// (setEqGains + setWdrcParams + setNrLevel + setTnrEnabled +
+/// setMpoThresholdDbSpl + setSmartPresetPinned) por una sola llamada
+/// JNI. Esto elimina la ventana de ~6 callbacks MethodChannel donde
+/// el clasificador automático podía pisar targets intermedios.
+///
+/// Args (como float array de 20 valores + 2 ints + 1 bool):
+///   gains[0..11] → 12 ganancias EQ en dB
+///   gains[12]    → expansionKnee
+///   gains[13]    → expansionRatio
+///   gains[14]    → compressionKnee
+///   gains[15]    → compressionRatio
+///   gains[16]    → attackMs
+///   gains[17]    → releaseMs
+///   gains[18]    → mpoThresholdDbSpl
+/// @param nrLevel Nivel de NR [0, 3]
+/// @param tnrEnabled 1=TNR ON, 0=TNR OFF
+/// @param pinPreset 1=pin ON, 0=pin OFF
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeApplyScenePreset(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jfloatArray params,
+        jint nrLevel,
+        jboolean tnrEnabled,
+        jboolean pinPreset) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    if (params == nullptr) {
+        LOGW("nativeApplyScenePreset: null params array");
+        return;
+    }
+    jsize len = env->GetArrayLength(params);
+    if (len < 19) {
+        LOGW("nativeApplyScenePreset: array length %d < 19", len);
+        return;
+    }
+
+    jfloat* p = env->GetFloatArrayElements(params, nullptr);
+    if (p == nullptr) return;
+
+    ScenePreset preset;
+    // gains[0..11]
+    for (int i = 0; i < 12; ++i) {
+        float g = p[i];
+        if (g < 0.0f) g = 0.0f;
+        if (g > 50.0f) g = 50.0f;
+        preset.gains[i] = g;
+    }
+    preset.wdrc.expansionKnee     = p[12];
+    preset.wdrc.expansionRatio    = p[13];
+    preset.wdrc.compressionKnee   = p[14];
+    preset.wdrc.compressionRatio  = p[15];
+    preset.wdrc.attackMs          = p[16];
+    preset.wdrc.releaseMs         = p[17];
+    preset.mpoThresholdDbSpl      = p[18];
+    preset.nrLevel                = nrLevel;
+    preset.tnrEnabled             = (tnrEnabled == JNI_TRUE);
+    preset.pinPreset              = (pinPreset == JNI_TRUE);
+
+    env->ReleaseFloatArrayElements(params, p, JNI_ABORT);
+
+    g_engine->applyScenePreset(preset);
+    LOGI("nativeApplyScenePreset: applied (nrLevel=%d, tnr=%d, pin=%d)",
+         nrLevel, tnrEnabled, pinPreset);
+}
+
 /// Pin del preset Smart Scene aplicado manualmente.
 ///
 /// Cuando es true, el clasificador automático sigue corriendo y publica
