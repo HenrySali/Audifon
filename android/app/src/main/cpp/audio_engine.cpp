@@ -379,6 +379,10 @@ void AudioEngine::setSmartPresetPinned(bool pinned) {
     pipeline_.setSmartPresetPinned(pinned);
 }
 
+void AudioEngine::applyScenePreset(const ScenePreset& preset) {
+    pipeline_.applyScenePreset(preset);
+}
+
 int AudioEngine::getCurrentEnvironmentClass() const {
     return pipeline_.getCurrentEnvironmentClass();
 }

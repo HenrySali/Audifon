@@ -134,6 +134,10 @@ public:
     void setSmartPresetPinned(bool pinned);
     int getCurrentEnvironmentClass() const;
 
+    /// Aplica un preset completo del Smart Scene de forma atómica.
+    /// Fase G — delega a DspPipeline::applyScenePreset(). Thread-safe.
+    void applyScenePreset(const ScenePreset& preset);
+
     // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
     /// Devuelve el snapshot crudo del Smart Scene Engine (lock-free seqlock).
     smart_scene::SceneSnapshot getSceneSnapshot() const { return sceneAnalyzer_.getSnapshot(); }
