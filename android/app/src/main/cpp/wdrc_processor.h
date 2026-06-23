@@ -12,21 +12,48 @@
 ///   La DECISIÓN de región se basa en el nivel PRE-EQ por bloque.
 ///   La APLICACIÓN de ganancia se suaviza muestra-por-muestra usando
 ///   coeficientes de attack/release para evitar discontinuidades entre bloques.
+///
+/// FIX Causa F (smart-scene-diagnostico-chasquido.md):
+///   compressionKnee y compressionRatio se almacenan como un struct atómico
+///   (AtomicWdrcCompression) para que el WDRC nunca lea un knee nuevo con
+///   un ratio viejo (o viceversa). El setter setCompressionParams() actualiza
+///   ambos en un solo store atómico, y computeGainFactor() los lee en un solo
+///   load. Esto elimina la ventana de inconsistencia entre los dos atomics
+///   individuales anteriores.
 
 #ifndef HEARING_AID_WDRC_PROCESSOR_H
 #define HEARING_AID_WDRC_PROCESSOR_H
 
 #include <atomic>
 #include <cmath>
+#include <cstring>
+
+/// Parámetros de compresión del WDRC (knee + ratio) como un solo struct
+/// para store/load atómico. Esto garantiza que el WDRC nunca lea un knee
+/// nuevo con un ratio viejo (Causa F).
+struct WdrcCompressionParams {
+    float compressionKnee;   ///< dB SPL — encima: compresión
+    float compressionRatio;  ///< Ratio de compresión (input:output)
+
+    bool operator==(const WdrcCompressionParams& other) const {
+        return compressionKnee == other.compressionKnee &&
+               compressionRatio == other.compressionRatio;
+    }
+    bool operator!=(const WdrcCompressionParams& other) const {
+        return !(*this == other);
+    }
+};
 
 /// Parámetros atómicos del WDRC para actualización thread-safe.
 /// Cada parámetro se almacena individualmente como atómico para
 /// permitir actualizaciones lock-free desde el hilo de UI.
+/// EXCEPTO compressionKnee + compressionRatio que viven juntos en
+/// un std::atomic<WdrcCompressionParams> para garantizar atomicidad
+/// compuesta (Causa F).
 struct AtomicWdrcParams {
     std::atomic<float> expansionKnee{35.0f};     ///< dB SPL — debajo: expansión
     std::atomic<float> expansionRatio{2.0f};     ///< Ratio de expansión (input:output)
-    std::atomic<float> compressionKnee{55.0f};   ///< dB SPL — encima: compresión
-    std::atomic<float> compressionRatio{2.0f};   ///< Ratio de compresión (input:output)
+    std::atomic<WdrcCompressionParams> compression{ {55.0f, 2.0f} }; ///< Knee + ratio atómicos
     std::atomic<float> attackMs{5.0f};           ///< Tiempo de ataque en ms
     std::atomic<float> releaseMs{100.0f};        ///< Tiempo de liberación en ms
 };
@@ -67,8 +94,13 @@ public:
 
     void setExpansionKnee(float knee);
     void setExpansionRatio(float ratio);
-    void setCompressionKnee(float knee);
-    void setCompressionRatio(float ratio);
+
+    /// FIX Causa F: actualiza compressionKnee y compressionRatio en un solo
+    /// store atómico. El WDRC nunca leerá un knee nuevo con un ratio viejo.
+    /// @param knee Compression knee en dB SPL
+    /// @param ratio Compression ratio (input:output, ≥ 1.0)
+    void setCompressionParams(float knee, float ratio);
+
     void setAttackMs(float ms);
     void setReleaseMs(float ms);
 

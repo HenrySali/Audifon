@@ -96,8 +96,9 @@ float WdrcProcessor::computeGainFactor(float inputLevelDb) const {
     // Leer parámetros atómicos (thread-safe)
     float expKnee = params_.expansionKnee.load(std::memory_order_relaxed);
     float expRatio = params_.expansionRatio.load(std::memory_order_relaxed);
-    float compKnee = params_.compressionKnee.load(std::memory_order_relaxed);
-    float compRatio = params_.compressionRatio.load(std::memory_order_relaxed);
+    WdrcCompressionParams cp = params_.compression.load(std::memory_order_relaxed);
+    float compKnee  = cp.compressionKnee;
+    float compRatio = cp.compressionRatio;
 
     // Protección contra ratios inválidos (evitar división por cero)
     if (expRatio < 1.0f) expRatio = 1.0f;
@@ -143,12 +144,9 @@ void WdrcProcessor::setExpansionRatio(float ratio) {
     params_.expansionRatio.store(ratio, std::memory_order_relaxed);
 }
 
-void WdrcProcessor::setCompressionKnee(float knee) {
-    params_.compressionKnee.store(knee, std::memory_order_relaxed);
-}
-
-void WdrcProcessor::setCompressionRatio(float ratio) {
-    params_.compressionRatio.store(ratio, std::memory_order_relaxed);
+void WdrcProcessor::setCompressionParams(float knee, float ratio) {
+    WdrcCompressionParams cp{ knee, ratio };
+    params_.compression.store(cp, std::memory_order_relaxed);
 }
 
 void WdrcProcessor::setAttackMs(float ms) {
