@@ -341,8 +341,9 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
             wdrcRatioRamp_ += kWdrcRampAlpha * (wdrcRatioTarget_ - wdrcRatioRamp_);
         }
 
-        wdrc_.setCompressionKnee(wdrcKneeRamp_);
-        wdrc_.setCompressionRatio(wdrcRatioRamp_);
+        // FIX Causa F: una sola llamada atómica para que el WDRC nunca lea
+        // un knee nuevo con un ratio viejo (o viceversa).
+        wdrc_.setCompressionParams(wdrcKneeRamp_, wdrcRatioRamp_);
 
         // 2) NR level: step discreto. El gainFloor de NoiseReduction salta
         //    en escalones (1.0 / 0.55 / 0.32 / 0.18) que el suavizado interno
