@@ -312,8 +312,15 @@ static float applyCrossfade(float sample, float newOutput,
     }
 
     // Calcular la salida del filtro VIEJO con la muestra actual.
-    // Direct Form I con los coeficientes preservados antes del cambio.
-    const float oldOutput = Equalizer::processBiquadSample(sample, prevCoeffs, prevState);
+    // Direct Form I inline (processBiquadSample es private, no accesible aquí).
+    float oldOutput = prevCoeffs.b0 * sample
+                    + prevCoeffs.b1 * prevState.x1
+                    + prevCoeffs.b2 * prevState.x2
+                    - prevCoeffs.a1 * prevState.y1
+                    - prevCoeffs.a2 * prevState.y2;
+    if (!std::isfinite(oldOutput)) { oldOutput = sample; prevState.reset(); }
+    prevState.x2 = prevState.x1; prevState.x1 = sample;
+    prevState.y2 = prevState.y1; prevState.y1 = oldOutput;
 
     // Interpolación lineal: cuando progress=0 → 100% old; progress=1 → 100% new.
     const float blend = (1.0f - progress) * oldOutput + progress * newOutput;
