@@ -11,13 +11,13 @@ import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
 
-/// Pantalla de configuración avanzada del audífono.
+/// Pantalla de configuraciÃ³n avanzada del audÃ­fono.
 ///
 /// Presenta:
 /// - Selector de presets de EQ (Normal, Mild, Moderate, Severe, Profound, Custom)
 /// - Control manual de las 12 bandas de EQ (sliders individuales)
-/// - Visualización del espectro de frecuencias (barras)
-/// - Información de dispositivos de audio (micrófono, auricular BT)
+/// - VisualizaciÃ³n del espectro de frecuencias (barras)
+/// - InformaciÃ³n de dispositivos de audio (micrÃ³fono, auricular BT)
 /// - Controles de NR y WDRC
 class SimulatorScreen extends StatefulWidget {
   const SimulatorScreen({super.key});
@@ -33,7 +33,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
   /// Preset activo (null si es custom).
   EqPreset? _activePreset = EqPreset.normal;
 
-  /// Información de dispositivos.
+  /// InformaciÃ³n de dispositivos.
   Map<String, dynamic> _deviceInfo = {};
 
   /// Timer para polling de device info.
@@ -126,7 +126,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0a1628),
       appBar: AppBar(
-        title: const Text('Configuración Avanzada'),
+        title: const Text('ConfiguraciÃ³n Avanzada'),
         backgroundColor: const Color(0xFF0f3460),
         foregroundColor: Colors.white,
         elevation: 0,
@@ -136,37 +136,37 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ─── Device Info Panel ─────────────────────────────────────
+            // â”€â”€â”€ Device Info Panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _DeviceInfoPanel(deviceInfo: _deviceInfo),
             const SizedBox(height: 16),
 
-            // ─── EQ Presets ────────────────────────────────────────────
+            // â”€â”€â”€ EQ Presets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _PresetSelector(
               activePreset: _activePreset,
               onPresetSelected: _applyPreset,
             ),
             const SizedBox(height: 16),
 
-            // ─── Spectrum Visualization ────────────────────────────────
+            // â”€â”€â”€ Spectrum Visualization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _SpectrumVisualization(gains: _currentGains),
             const SizedBox(height: 16),
 
-            // ─── Manual EQ Bands ───────────────────────────────────────
+            // â”€â”€â”€ Manual EQ Bands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _ManualEqControl(
               gains: _currentGains,
               onBandChanged: _updateBand,
             ),
             const SizedBox(height: 16),
 
-            // ─── NR & Auto-Classify Controls ──────────────────────────
+            // â”€â”€â”€ NR & Auto-Classify Controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _NrAutoClassifyControls(),
             const SizedBox(height: 16),
 
-            // ─── Comodidad (slider del WDRC compressionRatio) ─────────
-            // Task 7.1: ajusta el `compressionRatio` efectivo del WDRC vía
-            // la fórmula `base + (1 - base) * comfort`. comfort=0 → ratio
-            // del bundle (lo que el técnico fijó), comfort=1 → ratio=1.0
-            // (sin compresión = sonido más natural). Persiste en Settings
+            // â”€â”€â”€ Comodidad (slider del WDRC compressionRatio) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // Task 7.1: ajusta el `compressionRatio` efectivo del WDRC vÃ­a
+            // la fÃ³rmula `base + (1 - base) * comfort`. comfort=0 â†’ ratio
+            // del bundle (lo que el tÃ©cnico fijÃ³), comfort=1 â†’ ratio=1.0
+            // (sin compresiÃ³n = sonido mÃ¡s natural). Persiste en Settings
             // y despacha `ChangeComfort` al bloc en `onChangeEnd`.
             const _ComfortSlider(),
             const SizedBox(height: 24),
@@ -228,7 +228,7 @@ class _DeviceInfoPanel extends StatelessWidget {
           // Input device
           _DeviceRow(
             icon: Icons.mic,
-            label: 'Micrófono',
+            label: 'MicrÃ³fono',
             value: inputName,
             color: Colors.cyan,
           ),
@@ -254,7 +254,7 @@ class _DeviceInfoPanel extends StatelessWidget {
                   SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'Conecta un auricular Bluetooth para usar el audífono',
+                      'Conecta un auricular Bluetooth para usar el audÃ­fono',
                       style: TextStyle(color: Colors.orange, fontSize: 11),
                     ),
                   ),
@@ -332,7 +332,7 @@ class _PresetSelector extends StatelessWidget {
               Icon(Icons.equalizer, color: Colors.cyan, size: 18),
               SizedBox(width: 8),
               Text(
-                'Presets de Ecualización',
+                'Presets de EcualizaciÃ³n',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -516,7 +516,7 @@ class _SpectrumVisualization extends StatelessWidget {
 }
 
 // =============================================================================
-// MANUAL EQ CONTROL — 12 Band Sliders
+// MANUAL EQ CONTROL â€” 12 Band Sliders
 // =============================================================================
 
 class _ManualEqControl extends StatelessWidget {
@@ -656,20 +656,44 @@ class _NrAutoClassifyControls extends StatefulWidget {
 
 class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
   int _nrLevel = 1;
-  bool _autoClassify = true;
+  bool _autoClassify = false;
 
   static const _nrLabels = ['Off', 'Bajo', 'Medio', 'Alto'];
   static const _nrDescriptions = [
-    'Sin reducción de ruido',
-    'Suave — preserva naturalidad',
-    'Moderado — balance habla/ruido',
-    'Agresivo — máxima reducción',
+    'Sin reducciÃ³n de ruido',
+    'Suave â€” preserva naturalidad',
+    'Moderado â€” balance habla/ruido',
+    'Agresivo â€” mÃ¡xima reducciÃ³n',
   ];
 
   void _setNrLevel(int level) {
     setState(() => _nrLevel = level);
     try {
       context.read<AmplificationBloc>().add(UpdateNrLevel(level: level));
+    } catch (_) {}
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPersistedState();
+  }
+
+  Future<void> _loadPersistedState() async {
+    try {
+      final box = await Hive.openBox('settings_box');
+      final savedNr = box.get('nrLevelV2') as int? ?? box.get('lastNrLevel') as int?;
+      if (savedNr != null && savedNr >= 0 && savedNr <= 3) {
+        setState(() => _nrLevel = savedNr);
+      }
+    } catch (_) {}
+
+    try {
+      const channel = MethodChannel('com.psk.hearing_aid/audio');
+      // No tenemos un getter para autoClassify, asÃ­ que asumimos OFF como
+      // default seguro (el motor arranca con classify ON en C++, pero el
+      // TÃ©cnico lo apaga al boot vÃ­a AmplificationBloc). Si el usuario lo
+      // activÃ³ previamente, el estado se pierde al reiniciar la app.
     } catch (_) {}
   }
 
@@ -683,14 +707,9 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
 
   @override
   void dispose() {
-    // Control de diagnóstico: si el técnico lo dejó activado, apagar el
-    // clasificador al salir para no contaminar el modo normal (manual = OFF).
-    if (_autoClassify) {
-      try {
-        const channel = MethodChannel('com.psk.hearing_aid/audio');
-        channel.invokeMethod('updateAutoClassify', {'enabled': false});
-      } catch (_) {}
-    }
+    // Ya NO forzamos autoClassify=false al salir.
+    // El usuario decide si quiere el clasificador ON u OFF.
+    // Si lo dejÃ³ ON, se mantiene ON.
     super.dispose();
   }
 
@@ -710,7 +729,7 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
               Icon(Icons.noise_aware, color: Colors.amber, size: 18),
               SizedBox(width: 8),
               Text(
-                'Reducción de Ruido',
+                'ReducciÃ³n de Ruido',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -784,7 +803,7 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
                         ),
                       ),
                       Text(
-                        'Ajusta NR y compresión automáticamente',
+                        'Ajusta NR y compresiÃ³n automÃ¡ticamente',
                         style: TextStyle(color: Colors.white38, fontSize: 10),
                       ),
                     ],
@@ -805,25 +824,25 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
 }
 
 // =============================================================================
-// COMODIDAD SLIDER — WDRC compressionRatio offset
+// COMODIDAD SLIDER â€” WDRC compressionRatio offset
 // =============================================================================
 
-/// Slider continuo `[0.0, 1.0]` (paso 0.01, display 0–100 %) que controla
+/// Slider continuo `[0.0, 1.0]` (paso 0.01, display 0â€“100 %) que controla
 /// el offset de "Comodidad" sobre el `compressionRatio` del WDRC.
 ///
 /// Comportamiento (Task 7.1, Req 4.1, 4.2, 4.3):
 ///
 /// - **`onChanged`**: solo `setState` local; no toca persistencia ni bloc
 ///   para evitar bursts de eventos durante el drag (Req 4.2).
-/// - **`onChangeEnd`**: persiste vía `SettingsRepository.setComfort(v)` y
+/// - **`onChangeEnd`**: persiste vÃ­a `SettingsRepository.setComfort(v)` y
 ///   despacha [ChangeComfort] al [AmplificationBloc]. Ambos se completan
 ///   dentro de 200 ms en el camino feliz.
 /// - **Fallo de persistencia**: log warning + snackbar no bloqueante con
-///   el mensaje exacto del Req 4.3, y se continúa con el dispatch
-///   (cambio activo solo en esta sesión).
+///   el mensaje exacto del Req 4.3, y se continÃºa con el dispatch
+///   (cambio activo solo en esta sesiÃ³n).
 /// - **Carga inicial**: `initState` lee `bloc.settingsRepository.comfort`
-///   sincrónicamente (el getter del repo ya retorna `0.5` cuando la key
-///   está ausente, es no numérica o `NaN`, y clampea a `[0.0, 1.0]`).
+///   sincrÃ³nicamente (el getter del repo ya retorna `0.5` cuando la key
+///   estÃ¡ ausente, es no numÃ©rica o `NaN`, y clampea a `[0.0, 1.0]`).
 class _ComfortSlider extends StatefulWidget {
   const _ComfortSlider();
 
@@ -840,46 +859,46 @@ class _ComfortSliderState extends State<_ComfortSlider> {
   void initState() {
     super.initState();
     // Cargar valor inicial desde Settings (Req 4.1, 4.6). El getter es
-    // sincrónico y ya saneans NaN/null/clamp internamente.
+    // sincrÃ³nico y ya saneans NaN/null/clamp internamente.
     try {
       final bloc = context.read<AmplificationBloc>();
       _comfort = bloc.settingsRepository.comfort;
     } catch (e) {
       // Bloc no disponible (caso de tests aislados o pantalla
-      // construida fuera del provider) → mantener default 0.5.
+      // construida fuera del provider) â†’ mantener default 0.5.
       developer.log(
         '_ComfortSlider.initState: no se pudo leer comfort desde '
-        'SettingsRepository ($e) — usando default 0.5.',
+        'SettingsRepository ($e) â€” usando default 0.5.',
         name: 'SimulatorScreen',
       );
     }
   }
 
   /// Persiste el nuevo valor en Settings y despacha [ChangeComfort] al
-  /// bloc. En fallo de persistencia, muestra snackbar + continúa con el
+  /// bloc. En fallo de persistencia, muestra snackbar + continÃºa con el
   /// dispatch (Req 4.3).
   Future<void> _onChangeEnd(double v) async {
     AmplificationBloc? bloc;
     try {
       bloc = context.read<AmplificationBloc>();
     } catch (e) {
-      // Bloc no disponible → no hay nada que despachar; abortar
-      // silenciosamente. El estado local ya se actualizó en `onChanged`.
+      // Bloc no disponible â†’ no hay nada que despachar; abortar
+      // silenciosamente. El estado local ya se actualizÃ³ en `onChanged`.
       developer.log(
         '_ComfortSlider._onChangeEnd: AmplificationBloc no disponible '
-        '($e) — ignorando dispatch.',
+        '($e) â€” ignorando dispatch.',
         name: 'SimulatorScreen',
       );
       return;
     }
 
-    // 1) Persistir vía SettingsRepository.setComfort.
+    // 1) Persistir vÃ­a SettingsRepository.setComfort.
     try {
       await bloc.settingsRepository.setComfort(v);
     } catch (e, st) {
       developer.log(
-        '_ComfortSlider: persistencia de comfort falló: $e — '
-        'aplicando solo a la sesión.',
+        '_ComfortSlider: persistencia de comfort fallÃ³: $e â€” '
+        'aplicando solo a la sesiÃ³n.',
         name: 'SimulatorScreen',
         error: e,
         stackTrace: st,
@@ -890,7 +909,7 @@ class _ComfortSliderState extends State<_ComfortSlider> {
           const SnackBar(
             content: Text(
               'No se pudo guardar Comodidad. Cambio activo solo en '
-              'esta sesión.',
+              'esta sesiÃ³n.',
             ),
             duration: Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
@@ -943,7 +962,7 @@ class _ComfortSliderState extends State<_ComfortSlider> {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Más comodidad = menos compresión = sonido más natural.',
+            'MÃ¡s comodidad = menos compresiÃ³n = sonido mÃ¡s natural.',
             style: TextStyle(color: Colors.white38, fontSize: 11),
           ),
           const SizedBox(height: 8),
@@ -960,7 +979,7 @@ class _ComfortSliderState extends State<_ComfortSlider> {
               value: _comfort,
               min: 0.0,
               max: 1.0,
-              // 100 divisiones sobre [0,1] → paso 0.01 (Req 4.1).
+              // 100 divisiones sobre [0,1] â†’ paso 0.01 (Req 4.1).
               divisions: 100,
               label: percentLabel,
               onChanged: (v) => setState(() => _comfort = v),
