@@ -19,67 +19,16 @@
 #include <atomic>
 #include <cmath>
 
-/// Parámetros compuestos del WDRC commitados atómicamente.
-///
-/// Fase F/Atomic — reemplaza los 6 atomics individuales por un snapshot
-/// que se escribe completo desde UI thread y se lee completo desde audio
-/// thread mediante un índice de doble buffer. Esto garantiza que knee,
-/// ratio, attack y release se vean de forma consistente (transaccional)
-/// desde el audio thread, evitando la ventana donde algunos parámetros
-/// tienen el valor nuevo y otros el viejo.
-///
-/// Usado con AtomicWdrcSnapshot (doble buffer gobernado por un seq atómico).
-struct WdrcParamsSnapshot {
-    float expansionKnee  = 35.0f;  ///< dB SPL — debajo: expansión
-    float expansionRatio = 2.0f;   ///< Ratio de expansión (input:output)
-    float compressionKnee  = 55.0f; ///< dB SPL — encima: compresión
-    float compressionRatio = 2.0f; ///< Ratio de compresión (input:output)
-    float attackMs    = 5.0f;     ///< Tiempo de ataque en ms
-    float releaseMs   = 100.0f;   ///< Tiempo de liberación en ms
-    uint64_t seq = 0;             ///< Secuencia monotónica para detectar snapshots nuevos
-};
-
-/// Double-buffer atómico para commit transaccional de WdrcParamsSnapshot.
-/// El UI thread escribe en un buffer y publica el índice; el audio thread
-/// detecta el cambio y lee el buffer completo.
-struct AtomicWdrcSnapshot {
-    WdrcParamsSnapshot snapshots[2];       ///< Double buffer
-    std::atomic<uint64_t> readSeq{0};      ///< Última secuencia consumida por audio thread
-    std::atomic<uint64_t> writeSeq{0};     ///< Última secuencia publicada por UI thread
-
-    /// Commit transaccional desde UI thread.
-    /// @return la nueva secuencia (writeSeq después del commit).
-    uint64_t commit(const WdrcParamsSnapshot& src) {
-        const uint64_t oldW = writeSeq.load(std::memory_order_acquire);
-        const int idx = (oldW % 2 == 0) ? 1 : 0;
-        snapshots[idx] = src;
-        snapshots[idx].seq = oldW + 1;
-        writeSeq.store(oldW + 1, std::memory_order_release);
-        return oldW + 1;
-    }
-
-    /// Lee el snapshot más reciente desde audio thread.
-    /// Devuelve true si hay un snapshot nuevo (y lo copia en out).
-    bool tryRead(WdrcParamsSnapshot& out) {
-        const uint64_t w = writeSeq.load(std::memory_order_acquire);
-        if (w == readSeq.load(std::memory_order_relaxed)) {
-            return false;  // no hay snapshot nuevo
-        }
-        const int idx = (w % 2 == 0) ? 0 : 1;
-        out = snapshots[idx];
-        readSeq.store(w, std::memory_order_release);
-        return true;
-    }
-
-    /// Inicializa ambos snapshots con valores por defecto.
-    void initDefaults() {
-        for (auto& s : snapshots) {
-            s = WdrcParamsSnapshot{};
-            s.seq = 0;
-        }
-        readSeq.store(0, std::memory_order_relaxed);
-        writeSeq.store(0, std::memory_order_relaxed);
-    }
+/// Parámetros atómicos del WDRC para actualización thread-safe.
+/// Cada parámetro se almacena individualmente como atómico para
+/// permitir actualizaciones lock-free desde el hilo de UI.
+struct AtomicWdrcParams {
+    std::atomic<float> expansionKnee{35.0f};     ///< dB SPL — debajo: expansión
+    std::atomic<float> expansionRatio{2.0f};     ///< Ratio de expansión (input:output)
+    std::atomic<float> compressionKnee{55.0f};   ///< dB SPL — encima: compresión
+    std::atomic<float> compressionRatio{2.0f};   ///< Ratio de compresión (input:output)
+    std::atomic<float> attackMs{5.0f};           ///< Tiempo de ataque en ms
+    std::atomic<float> releaseMs{100.0f};        ///< Tiempo de liberación en ms
 };
 
 /// WDRC con modelo de 3 regiones:
@@ -142,19 +91,8 @@ private:
     /// actuales y el sample rate.
     void updateCoefficients();
 
-    /// Commit transaccional de los 6 parámetros WDRC como snapshot atómico.
-    /// Escribe un WdrcParamsSnapshot completo y publica el índice.
-    void commitParams(const WdrcParamsSnapshot& src);
-
-    /// Detecta nuevo snapshot desde audio thread y, si lo hay, actualiza
-    /// los parámetros locales + recalcula coeficientes.
-    void checkForNewParams();
-
-    /// Snapshot atómico de doble buffer para los parámetros WDRC.
-    AtomicWdrcSnapshot atomicParams_;
-
-    /// Parámetros activos en el audio thread (copia local del snapshot).
-    WdrcParamsSnapshot activeParams_;
+    /// Parámetros atómicos (thread-safe, actualizables desde hilo de UI).
+    AtomicWdrcParams params_;
 
     /// Sample rate del sistema (Hz)
     int sampleRate_ = 16000;
