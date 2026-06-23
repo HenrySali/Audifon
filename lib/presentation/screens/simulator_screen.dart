@@ -686,14 +686,11 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
       if (savedNr != null && savedNr >= 0 && savedNr <= 3) {
         setState(() => _nrLevel = savedNr);
       }
-    } catch (_) {}
 
-    try {
-      const channel = MethodChannel('com.psk.hearing_aid/audio');
-      // No tenemos un getter para autoClassify, asÃ­ que asumimos OFF como
-      // default seguro (el motor arranca con classify ON en C++, pero el
-      // TÃ©cnico lo apaga al boot vÃ­a AmplificationBloc). Si el usuario lo
-      // activÃ³ previamente, el estado se pierde al reiniciar la app.
+      final savedAuto = box.get('autoClassifyEnabled') as bool?;
+      if (savedAuto != null) {
+        setState(() => _autoClassify = savedAuto);
+      }
     } catch (_) {}
   }
 
@@ -702,6 +699,14 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
     try {
       const channel = MethodChannel('com.psk.hearing_aid/audio');
       channel.invokeMethod('updateAutoClassify', {'enabled': enabled});
+    } catch (_) {}
+    _saveAutoClassify(enabled);
+  }
+
+  Future<void> _saveAutoClassify(bool enabled) async {
+    try {
+      final box = await Hive.openBox('settings_box');
+      await box.put('autoClassifyEnabled', enabled);
     } catch (_) {}
   }
 
