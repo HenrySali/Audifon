@@ -101,7 +101,12 @@ dev_dependencies:
 dependency_overrides:
   analyzer: ">=6.0.0 <14.0.0"
   objective_c: 4.0.0
-  win32: 5.0.0
+  # win32 5.5.4: versión mínima compatible con file_picker 8.0.5 y
+  # wakelock_plus 1.2.5 bajo Flutter 3.19.6. Las versiones previas (5.0.0)
+  # no exponen COINIT, WIN32_ERROR ni EXECUTION_STATE que esos plugins usan
+  # en sus implementaciones Windows — y el kernel snapshot de Dart las
+  # compila aunque el target sea Android.
+  win32: 5.5.4
   file_picker: 8.0.5
   wakelock_plus: 1.2.5
   # path_provider_foundation 2.5.x requires objective_c >=8.0,
