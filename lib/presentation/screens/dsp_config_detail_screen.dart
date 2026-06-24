@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../data/bridges/audio_bridge.dart';
+import '../../data/bridges/audio_bridge_impl.dart';
 import '../../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
 import '../../domain/entities/eq_preset.dart';
 import '../../domain/entities/environment_profile.dart';
@@ -18,6 +21,7 @@ import '../widgets/clamped_bands_indicator.dart';
 /// - Parámetros WDRC del perfil activo real
 /// - Nivel de NR real desde SettingsRepository
 /// - Volumen y nivel de entrada desde el estado del BLoC
+/// - Métricas de latencia desde AudioEngine.getLatencyMetrics() (polling ~2 Hz)
 ///
 /// Todos los datos mostrados reflejan lo que el engine nativo está usando.
 class DspConfigDetailScreen extends StatefulWidget {
@@ -40,10 +44,46 @@ class _DspConfigDetailScreenState extends State<DspConfigDetailScreen> {
   /// Indica si los datos reales ya se cargaron.
   bool _loaded = false;
 
+  /// Métricas de latencia en vivo desde el motor (null = no disponible).
+  Map<String, dynamic>? _latencyMetrics;
+
+  /// Timer para polling de latencia (~2 Hz).
+  Timer? _latencyTimer;
+
   @override
   void initState() {
     super.initState();
     _loadRealConfig();
+    _startLatencyPolling();
+  }
+
+  @override
+  void dispose() {
+    _latencyTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Sondea el motor cada 500 ms para métricas de latencia.
+  void _startLatencyPolling() {
+    _latencyTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      _fetchLatencyMetrics();
+    });
+    // Primera lectura inmediata.
+    _fetchLatencyMetrics();
+  }
+
+  Future<void> _fetchLatencyMetrics() async {
+    try {
+      final bridge = context.read<AmplificationBloc>().state;
+      // Solo tiene sentido si el motor está activo.
+      if (bridge is! AmplificationActive) return;
+      final metrics = await AudioBridgeImpl().getLatencyMetrics();
+      if (mounted) {
+        setState(() => _latencyMetrics = metrics);
+      }
+    } catch (_) {
+      // Fallo silencioso: se siguen mostrando los defaults.
+    }
   }
 
   /// Carga la configuración real desde los repositorios (fuente de verdad).
@@ -122,6 +162,7 @@ class _DspConfigDetailScreenState extends State<DspConfigDetailScreen> {
             realGains: _realGains,
             realPresetName: _realPresetName,
             realNrLevel: _realNrLevel,
+            latencyMetrics: _latencyMetrics,
           );
         },
       ),
@@ -175,9 +216,8 @@ class _DspConfigDetailScreenState extends State<DspConfigDetailScreen> {
     buffer.writeln('▸ Auriculares: ${state.headphonesConnected ? "Conectados" : "Desconectados"}');
     buffer.writeln('');
     buffer.writeln('▸ Pipeline: Input → NR → EQ → WDRC → Volume → MPO → Output');
-    buffer.writeln('▸ Sample Rate: 48000 Hz');
-    buffer.writeln('▸ Buffer: 256 samples (~5.3 ms)');
-    buffer.writeln('▸ Latencia: ~5.8 ms');
+    buffer.writeln(_latSummary());
+    buffer.writeln('');
     buffer.writeln('');
     buffer.writeln('═══════════════════════════════════════');
     return buffer.toString();
@@ -198,6 +238,71 @@ class _DspConfigDetailScreenState extends State<DspConfigDetailScreen> {
     const labels = ['Off', 'Bajo', 'Medio', 'Alto'];
     return labels[level.clamp(0, 3)];
   }
+
+  // ─── Helpers de formateo de latencia ────────────────────
+
+  String _fmtd(dynamic v) {
+    if (v is num && v >= 0) return '${v.toStringAsFixed(1)} ms';
+    return '--';
+  }
+
+  String _latSummary() {
+    final m = _latencyMetrics;
+    if (m == null) {
+      return '▸ Sample Rate: 48000 Hz\n▸ Buffer: 256 samples (~5.3 ms)\n▸ Latencia: ~5.8 ms (valores por defecto)';
+    }
+    final buf = StringBuffer();
+    buf.writeln('▸ Sample Rate: ${_sampleRate()}');
+    buf.writeln('▸ Buffer: ${_bufferInfo()}');
+    buf.writeln('▸ Latencia DSP: ${_dspLatency()}');
+    buf.writeln('▸ Input Latency: ${_inputLatency()}');
+    buf.writeln('▸ Output Latency: ${_outputLatency()}');
+    buf.writeln('▸ Total Estimada: ${_totalLatency()}');
+    if (m['dnnInferenceMs'] is num && (m['dnnInferenceMs'] as num) >= 0) {
+      buf.writeln('▸ DNN Inference: ${_fmtd(m['dnnInferenceMs'])}');
+    }
+    return buf.toString().trimRight();
+  }
+
+  String _sampleRate() {
+    final m = _latencyMetrics;
+    if (m == null) return '48000 Hz (default)';
+    final sr = m['sampleRate'];
+    return sr is int ? '$sr Hz' : '48000 Hz';
+  }
+
+  String _bufferInfo() {
+    final m = _latencyMetrics;
+    if (m == null) return '256 samples (~5.3 ms)';
+    final frames = m['inputFramesPerBurst'];
+    final sr = m['sampleRate'];
+    if (frames is int && sr is int && sr > 0) {
+      final ms = (frames / sr * 1000).toStringAsFixed(1);
+      return '$frames samples (~$ms ms)';
+    }
+    return '--';
+  }
+
+  String _dspLatency() {
+    final m = _latencyMetrics;
+    if (m == null) return '~5.8 ms (default)';
+    return '${_fmtd(m['dspBlockMs'])} (proc: ${_fmtd(m['dspProcessingMsAvg'])})';
+  }
+
+  String _inputLatency() => _fmtd(_latencyMetrics?['inputLatencyMs']);
+  String _outputLatency() => _fmtd(_latencyMetrics?['outputLatencyMs']);
+
+  String _totalLatency() {
+    final m = _latencyMetrics;
+    if (m == null) return '~5.8 ms (default)';
+    final parts = <double>[];
+    for (final key in ['inputLatencyMs', 'outputLatencyMs', 'dspProcessingMsAvg']) {
+      final v = m[key];
+      if (v is num && v >= 0) parts.add(v.toDouble());
+    }
+    if (parts.isEmpty) return '--';
+    return '${parts.reduce((a, b) => a + b).toStringAsFixed(1)} ms';
+  }
 }
 
 // =============================================================================
@@ -209,12 +314,14 @@ class _ConfigDetailBody extends StatelessWidget {
   final List<double> realGains;
   final String realPresetName;
   final int realNrLevel;
+  final Map<String, dynamic>? latencyMetrics;
 
   const _ConfigDetailBody({
     required this.state,
     required this.realGains,
     required this.realPresetName,
     required this.realNrLevel,
+    this.latencyMetrics,
   });
 
   @override
@@ -264,6 +371,7 @@ class _ConfigDetailBody extends StatelessWidget {
             realGains: realGains,
             realNrLevel: realNrLevel,
             profile: profile,
+            latencyMetrics: latencyMetrics,
           ),
           const SizedBox(height: 24),
         ],
@@ -711,13 +819,51 @@ class _PipelineCard extends StatelessWidget {
   final List<double> realGains;
   final int realNrLevel;
   final EnvironmentProfile profile;
+  final Map<String, dynamic>? latencyMetrics;
 
   const _PipelineCard({
     required this.state,
     required this.realGains,
     required this.realNrLevel,
     required this.profile,
+    this.latencyMetrics,
   });
+
+  static String _fmt(dynamic v) {
+    if (v is num && v >= 0) return '${v.toStringAsFixed(1)} ms';
+    return '--';
+  }
+
+  static String _sr(Map<String, dynamic>? m) {
+    if (m == null) return '48000 Hz (default)';
+    final sr = m['sampleRate'];
+    return sr is int ? '$sr Hz' : '48000 Hz';
+  }
+
+  static String _buf(Map<String, dynamic>? m) {
+    if (m == null) return '256 samples (~5.3 ms)';
+    final f = m['inputFramesPerBurst'];
+    final sr = m['sampleRate'];
+    if (f is int && sr is int && sr > 0) {
+      return '$f samples (~${(f / sr * 1000).toStringAsFixed(1)} ms)';
+    }
+    return '--';
+  }
+
+  static String _dsp(Map<String, dynamic>? m) {
+    if (m == null) return '~5.8 ms (default)';
+    return '${_fmt(m['dspBlockMs'])} (proc: ${_fmt(m['dspProcessingMsAvg'])})';
+  }
+
+  static String _tot(Map<String, dynamic>? m) {
+    if (m == null) return '~5.8 ms (default)';
+    final p = <double>[];
+    for (final k in ['inputLatencyMs', 'outputLatencyMs', 'dspProcessingMsAvg']) {
+      final v = m[k];
+      if (v is num && v >= 0) p.add(v.toDouble());
+    }
+    return p.isEmpty ? '--' : '${p.reduce((a, b) => a + b).toStringAsFixed(1)} ms';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -745,9 +891,12 @@ class _PipelineCard extends StatelessWidget {
               '+${(maxEqGain + (state.volumeDb > 0 ? state.volumeDb : 0)).toStringAsFixed(1)} dB',
               Colors.red.shade200),
           _InfoRow('Ganancia mín (silencio)', '≤ 0 dB (expansión activa)', Colors.green),
-          _InfoRow('Sample Rate', '48000 Hz', Colors.white54),
-          _InfoRow('Buffer Size', '256 samples (~5.3 ms)', Colors.white54),
-          _InfoRow('Latencia total', '~5.8 ms', Colors.white54),
+          _InfoRow('Sample Rate', _sr(latencyMetrics), Colors.white54),
+          _InfoRow('Buffer Size', _buf(latencyMetrics), Colors.white54),
+          _InfoRow('Latencia DSP', _dsp(latencyMetrics), Colors.white54),
+          _InfoRow('Input Latency', _fmt(latencyMetrics?['inputLatencyMs']), Colors.white54),
+          _InfoRow('Output Latency', _fmt(latencyMetrics?['outputLatencyMs']), Colors.white54),
+          _InfoRow('Total Latencia', _tot(latencyMetrics), Colors.cyan),
           _InfoRow('SPL Offset', '120 dB (mic real)', Colors.white54),
         ],
       ),

@@ -315,6 +315,47 @@ class AudioBridgeImpl implements AudioBridge {
     }
   }
 
+  // ─── Latency Metrics (spec monitor-latencia-audio) ──────────────────────
+  //
+  // Invoca el handler Kotlin `getLatencyMetrics` (recién cableado en
+  // `AudioMethodChannel.kt`), que delega en `NativeAudioBridge.getLatencyMetrics()`
+  // → JNI `nativeGetLatencyMetrics` → `audio_engine.cpp::getLatencyMetrics()`.
+  // El handler nativo retorna `null` cuando el motor no está corriendo;
+  // este wrapper preserva ese contrato y, en cualquier excepción, retorna
+  // `null` tras loguear warning.
+
+  @override
+  Future<Map<String, dynamic>?> getLatencyMetrics() async {
+    try {
+      final result = await _methodChannel.invokeMethod('getLatencyMetrics');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return null;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'getLatencyMetrics: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return null;
+    } on PlatformException catch (e) {
+      developer.log(
+        'getLatencyMetrics PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return null;
+    } catch (e) {
+      developer.log(
+        'getLatencyMetrics unexpected error: $e',
+        name: _logName,
+        level: 900,
+      );
+      return null;
+    }
+  }
+
   // ─── DSP Stage Metrics (Smart Scene polling + diagnóstico) ──────────────
   //
   // Replica el patrón del paciente (`AudioBridge.getDspStageMetrics`):

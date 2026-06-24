@@ -101,6 +101,9 @@ dev_dependencies:
 dependency_overrides:
   analyzer: ">=6.0.0 <14.0.0"
   objective_c: 4.0.0
+  win32: 5.0.0
+  file_picker: 8.0.5
+  wakelock_plus: 1.2.5
   # path_provider_foundation 2.5.x requires objective_c >=8.0,
   # but our project pins objective_c to 4.0.0 for compatibility with
   # other plugins. 2.4.x is the last release compatible with objective_c 4.x.

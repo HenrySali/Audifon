@@ -656,7 +656,7 @@ class _NrAutoClassifyControls extends StatefulWidget {
 
 class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
   int _nrLevel = 1;
-  bool _autoClassify = true;
+  bool _autoClassify = false;
 
   static const _nrLabels = ['Off', 'Bajo', 'Medio', 'Alto'];
   static const _nrDescriptions = [
@@ -673,24 +673,48 @@ class _NrAutoClassifyControlsState extends State<_NrAutoClassifyControls> {
     } catch (_) {}
   }
 
+  @override
+  void initState() {
+    super.initState();
+    _loadPersistedState();
+  }
+
+  Future<void> _loadPersistedState() async {
+    try {
+      final box = await Hive.openBox('settings_box');
+      final savedNr = box.get('nrLevelV2') as int? ?? box.get('lastNrLevel') as int?;
+      if (savedNr != null && savedNr >= 0 && savedNr <= 3) {
+        setState(() => _nrLevel = savedNr);
+      }
+
+      final savedAuto = box.get('autoClassifyEnabled') as bool?;
+      if (savedAuto != null) {
+        setState(() => _autoClassify = savedAuto);
+      }
+    } catch (_) {}
+  }
+
   void _setAutoClassify(bool enabled) {
     setState(() => _autoClassify = enabled);
     try {
       const channel = MethodChannel('com.psk.hearing_aid/audio');
       channel.invokeMethod('updateAutoClassify', {'enabled': enabled});
     } catch (_) {}
+    _saveAutoClassify(enabled);
+  }
+
+  Future<void> _saveAutoClassify(bool enabled) async {
+    try {
+      final box = await Hive.openBox('settings_box');
+      await box.put('autoClassifyEnabled', enabled);
+    } catch (_) {}
   }
 
   @override
   void dispose() {
-    // Control de diagnóstico: si el técnico lo dejó activado, apagar el
-    // clasificador al salir para no contaminar el modo normal (manual = OFF).
-    if (_autoClassify) {
-      try {
-        const channel = MethodChannel('com.psk.hearing_aid/audio');
-        channel.invokeMethod('updateAutoClassify', {'enabled': false});
-      } catch (_) {}
-    }
+    // Ya NO forzamos autoClassify=false al salir.
+    // El usuario decide si quiere el clasificador ON u OFF.
+    // Si lo dejó ON, se mantiene ON.
     super.dispose();
   }
 

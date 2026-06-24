@@ -534,6 +534,23 @@ class NativeAudioBridge {
     // ─── Latency Monitor & Loopback Test (spec monitor-latencia-audio) ───
 
     /**
+     * Wrapper público de [nativeGetLatencyMetrics] con protección de
+     * excepción JNI (engine nulo → null).
+     *
+     * @return Map con métricas del struct C++ [LatencyMetrics]:
+     *   schemaVersion, sampleRate, inputFramesPerBurst, outputFramesPerBurst,
+     *   outputBufferSizeFrames, inputAudioApi, outputAudioApi,
+     *   inputSharingMode, outputSharingMode, outputPerformanceMode,
+     *   inputLatencyMs, outputLatencyMs, dspBlockMs, dspProcessingMsAvg,
+     *   dspProcessingMsMax, dnnInferenceMs, dnnGroupDelayMs, tnrLookaheadMs,
+     *   callbackUnderruns, timestampsHealthy.
+     *   Null si el engine no está creado o el JNI falla.
+     */
+    fun getLatencyMetrics(): Map<String, Any?>? {
+        return try { nativeGetLatencyMetrics() } catch (_: Exception) { null }
+    }
+
+    /**
      * Retorna métricas de latencia del pipeline DSP como Map.
      *
      * Campos esperados (poblados por el lado nativo desde
@@ -548,7 +565,7 @@ class NativeAudioBridge {
      *
      * @return Map con las métricas, o null si el engine nativo no está creado.
      */
-    external fun nativeGetLatencyMetrics(): Map<String, Any?>?
+    private external fun nativeGetLatencyMetrics(): Map<String, Any?>?
 
     /**
      * Inicia un test de loopback (medición end-to-end de latencia mediante

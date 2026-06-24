@@ -260,6 +260,25 @@ abstract class AudioBridge {
     bool pinPreset = true,
   });
 
+  /// Obtiene un snapshot de las métricas de latencia del motor de audio.
+  ///
+  /// Retorna un `Map<String, dynamic>` con las claves del struct C++
+  /// `LatencyMetrics` (expuestas por `nativeGetLatencyMetrics` vía JNI):
+  /// `schemaVersion`, `sampleRate`, `inputFramesPerBurst`, `outputFramesPerBurst`,
+  /// `outputBufferSizeFrames`, `inputAudioApi`, `outputAudioApi`,
+  /// `inputSharingMode`, `outputSharingMode`, `outputPerformanceMode`,
+  /// `inputLatencyMs`, `outputLatencyMs`, `dspBlockMs`, `dspProcessingMsAvg`,
+  /// `dspProcessingMsMax`, `dnnInferenceMs`, `dnnGroupDelayMs`, `tnrLookaheadMs`,
+  /// `callbackUnderruns`, `timestampsHealthy`.
+  ///
+  /// Retorna `null` cuando:
+  /// - el motor de audio no está corriendo,
+  /// - el handler nativo no está implementado (`MissingPluginException`),
+  /// - la invocación falla por cualquier otra razón.
+  ///
+  /// Requisitos: spec monitor-latencia-audio
+  Future<Map<String, dynamic>?> getLatencyMetrics();
+
   /// Obtiene un snapshot de las métricas por etapa del pipeline DSP.
   ///
   /// Devuelve un `Map<String, dynamic>` con las claves expuestas por el
