@@ -640,12 +640,6 @@ class _ActiveView extends StatelessWidget {
             },
           ),
           const SizedBox(height: 12),
-          // Modo Conversación (SCO + 16 kHz a baja latencia). NO pasa por
-          // el AmplificationBloc — es un toggle del motor (ruteo + SR), no
-          // una decisión clínica de prescripción. El widget self-contained
-          // persiste en `settings_box` (key `conversationModeEnabled`) y
-          // delega al MethodChannel del lado nativo.
-          const _ConversationModeToggleCard(),
           // Comparación visual NL2 vs NL3 (solo cuando hay datos NL3 y el
           // modo activo es Smart-NL3). Tap → bottom sheet con detalle por banda.
           if (state.prescriberMode == PrescriberMode.smartNl3 &&
@@ -698,6 +692,12 @@ class _ActiveView extends StatelessWidget {
           // `Timer.periodic` interno (1 Hz) para reflejar la escena real.
           const _SmartSceneToggleCard(),
           const SizedBox(height: 16),
+          // modo-conversacion-sco: toggle Modo Conversación (SCO baja latencia)
+          // Solo visible cuando hay Bluetooth conectado (recomendación bioingeniero)
+          if (state.headphonesConnected) ...[
+            const _ConversationModeToggleCard(),
+            const SizedBox(height: 16),
+          ],
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
           if (state.activeEqPreset == _kPersonalPresetName) ...[
@@ -2612,115 +2612,244 @@ class _SmartSceneButton extends StatelessWidget {
 /// no hay BT) con `MODE_IN_COMMUNICATION` y baja el sample rate del pipeline
 /// a 16 kHz / 64 frames. Latencia BT cae de ~200 ms a ~25 ms.
 ///
-/// El toggle es **local** al widget: persiste en el Hive box
-/// `settings_box` (key `conversationModeEnabled`, ver
-/// [SettingsRepositoryImpl]) y delega al MethodChannel del lado nativo
-/// vía [AudioBridgeImpl.setConversationMode]. NO emite ningún evento del
-/// [AmplificationBloc] porque no es una decisión clínica de prescripción
-/// (no toca EQ/WDRC/MPO/NR/DNN); es un control del motor (ruteo + SR).
+/// Despacha el evento [ToggleConversationMode] al [AmplificationBloc]. El
+/// handler `_onToggleConversationMode` delega en `audioBridge.setConversationMode`,
+/// persiste en Hive (`conversationMode`) y emite el state con `conversationMode`.
+///
+/// Muestra un chip con el modo actual: "🎵 A2DP (Normal)" o "🎧 SCO (Baja Latencia)"
+/// y un warning badge "⚠️ Calidad reducida (16 kHz)" cuando está activo.
 class _ConversationModeToggleCard extends StatefulWidget {
   const _ConversationModeToggleCard();
 
   @override
-  State<_ConversationModeToggleCard> createState() =>
-      _ConversationModeToggleCardState();
+  State<_ConversationModeToggleCard> createState() => _ConversationModeToggleCardState();
 }
 
-class _ConversationModeToggleCardState
-    extends State<_ConversationModeToggleCard> {
-  final AudioBridgeImpl _bridge = AudioBridgeImpl();
-  bool _enabled = false;
-  String _status = '';
-  bool _busy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPersisted();
-  }
-
-  void _loadPersisted() {
-    if (!Hive.isBoxOpen(settingsBoxName)) return;
-    final box = Hive.box<dynamic>(settingsBoxName);
-    final v = box.get('conversationModeEnabled') == true;
-    if (mounted) setState(() => _enabled = v);
-  }
-
-  Future<void> _onChanged(bool v) async {
-    if (_busy) return;
-    setState(() {
-      _enabled = v;
-      _busy = true;
-    });
-    try {
-      if (Hive.isBoxOpen(settingsBoxName)) {
-        await Hive.box<dynamic>(settingsBoxName)
-            .put('conversationModeEnabled', v);
-      }
-      final res = await _bridge.setConversationMode(v);
-      if (mounted) setState(() => _status = res);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  String _subtitle() {
-    if (!_enabled) {
-      return 'Latencia BT alta — A2DP @ 48 kHz (default)';
-    }
-    switch (_status) {
-      case 'connected':
-        return 'SCO Bluetooth activo · ~25 ms de latencia';
-      case 'fallback_builtin':
-        return 'BT no conectado · corriendo por parlante interno';
-      case 'failed':
-        return 'No se pudo activar — el sistema bloqueó el modo';
-      case 'engine_idle':
-        return 'Se aplicará al iniciar la amplificación';
-      default:
-        return 'Baja latencia para conversaciones cara-a-cara';
-    }
-  }
+class _ConversationModeToggleCardState extends State<_ConversationModeToggleCard> {
+  bool _isChanging = false;
+  bool? _expectedMode; // null = no hay cambio en progreso
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213e),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _enabled
-              ? const Color(0x9900BCD4) // Colors.cyan @ alpha 0.6
-              : Colors.white12,
-        ),
-      ),
-      child: SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Row(
-          children: [
-            Icon(Icons.record_voice_over, size: 20, color: Colors.cyanAccent),
-            SizedBox(width: 8),
-            Text(
-              'Modo Conversación',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 15,
-              ),
+    final state = context.watch<AmplificationBloc>().state;
+    final isActive = state is AmplificationActive && state.conversationMode;
+
+    return BlocListener<AmplificationBloc, AmplificationState>(
+      listenWhen: (prev, curr) {
+        // Solo escuchar si hay un cambio en progreso Y conversationMode cambió
+        if (_expectedMode == null) return false;
+        if (curr is! AmplificationActive) return false;
+        final prevMode = prev is AmplificationActive ? prev.conversationMode : false;
+        return curr.conversationMode != prevMode;
+      },
+      listener: (context, state) {
+        if (state is AmplificationActive && state.conversationMode == _expectedMode) {
+          // El cambio esperado terminó
+          if (mounted) {
+            setState(() {
+              _isChanging = false;
+              _expectedMode = null;
+            });
+          }
+        }
+      },
+      child: LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 360;
+        return Container(
+          padding: EdgeInsets.all(isCompact ? 8 : 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF16213e),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isActive ? Colors.cyan.withOpacity(0.6) : Colors.white12,
             ),
-          ],
-        ),
-        subtitle: Text(
-          _subtitle(),
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
-        ),
-        value: _enabled,
-        activeColor: Colors.cyanAccent,
-        onChanged: _busy ? null : (v) => _onChanged(v),
-      ),
-    );
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.phone_bluetooth_speaker,
+                    color: isActive ? Colors.cyanAccent : Colors.white60,
+                    size: isCompact ? 16 : 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Modo Conversación',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: isCompact ? 12 : 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'BT baja latencia (~10ms). Voz 16 kHz.',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: isCompact ? 10 : 11,
+                          ),
+                        ),
+                        if (!isCompact) ...[
+                          const SizedBox(height: 2),
+                          const Text(
+                            '⚠️ Amplificación 6-8 kHz desactivada (consonantes /s/, /f/)',
+                            style: TextStyle(
+                              color: Colors.orangeAccent,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  // Mostrar loading spinner si está cambiando, sino el Switch
+                  if (_isChanging)
+                    const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+                      ),
+                    )
+                  else
+                    Switch(
+                      value: isActive,
+                      onChanged: _isChanging ? null : (v) {
+                        setState(() {
+                          _isChanging = true;
+                          _expectedMode = v;
+                        });
+                        context
+                            .read<AmplificationBloc>()
+                            .add(ToggleConversationMode(activate: v));
+                        
+                        // Timeout de respaldo (por si el BLoC no emite state en tiempo razonable)
+                        Future.delayed(const Duration(seconds: 5), () {
+                          if (mounted && _isChanging && _expectedMode == v) {
+                            setState(() {
+                              _isChanging = false;
+                              _expectedMode = null;
+                            });
+                          }
+                        });
+                      },
+                      activeColor: Colors.cyanAccent,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  // Chip de modo actual
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? Colors.cyan.withOpacity(0.15)
+                          : Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color:
+                            isActive ? Colors.cyan.withOpacity(0.4) : Colors.white24,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isActive ? Icons.headset_mic : Icons.headphones,
+                          color: isActive ? Colors.cyanAccent : Colors.white38,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isActive ? 'SCO (Baja Latencia)' : 'A2DP (Normal)',
+                          style: TextStyle(
+                            color: isActive ? Colors.cyanAccent : Colors.white60,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Warning badge cuando está activo
+                  if (isActive) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.warning_amber_rounded,
+                              color: Colors.orangeAccent, size: 14),
+                          SizedBox(width: 4),
+                          Text(
+                            'Solo para llamadas',
+                            style: TextStyle(
+                              color: Colors.orangeAccent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              // Nota informativa de uso clínico — solo en pantallas no compactas
+              if (isActive && !isCompact) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.blueAccent, size: 16),
+                      SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Usar solo para llamadas/videollamadas. '
+                          'NO usar para ambiente cotidiano, música o aprendizaje de lenguaje.',
+                          style: TextStyle(
+                            color: Colors.blueAccent,
+                            fontSize: 10,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            ],
+          ),
+        );
+      },
+    ),
+    ); // Cierre del BlocListener
   }
 }
 
@@ -3020,7 +3149,7 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
                       child: Slider(
                         value: _intensity,
                         min: 0.0,
-                        max: 1.0,
+             max: 1.0,
                         divisions: 20,
                         label: '$intensityPct%',
                         activeColor: Colors.cyanAccent,
