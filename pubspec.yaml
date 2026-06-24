@@ -101,11 +101,11 @@ dev_dependencies:
 dependency_overrides:
   analyzer: ">=6.0.0 <14.0.0"
   objective_c: 4.0.0
-  # win32 5.1.2: última versión compatible con Dart 3.3 (Flutter 3.19.6 del CI)
+  # win32 5.4.0: versión compatible con Dart 3.3 (Flutter 3.19.6 del CI)
   # que expone COINIT, WIN32_ERROR y EXECUTION_STATE requeridos por
   # file_picker 8.0.5 y wakelock_plus 1.2.5. Versiones >= 5.5.x requieren
   # Dart 3.4+ (no disponible en Flutter 3.19.6).
-  win32: 5.1.2
+  win32: 5.4.0
   file_picker: 8.0.5
   wakelock_plus: 1.2.5
   # path_provider_foundation 2.5.x requires objective_c >=8.0,
