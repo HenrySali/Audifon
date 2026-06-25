@@ -145,9 +145,38 @@ class MainScreen extends StatelessWidget {
     };
   }
 
-/// Muestra un bottom sheet con vista detallada del EQ activo,
-/// incluyendo targets NAL-NL3, badge de tolerancia, y sección de MPO.
-void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) {
+  /// Muestra un bottom sheet con vista detallada del EQ activo,
+  /// incluyendo targets NAL-NL3, badge de tolerancia, y sección de MPO.
+  void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) =>
+      _showEqDetailBottomSheetImpl(context, state);
+}
+
+/// Widget auxiliar para mostrar una fila de información en el bottom sheet.
+Widget _buildInfoRow(String label, String value) {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        label,
+        style: TextStyle(
+          color: Colors.grey[400],
+          fontSize: 13,
+        ),
+      ),
+      Text(
+        value,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ],
+  );
+}
+
+/// Implementación del bottom sheet del EQ activo con targets NAL-NL3 y MPO.
+void _showEqDetailBottomSheetImpl(BuildContext context, AmplificationActive state) {
   final gains = state.bundle?.gainsDb;
   final targets = state.bundle?.prescribedTargetsDb;
   final mpo = state.bundle?.mpoProfileDbSpl;
@@ -500,33 +529,8 @@ void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) {
           ),
         ),
       ),
-    ),
-  );
-}
-
-/// Widget auxiliar para mostrar una fila de información en el bottom sheet.
-Widget _buildInfoRow(String label, String value) {
-  return Row(
-    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-    children: [
-      Text(
-        label,
-        style: TextStyle(
-          color: Colors.grey[400],
-          fontSize: 13,
-        ),
-      ),
-      Text(
-        value,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    ],
-  );
-}
+    );
+  }
 
 // =============================================================================
 // STATUS BAR — Indicador de auriculares + perfil activo (siempre visible)
@@ -1090,7 +1094,7 @@ class _ActiveView extends StatelessWidget {
             ActiveEqVisualization(
               gains: state.bundle!.gainsDb,
               environmentName: state.activeProfile,
-              onTap: () => _showEqDetailBottomSheet(context, state),
+          onTap: () => _showEqDetailBottomSheetImpl(context, state),
             ),
           if (state.activeEqPreset == _kPersonalPresetName) ...[
             const SizedBox(height: 16),
