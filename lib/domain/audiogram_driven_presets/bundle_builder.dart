@@ -345,6 +345,10 @@ class BundleBuilder {
     final double wdrcAttackMs;
     final double wdrcReleaseMs;
 
+    // Targets prescritos "ideales" antes de CIN y gainScale,
+    // para verificación de fitting (AAA/ASHA ±5 dB).
+    late final List<double> prescribedTargetsDb;
+
     if (mode == PrescriptionMode.mhl) {
       // MHL: delegar a MhlModule. Pacientes con audición normal o
       // pérdida mínima → ganancia flat, compresión lineal, lossType
@@ -355,6 +359,7 @@ class BundleBuilder {
       lossType = LossType.flat;
       wdrcAttackMs = _defaultWdrcAttackMs;
       wdrcReleaseMs = _defaultWdrcReleaseMs;
+      prescribedTargetsDb = List<double>.from(prescribedGains, growable: false);
     } else {
       // Quiet / CIN: delegar al prescriptor NAL-NL3-inspired. Usamos
       // `prescribedGains` (sin compensación de auricular) como base del
@@ -371,6 +376,7 @@ class BundleBuilder {
       lossType = result.lossType;
       wdrcAttackMs = result.wdrcOverrides?.attackMs ?? _defaultWdrcAttackMs;
       wdrcReleaseMs = result.wdrcOverrides?.releaseMs ?? _defaultWdrcReleaseMs;
+      prescribedTargetsDb = List<double>.from(prescribedGains, growable: false);
     }
 
     // 3b. Aplicar CinModule cuando el modo es comfortInNoise.
@@ -442,6 +448,7 @@ class BundleBuilder {
       compressionRatios: List<double>.from(postCinRatios, growable: false),
       compressionKneesDbSpl: compressionKneesDbSpl,
       mpoProfileDbSpl: List<double>.from(mpoProfileDbSpl, growable: false),
+      prescribedTargetsDb: prescribedTargetsDb,
       nrLevel: nrLevel,
       wdrcAttackMs: wdrcAttackMs,
       wdrcReleaseMs: wdrcReleaseMs,

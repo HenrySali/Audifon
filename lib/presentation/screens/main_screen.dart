@@ -28,6 +28,8 @@ import '../widgets/stale_preset_list.dart';
 import '../../domain/entities/prescription_mode.dart';
 import '../../data/bridges/audio_bridge_impl.dart';
 import '../../data/repositories/settings_repository_impl.dart';
+import '../../domain/audiogram_driven_presets/operating_mode.dart';
+import '../widgets/active_eq_visualization.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
@@ -141,6 +143,388 @@ class MainScreen extends StatelessWidget {
       AmplificationPaused() => _PausedView(state: state),
       AmplificationError() => _ErrorView(state: state),
     };
+  }
+
+  /// Muestra un bottom sheet con vista detallada del EQ activo,
+  /// incluyendo targets NAL-NL3, badge de tolerancia, y sección de MPO.
+  void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) {
+    final gains = state.bundle?.gainsDb;
+    final targets = state.bundle?.prescribedTargetsDb;
+    final mpo = state.bundle?.mpoProfileDbSpl;
+    if (gains == null || gains.length != 12) return;
+
+    // Calcular desviaciones de targets
+    final deviations = targets != null && targets.length == 12
+        ? List.generate(12, (i) => gains[i] - targets[i])
+        : null;
+    final maxDeviation = deviations?.map((d) => d.abs()).reduce((a, b) => a > b ? a : b);
+    final withinTolerance = maxDeviation != null && maxDeviation <= 5.0;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0f3460),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => SingleChildScrollView(
+          controller: scrollController,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Handle visual
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white30,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // Header
+              Row(
+                children: [
+                  const Icon(Icons.equalizer, color: Colors.cyan, size: 28),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Amplificación por Frecuencia',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Ambiente: ${state.activeProfile}',
+                style: const TextStyle(
+                  color: Colors.cyan,
+                  fontSize: 14,
+                ),
+              ),
+              
+              // Badge de tolerancia AAA/ASHA
+              if (deviations != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: withinTolerance ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: withinTolerance ? Colors.green : Colors.orange,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        withinTolerance ? Icons.check_circle : Icons.warning,
+                        color: withinTolerance ? Colors.green : Colors.orange,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        withinTolerance 
+                            ? 'Fitting dentro de tolerancia (±5 dB)' 
+                            : 'Desviación de targets > 5 dB',
+                        style: TextStyle(
+                          color: withinTolerance ? Colors.green : Colors.orange,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              
+              const SizedBox(height: 24),
+              
+              // Gráfico detallado con targets superpuestos
+              SizedBox(
+                height: 300,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: List.generate(12, (i) {
+                    final g = gains[i];
+                    final t = targets != null && i < targets.length ? targets[i] : null;
+                    final dev = deviations != null && i < deviations.length ? deviations[i] : null;
+                    
+                    // Calcular altura máxima considerando gains Y targets
+                    final allValues = targets != null 
+                        ? [...gains, ...targets]
+                        : gains;
+                    final maxGain = allValues.reduce((a, b) => a > b ? a : b).clamp(1.0, 50.0);
+                    
+                    final hGain = (g / maxGain * 260).clamp(10.0, 260.0);
+                    final hTarget = t != null ? (t / maxGain * 260).clamp(10.0, 260.0) : null;
+                    final freq = EqPreset.bandFrequencies[i];
+                    
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            // Desviación (si existe)
+                            if (dev != null) ...[
+                              Text(
+                                '${dev >= 0 ? '+' : ''}${dev.toStringAsFixed(1)}',
+                                style: TextStyle(
+                                  color: dev.abs() <= 5.0 ? Colors.green : Colors.orange,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                            ],
+                            // Valor de ganancia aplicada
+                            Text(
+                              '${g.toStringAsFixed(1)}',
+                              style: const TextStyle(
+                                color: Colors.cyan,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            // Stack de barras: target (fondo) + gain (frente)
+                            SizedBox(
+                              height: 260,
+                              child: Stack(
+                                alignment: Alignment.bottomCenter,
+                                children: [
+                                  // Barra de target (transparente, outline)
+                                  if (hTarget != null)
+                                    Container(
+                                      height: hTarget,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: Colors.cyan.withOpacity(0.5), width: 2),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                    ),
+                                  // Barra de ganancia aplicada (sólida)
+                                  Container(
+                                    height: hGain,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.bottomCenter,
+                                        end: Alignment.topCenter,
+                                        colors: [
+                                          Colors.cyan,
+                                          Colors.cyan.withOpacity(0.5),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            // Frecuencia
+                            Text(
+                              freq >= 1000
+                                  ? '${(freq / 1000).toStringAsFixed(freq % 1000 == 0 ? 0 : 1)}k'
+                                  : '$freq',
+                              style: TextStyle(
+                                color: Colors.grey[400],
+                                fontSize: 10,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // Leyenda de barras
+              if (targets != null)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Colors.cyan, Colors.cyan.withOpacity(0.5)],
+                              ),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Ganancias aplicadas',
+                            style: TextStyle(color: Colors.white, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.cyan.withOpacity(0.5), width: 2),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Targets NAL-NL3 prescritos',
+                            style: TextStyle(color: Colors.white70, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              
+              const SizedBox(height: 24),
+              const Divider(color: Colors.white24),
+              const SizedBox(height: 16),
+              
+              // Información adicional
+              _buildInfoRow('Prescripción', state.prescriberMode == PrescriberMode.smartNl2 ? 'NAL-NL2' : 'NAL-NL3'),
+              const SizedBox(height: 8),
+              if (state.lossType != null)
+                _buildInfoRow('Tipo de pérdida', state.lossType!.name),
+              const SizedBox(height: 8),
+              _buildInfoRow('Modo de operación', state.operatingMode == OperatingMode.diagnostic ? 'Diagnóstico' : 'Amplificador'),
+              
+              const SizedBox(height: 24),
+              
+              // Nota explicativa
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.cyan.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.cyan.withOpacity(0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.cyan[300], size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Sobre estas ganancias',
+                          style: TextStyle(
+                            color: Colors.cyan[300],
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Estas ganancias se calculan automáticamente desde tu audiograma usando algoritmos clínicos (NAL-NL2/NL3). '
+                      'Cada frecuencia recibe la amplificación específica que necesitas según tu pérdida auditiva.',
+                      style: TextStyle(
+                        color: Colors.grey[300],
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // Sección colapsable de configuración avanzada (MPO + WDRC)
+              const Divider(color: Colors.white24),
+              const SizedBox(height: 16),
+              _AdvancedConfigSection(
+                mpo: mpo,
+                wdrcAttackMs: state.bundle?.wdrcAttackMs,
+                wdrcReleaseMs: state.bundle?.wdrcReleaseMs,
+                compressionRatios: state.bundle?.compressionRatios,
+                compressionKnees: state.bundle?.compressionKneesDbSpl,
+              ),
+              const SizedBox(height: 16),
+              
+              // Botón de cerrar
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.cyan,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    'Cerrar',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Widget auxiliar para mostrar una fila de información en el bottom sheet.
+  Widget _buildInfoRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey[400],
+            fontSize: 13,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -700,6 +1084,14 @@ class _ActiveView extends StatelessWidget {
           ],
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
+          const SizedBox(height: 16),
+          // Visualización del EQ activo (ganancias calculadas del audiograma)
+          if (state.bundle?.gainsDb != null)
+            ActiveEqVisualization(
+              gains: state.bundle!.gainsDb,
+              environmentName: state.activeProfile,
+              onTap: () => _showEqDetailBottomSheet(context, state),
+            ),
           if (state.activeEqPreset == _kPersonalPresetName) ...[
             const SizedBox(height: 16),
             const _PersonalGainsCard(),
@@ -776,6 +1168,244 @@ class _PausedView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// =============================================================================
+// ADVANCED CONFIG SECTION — MPO + WDRC colapsable en bottom sheet
+// =============================================================================
+
+/// Sección colapsable de configuración avanzada (MPO, WDRC, compresión).
+class _AdvancedConfigSection extends StatefulWidget {
+  final List<double>? mpo;
+  final double? wdrcAttackMs;
+  final double? wdrcReleaseMs;
+  final List<double>? compressionRatios;
+  final List<double>? compressionKnees;
+
+  const _AdvancedConfigSection({
+    this.mpo,
+    this.wdrcAttackMs,
+    this.wdrcReleaseMs,
+    this.compressionRatios,
+    this.compressionKnees,
+  });
+
+  @override
+  State<_AdvancedConfigSection> createState() => _AdvancedConfigSectionState();
+}
+
+class _AdvancedConfigSectionState extends State<_AdvancedConfigSection> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header colapsable
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  color: Colors.white70,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'Configuración Avanzada (MPO + WDRC)',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Contenido colapsable
+        if (_expanded) ...[
+          const SizedBox(height: 12),
+          
+          // --- MPO por banda ---
+          if (widget.mpo != null && widget.mpo!.length == 12) ...[
+            const Text(
+              'MPO (Maximum Power Output) por banda',
+              style: TextStyle(
+                color: Colors.cyan,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            
+            // Verificar si algún valor excede 105 dB SPL
+            if (widget.mpo!.any((m) => m > 105.0))
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning, color: Colors.orange, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Advertencia: Algunos valores de MPO exceden 105 dB SPL (límite pediátrico). Verificar UCL del paciente.',
+                        style: TextStyle(
+                          color: Colors.orange[200],
+                          fontSize: 11,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Gráfico de MPO
+            SizedBox(
+              height: 180,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: List.generate(12, (i) {
+                  final mpo = widget.mpo![i];
+                  final freq = EqPreset.bandFrequencies[i];
+                  final exceedsLimit = mpo > 105.0;
+                  
+                  final h = ((mpo - 80.0) / (132.0 - 80.0) * 160).clamp(5.0, 160.0);
+                  final limitLineHeight = ((105.0 - 80.0) / (132.0 - 80.0) * 160);
+                  
+                  return Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            '${mpo.round()}',
+                            style: TextStyle(
+                              color: exceedsLimit ? Colors.orange : Colors.white70,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          SizedBox(
+                            height: 160,
+                            child: Stack(
+                              alignment: Alignment.bottomCenter,
+                              children: [
+                                Positioned(
+                                  bottom: limitLineHeight,
+                                  left: 0,
+                                  right: 0,
+                                  child: Container(
+                                    height: 1,
+                                    color: Colors.red.withOpacity(0.5),
+                                  ),
+                                ),
+                                Container(
+                                  height: h,
+                                  decoration: BoxDecoration(
+                                    color: exceedsLimit 
+                                        ? Colors.orange.withOpacity(0.7)
+                                        : Colors.white70.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            freq >= 1000
+                                ? '${(freq / 1000).toStringAsFixed(freq % 1000 == 0 ? 0 : 1)}k'
+                                : '$freq',
+                            style: TextStyle(
+                              color: Colors.grey[500],
+                              fontSize: 8,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Container(width: 3, height: 12, color: Colors.red.withOpacity(0.5)),
+                const SizedBox(width: 6),
+                Text(
+                  'Límite pediátrico: 105 dB SPL',
+                  style: TextStyle(color: Colors.grey[400], fontSize: 10),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
+
+          // --- Parámetros WDRC ---
+          if (widget.wdrcAttackMs != null && widget.wdrcReleaseMs != null) ...[
+            const Text(
+              'Parámetros WDRC (Wide Dynamic Range Compression)',
+              style: TextStyle(
+                color: Colors.cyan,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Attack time', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+                      Text(
+                        '${widget.wdrcAttackMs!.toStringAsFixed(1)} ms',
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Release time', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+                      Text(
+                        '${widget.wdrcReleaseMs!.toStringAsFixed(0)} ms',
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ],
     );
   }
 }

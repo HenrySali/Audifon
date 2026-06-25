@@ -92,6 +92,13 @@ class AudiogramDrivenBundle extends Equatable {
   /// Cada valor en [mpoMinDbSpl], [mpoMaxDbSpl] = [80, 132] dB SPL.
   final List<double> mpoProfileDbSpl;
 
+  /// Targets NAL-NL3 prescritos para 65 dB SPL input por banda en dB.
+  /// Longitud exacta = [bandCount] (12).
+  /// Estos son los targets "ideales" calculados por el prescriptor antes
+  /// de aplicar ajustes manuales o gain scale. Se usan para verificación
+  /// del fitting (AAA/ASHA recomienda ±5 dB de tolerancia).
+  final List<double> prescribedTargetsDb;
+
   /// Nivel de NR sugerido. Entero en [nrLevelMin], [nrLevelMax] = [0, 3].
   final int nrLevel;
 
@@ -136,6 +143,7 @@ class AudiogramDrivenBundle extends Equatable {
     required this.compressionRatios,
     required this.compressionKneesDbSpl,
     required this.mpoProfileDbSpl,
+    required this.prescribedTargetsDb,
     required this.nrLevel,
     required this.wdrcAttackMs,
     required this.wdrcReleaseMs,
@@ -185,6 +193,13 @@ class AudiogramDrivenBundle extends Equatable {
       name: 'mpoProfileDbSpl',
       min: mpoMinDbSpl,
       max: mpoMaxDbSpl,
+      errors: errors,
+    );
+    _validateBandedList(
+      values: prescribedTargetsDb,
+      name: 'prescribedTargetsDb',
+      min: gainMinDb,
+      max: gainMaxDb,
       errors: errors,
     );
 
@@ -297,6 +312,7 @@ class AudiogramDrivenBundle extends Equatable {
       'compressionRatios': List<double>.from(compressionRatios),
       'compressionKneesDbSpl': List<double>.from(compressionKneesDbSpl),
       'mpoProfileDbSpl': List<double>.from(mpoProfileDbSpl),
+      'prescribedTargetsDb': List<double>.from(prescribedTargetsDb),
       'nrLevel': nrLevel,
       'wdrcAttackMs': wdrcAttackMs,
       'wdrcReleaseMs': wdrcReleaseMs,
@@ -379,6 +395,7 @@ class AudiogramDrivenBundle extends Equatable {
       compressionRatios: _readDoubleList(json, 'compressionRatios'),
       compressionKneesDbSpl: _readDoubleList(json, 'compressionKneesDbSpl'),
       mpoProfileDbSpl: _readDoubleList(json, 'mpoProfileDbSpl'),
+      prescribedTargetsDb: _tryReadDoubleList(json, 'prescribedTargetsDb', 'gainsDb'),
       nrLevel: _readInt(json, 'nrLevel'),
       wdrcAttackMs: _readDouble(json, 'wdrcAttackMs'),
       wdrcReleaseMs: _readDouble(json, 'wdrcReleaseMs'),
@@ -434,6 +451,22 @@ class AudiogramDrivenBundle extends Equatable {
     return raw.toInt();
   }
 
+  /// Lee una lista de doubles de [json] para la clave [key]. Si la clave
+  /// está ausente, retorna la lista de la clave [fallbackKey].
+  static List<double> _tryReadDoubleList(
+    Map<String, dynamic> json,
+    String key,
+    String fallbackKey,
+  ) {
+    if (json.containsKey(key)) {
+      return _readDoubleList(json, key);
+    }
+    if (json.containsKey(fallbackKey)) {
+      return _readDoubleList(json, fallbackKey);
+    }
+    return List<double>.filled(bandCount, 0.0);
+  }
+
   // --- Equatable ------------------------------------------------------------
 
   @override
@@ -442,6 +475,7 @@ class AudiogramDrivenBundle extends Equatable {
         compressionRatios,
         compressionKneesDbSpl,
         mpoProfileDbSpl,
+        prescribedTargetsDb,
         nrLevel,
         wdrcAttackMs,
         wdrcReleaseMs,

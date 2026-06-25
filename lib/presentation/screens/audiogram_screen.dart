@@ -4,6 +4,7 @@ import 'package:hive/hive.dart';
 
 import '../../audiometry/screens/audiometry_screen.dart';
 import '../../domain/entities/audiogram.dart';
+import '../../domain/entities/audiogram_template.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 
@@ -95,6 +96,139 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
     for (final freq in Audiogram.standardFrequencies) {
       _thresholds[freq] = source[freq] ?? 0.0;
     }
+  }
+
+  /// Carga una plantilla de audiograma predefinida.
+  void _loadTemplate(AudiogramTemplate template) {
+    setState(() {
+      for (final freq in Audiogram.standardFrequencies) {
+        _thresholds[freq] = template.thresholds[freq] ?? 0.0;
+      }
+      _hasChanges = true;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Plantilla "${template.name}" cargada'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
+    // Verificar candidatura a implante coclear para plantillas severas
+    if (template.name == 'Pérdida Bilateral Severa') {
+      // Calcular PTA (promedio 500-1000-2000-4000 Hz)
+      final freq500 = template.thresholds[500] ?? 0;
+      final freq1000 = template.thresholds[1000] ?? 0;
+      final freq2000 = template.thresholds[2000] ?? 0;
+      final freq4000 = template.thresholds[4000] ?? 0;
+      
+      final pta = (freq500 + freq1000 + freq2000 + freq4000) / 4;
+      
+      if (pta >= 70.0) {
+        // Mostrar advertencia después de un frame
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _showCochlearImplantWarning(context, pta);
+        });
+      }
+    }
+  }
+
+  /// Muestra advertencia de candidatura a implante coclear.
+  void _showCochlearImplantWarning(BuildContext context, double pta) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1a2332),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange[400], size: 28),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Advertencia Clínica',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Esta configuración (PTA = ${pta.toStringAsFixed(1)} dB HL) corresponde a pérdida severa bilateral.',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.withOpacity(0.4)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Según criterios AAA y FDA:',
+                    style: TextStyle(
+                      color: Colors.orange[300],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Pacientes con PTA ≥ 70 dB HL y Word Recognition Score (WRS) <50% son candidatos a implante coclear.',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Recomendación: Derivar al paciente a evaluación audiológica completa antes de proceder con el fitting.',
+              style: TextStyle(
+                color: Colors.cyan[300],
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Entendido',
+              style: TextStyle(
+                color: Colors.cyan[400],
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Restaura los valores predeterminados del audiograma.
@@ -217,9 +351,12 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
       ),
       body: Column(
         children: [
+          // Selector de plantillas de audiograma
+          _buildTemplateSelector(),
+
           // Header con instrucciones
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: Text(
               'Ajuste los umbrales auditivos (dB HL) para cada frecuencia. '
               'Valores más altos indican mayor pérdida auditiva.',
@@ -527,6 +664,82 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+  /// Selector de plantillas de audiograma predefinidas.
+  /// Permite cargar rápidamente configuraciones típicas sin ajustar
+  /// manualmente los 12 sliders.
+  Widget _buildTemplateSelector() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1a2332),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.cyan.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.library_books, color: Colors.cyan, size: 20),
+          const SizedBox(width: 10),
+          const Text(
+            'Plantilla:',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<AudiogramTemplate>(
+                isExpanded: true,
+                hint: const Text(
+                  'Cargar audiograma de ejemplo',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                dropdownColor: const Color(0xFF0f3460),
+                style: const TextStyle(color: Colors.cyan, fontSize: 13),
+                items: AudiogramTemplate.allTemplates.map((template) {
+                  return DropdownMenuItem<AudiogramTemplate>(
+                    value: template,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          template.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                        Text(
+                          template.description,
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 10,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (template) {
+                  if (template != null) {
+                    _loadTemplate(template);
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
