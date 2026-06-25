@@ -29,13 +29,6 @@ android {
         prefab true
     }
 
-    // Configuración de Prefab para que CMake encuentre Oboe
-    prefab {
-        oboe {
-            headers "src/main/cpp/include"
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
