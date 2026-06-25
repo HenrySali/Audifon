@@ -145,37 +145,37 @@ class MainScreen extends StatelessWidget {
     };
   }
 
-  /// Muestra un bottom sheet con vista detallada del EQ activo,
-  /// incluyendo targets NAL-NL3, badge de tolerancia, y sección de MPO.
-  void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) {
-    final gains = state.bundle?.gainsDb;
-    final targets = state.bundle?.prescribedTargetsDb;
-    final mpo = state.bundle?.mpoProfileDbSpl;
-    if (gains == null || gains.length != 12) return;
+/// Muestra un bottom sheet con vista detallada del EQ activo,
+/// incluyendo targets NAL-NL3, badge de tolerancia, y sección de MPO.
+void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) {
+  final gains = state.bundle?.gainsDb;
+  final targets = state.bundle?.prescribedTargetsDb;
+  final mpo = state.bundle?.mpoProfileDbSpl;
+  if (gains == null || gains.length != 12) return;
 
-    // Calcular desviaciones de targets
-    final deviations = targets != null && targets.length == 12
-        ? List.generate(12, (i) => gains[i] - targets[i])
-        : null;
-    final maxDeviation = deviations?.map((d) => d.abs()).reduce((a, b) => a > b ? a : b);
-    final withinTolerance = maxDeviation != null && maxDeviation <= 5.0;
+  // Calcular desviaciones de targets
+  final deviations = targets != null && targets.length == 12
+      ? List.generate(12, (i) => gains[i] - targets[i])
+      : null;
+  final maxDeviation = deviations?.map((d) => d.abs()).reduce((a, b) => a > b ? a : b);
+  final withinTolerance = maxDeviation != null && maxDeviation <= 5.0;
 
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF0f3460),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, scrollController) => SingleChildScrollView(
-          controller: scrollController,
-          padding: const EdgeInsets.all(24),
-          child: Column(
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: const Color(0xFF0f3460),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (context) => DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) => SingleChildScrollView(
+        controller: scrollController,
+        padding: const EdgeInsets.all(24),
+        child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Handle visual
@@ -500,32 +500,32 @@ class MainScreen extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
-  /// Widget auxiliar para mostrar una fila de información en el bottom sheet.
-  Widget _buildInfoRow(String label, String value) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.grey[400],
-            fontSize: 13,
-          ),
+/// Widget auxiliar para mostrar una fila de información en el bottom sheet.
+Widget _buildInfoRow(String label, String value) {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        label,
+        style: TextStyle(
+          color: Colors.grey[400],
+          fontSize: 13,
         ),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
+      ),
+      Text(
+        value,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
         ),
-      ],
-    );
-  }
+      ),
+    ],
+  );
 }
 
 // =============================================================================
@@ -1101,6 +1101,7 @@ class _ActiveView extends StatelessWidget {
       ),
     );
   }
+
 }
 
 // =============================================================================

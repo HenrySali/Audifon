@@ -265,6 +265,7 @@ class StyleApplicator {
       compressionRatios: bundle.compressionRatios,
       compressionKneesDbSpl: bundle.compressionKneesDbSpl,
       mpoProfileDbSpl: bundle.mpoProfileDbSpl,
+      prescribedTargetsDb: bundle.prescribedTargetsDb,
       nrLevel: bundle.nrLevel,
       wdrcAttackMs: bundle.wdrcAttackMs,
       wdrcReleaseMs: bundle.wdrcReleaseMs,
