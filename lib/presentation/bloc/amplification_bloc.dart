@@ -237,6 +237,14 @@ class AmplificationBloc
   /// Requisitos: 1.2, 1.4, 1.11
   bool _musicModeActive = false;
 
+  /// Mirror lógico del flag `conversationMode` persistido en Hive
+  /// bajo la key `'conversationMode'`. Indica si el "Modo Conversación"
+  /// (SCO baja latencia) está activo. Se carga en Phase 1 del boot y
+  /// se persiste en cada toggle.
+  ///
+  /// Requisitos: modo-conversacion-sco
+  bool _conversationMode = false;
+
   /// Prescriptor NL3-inspired (instanciado una sola vez).
   late final GainPrescriberNL3 _nl3Prescriber;
 
@@ -389,6 +397,10 @@ class AmplificationBloc
     // continuo. Activa/desactiva el clasificador C++ + el polling Dart
     // 1 Hz que mapea escena → profile + cap de DNN intensity.
     on<ToggleSmart>(_onToggleSmart);
+    // modo-conversacion-sco: handler del toggle "Modo Conversación"
+    // (SCO baja latencia). Activa/desactiva el modo de conversación
+    // en el motor nativo con persistencia en Hive.
+    on<ToggleConversationMode>(_onToggleConversationMode);
     // tecnico-paciente-feature-parity — task 4.5: handler del slider
     // "Comodidad". Recalcula WDRC con `_effectiveCompressionRatio(bundle)`
     // sobre el bundle activo y reaplica solo `compressionRatio` al motor;
@@ -634,6 +646,15 @@ class AmplificationBloc
           music = false;
         }
         musicPersisted = music;
+
+        // 11. Flag conversationMode desde Hive. Default: false.
+        try {
+          final box = await _openSettingsBox();
+          final raw = box?.get('conversationMode');
+          _conversationMode = raw is bool ? raw : false;
+        } catch (_) {
+          _conversationMode = false;
+        }
       }).timeout(const Duration(milliseconds: 2000));
     } on TimeoutException catch (e, st) {
       developer.log(
@@ -784,6 +805,7 @@ class AmplificationBloc
       operatingMode: _operatingMode,
       gainScale: _gainScale,
       manualDelta: _manualDelta,
+      conversationMode: _conversationMode,
     ));
 
     // 3) Cadena atómica MPO → WDRC → EQ → NR (Req 4.7 del spec
@@ -4458,6 +4480,130 @@ class AmplificationBloc
     } else {
       _stopSmartPolling();
     }
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // modo-conversacion-sco
+  // _onToggleConversationMode
+  // ═════════════════════════════════════════════════════════════════════
+
+  /// Activa o desactiva el "Modo Conversación" (SCO baja latencia).
+  ///
+  /// Delega en `_audioBridge.setConversationMode(enabled)` que a su vez
+  /// invoca el handler Kotlin `handleSetConversationMode`. Este handler:
+  /// - Detiene el engine si está corriendo.
+  /// - Levanta SCO + cambia a MODE_IN_COMMUNICATION si ON.
+  /// - Reinicia a 16 kHz / 64 frames (ON) o 48 kHz / 256 frames (OFF).
+  /// - Re-inicializa el DNN denoiser tras el reinicio.
+  /// - Retorna un string con el resultado: "connected", "fallback_builtin",
+  ///   "failed", "engine_idle", "disabled".
+  ///
+  /// **Mutex con MHL y Música**: si alguno de estos modos está activo al
+  /// encender Conversación, se apagan primero (mismo patrón que
+  /// `_onToggleSmart`). No se snapshotea Smart porque el reinicio del
+  /// engine destruye el estado del clasificador C++.
+  ///
+  /// **Persistencia**: guarda `conversationMode` en Hive (`settings_box`)
+  /// bajo la key `'conversationMode'`. Se carga en Phase 1 del boot.
+  ///
+  /// Requisitos: modo-conversacion-sco
+  Future<void> _onToggleConversationMode(
+    ToggleConversationMode event,
+    Emitter<AmplificationState> emit,
+  ) async {
+    final currentState = state;
+    if (currentState is! AmplificationActive) return;
+
+    final activate = event.activate;
+    developer.log(
+      '🔍 TOGGLE BLOC: activate=$activate, _conversationMode=$_conversationMode',
+      name: 'AmplificationBloc',
+      level: 800,
+    );
+    // REMOVIDO: if (activate == _conversationMode) return;
+    // El check de idempotencia causaba desincronización cuando el state
+    // se actualizaba fuera del handler. Ahora siempre ejecutamos el cambio.
+
+    // ─── Mutex: apagar MHL y Música si están ON ─────────────────────
+    if (activate) {
+      if (_mhlActive) {
+        try {
+          await _audioBridge.setMhlPrescriptionEnabled(false);
+          _mhlActive = false;
+        } catch (e, st) {
+          developer.log(
+            '_onToggleConversationMode[ON]: mutex MHL OFF falló: $e',
+            name: 'AmplificationBloc',
+            level: 900,
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }
+      if (_musicModeActive) {
+        try {
+          await _audioBridge.setMusicModeEnabled(false);
+          _musicModeActive = false;
+        } catch (e, st) {
+          developer.log(
+            '_onToggleConversationMode[ON]: mutex Música OFF falló: $e',
+            name: 'AmplificationBloc',
+            level: 900,
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }
+    }
+
+    // ─── Delegar al bridge nativo ───────────────────────────────────
+    final String scoStatus;
+    try {
+      scoStatus = await _audioBridge.setConversationMode(activate);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleConversationMode: bridge.setConversationMode '
+        'falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+      // No cambiar el mirror — el toggle queda donde estaba.
+      return;
+    }
+
+    _conversationMode = activate;
+
+    // ─── Persistencia en Hive ───────────────────────────────────────
+    try {
+      final box = await _openSettingsBox();
+      await box?.put('conversationMode', activate);
+    } catch (e, st) {
+      developer.log(
+        '_onToggleConversationMode: persistencia falló: $e',
+        name: 'AmplificationBloc',
+        level: 900,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // ─── Emitir estado con el flag y el resultado SCO ───────────────
+    // Nota: el flag `conversationMode` se incluye en el state; el
+    // resultado `scoStatus` se deja como log para que la UI lo lea
+    // vía `BlocListener` y muestre un SnackBar.
+    developer.log(
+      '_onToggleConversationMode: activate=$activate, scoStatus=$scoStatus',
+      name: 'AmplificationBloc',
+      level: 800,
+    );
+
+    emit(currentState.copyWith(
+      conversationMode: activate,
+      mhlActive: _mhlActive,
+      musicModeActive: _musicModeActive,
+    ));
   }
 
   /// Cancela las suscripciones a los streams del [AudioBridge] y

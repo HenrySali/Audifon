@@ -511,3 +511,31 @@ class ToggleSmart extends AmplificationEvent {
   @override
   List<Object?> get props => [activate];
 }
+
+/// Solicita activar o desactivar el "Modo Conversación" (SCO baja latencia).
+///
+/// Cuando se activa, el motor nativo detiene el pipeline, levanta SCO Bluetooth
+/// con [BluetoothScoController], y reinicia a 16 kHz / 64 frames con
+/// MODE_IN_COMMUNICATION. Latencia cae de ~20ms a ~10ms en BT, calidad
+/// reducida a voz (16 kHz).
+///
+/// Cuando se desactiva, libera SCO y vuelve a A2DP @ 48 kHz / 256 frames.
+/// El motor se reinicia automáticamente (no hay hot-swap posible).
+///
+/// El handler Kotlin retorna un string con el estado del SCO:
+/// "connected", "fallback_builtin", "failed", "engine_idle", "disabled".
+///
+/// Reglas de mutex (mismo patrón que `ToggleSmart`):
+///   - Si MHL Prescripción o Modo Música están activos al activar
+///     Conversación, se apagan automáticamente.
+///
+/// Requisitos: modo-conversacion-sco
+class ToggleConversationMode extends AmplificationEvent {
+  /// true para activar modo conversación (SCO), false para A2DP normal.
+  final bool activate;
+
+  const ToggleConversationMode({required this.activate});
+
+  @override
+  List<Object?> get props => [activate];
+}

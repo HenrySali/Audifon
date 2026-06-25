@@ -168,6 +168,15 @@ class AmplificationActive extends AmplificationState {
   /// Requisitos: 9.1, 9.7
   final bool customPresetsStale;
 
+  /// Indica si el "Modo Conversación" (SCO baja latencia) está activo.
+  ///
+  /// Cuando true, el audio se rutea por SCO Bluetooth con sample rate
+  /// 16 kHz / 64 frames y MODE_IN_COMMUNICATION, reduciendo la latencia
+  /// BT de ~20ms a ~10ms a cambio de calidad reducida (solo voz).
+  ///
+  /// Requisitos: modo-conversacion-sco
+  final bool conversationMode;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
@@ -178,6 +187,7 @@ class AmplificationActive extends AmplificationState {
     this.prescriberMode = PrescriberMode.smartNl2,
     this.mhlActive = false,
     this.musicModeActive = false,
+    this.conversationMode = false,
     this.ptaWarning = false,
     this.nl2Gains = const [],
     this.nl3Gains = const [],
@@ -203,6 +213,7 @@ class AmplificationActive extends AmplificationState {
     PrescriberMode? prescriberMode,
     bool? mhlActive,
     bool? musicModeActive,
+    bool? conversationMode,
     bool? ptaWarning,
     List<double>? nl2Gains,
     List<double>? nl3Gains,
@@ -230,6 +241,7 @@ class AmplificationActive extends AmplificationState {
       prescriberMode: prescriberMode ?? this.prescriberMode,
       mhlActive: mhlActive ?? this.mhlActive,
       musicModeActive: musicModeActive ?? this.musicModeActive,
+      conversationMode: conversationMode ?? this.conversationMode,
       ptaWarning: ptaWarning ?? this.ptaWarning,
       nl2Gains: nl2Gains ?? this.nl2Gains,
       nl3Gains: nl3Gains ?? this.nl3Gains,

@@ -2724,6 +2724,8 @@ class _ConversationModeToggleCardState extends State<_ConversationModeToggleCard
                     Switch(
                       value: isActive,
                       onChanged: _isChanging ? null : (v) {
+                        final currentMode = (state is AmplificationActive) ? state.conversationMode : false;
+                        print('🔍 TOGGLE: isActive=$isActive, v=$v, currentMode=$currentMode');
                         setState(() {
                           _isChanging = true;
                           _expectedMode = v;
