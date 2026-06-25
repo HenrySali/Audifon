@@ -71,7 +71,7 @@ target_link_libraries(
     hearing_aid_dsp
     android
     log
-    oboe::oboestatic
+    oboe::oboe
     onnxruntime
 )
 
