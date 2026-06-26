@@ -31,6 +31,8 @@ import '../../domain/repositories/audiogram_repository.dart';
 import '../../domain/repositories/profile_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
 import '../../domain/scene_prescription_controller.dart';
+import '../../scene/scene_class.dart';
+import '../../scene/scene_engine.dart';
 import 'amplification_event.dart';
 import 'amplification_state.dart';
 
@@ -201,6 +203,20 @@ class AmplificationBloc
   /// polling Smart (smart-continuo-dnn-modulado). Devuelve `null`
   /// cuando el polling no está activo o todavía no hubo lectura.
   int? get lastEnvClass => _lastEnvClass;
+
+  /// Motor de análisis de escenas para Smart automático mejorado.
+  /// Inicializado lazy en el primer tick de `_startSmartPolling()`.
+  /// Null cuando Smart está apagado.
+  SceneEngine? _sceneEngine;
+
+  /// Audiograma cargado para Smart automático. Null si no hay audiograma
+  /// medido (fallback a default en `analyze()`).
+  Audiogram? _audiogram;
+
+  /// Última clase de escena detectada por el análisis completo del Smart
+  /// automático (SceneClass.QUIET/SPEECH/NOISE/etc). Usado para
+  /// idempotencia: solo aplicar preset si la clase cambió.
+  SceneClass? _lastSceneClass;
 
   /// Snapshot del [_smartEnabled] al activar MHL Prescripción o Modo
   /// Música. Permite restaurar el estado previo al desactivar el modo.
@@ -4336,22 +4352,53 @@ class AmplificationBloc
   }
 
   /// Activa el clasificador C++ (`updateAutoClassify(true)`) y arranca
-  /// el polling 1 Hz. Idempotente: cancela el timer previo antes de
-  /// armar uno nuevo.
+  /// el polling Smart mejorado cada 12 segundos.
+  ///
+  /// El nuevo polling usa el mismo motor que el botón "Detectar y aplicar"
+  /// de `smart_scene_screen.dart`: analiza snapshots del SceneAnalyzer C++
+  /// con features espectrales completas (VAD, tilt, centroid, flux) y
+  /// aplica presets personalizados con audiograma automáticamente.
+  ///
+  /// Cambios vs polling viejo (1 Hz con EnvironmentClassifier básico):
+  /// - Intervalo: 1s → 12s (análisis toma ~1.5s, más estable)
+  /// - Motor: `environmentClass` básico → `SceneEngine.analyze()` completo
+  /// - Output: `ChangeProfile` genérico → `apply()` preset con audiograma
+  /// - Idempotencia: Solo aplica si SceneClass cambió
+  ///
+  /// Idempotente: cancela el timer previo antes de armar uno nuevo.
   void _startSmartPolling() {
     _smartPollTimer?.cancel();
     _lastEnvClass = null;
-    // Despertar el clasificador C++. El handler Kotlin
-    // `updateAutoClassify(true)` llama a `nativeBridge
-    // .setAutoClassifyEnabled(true)` que setea el flag atómico que
-    // gate-keepea `envClassifier_.update()` en `dsp_pipeline.cpp`.
+    _lastSceneClass = null;
+    
+    // Inicializar SceneEngine con config optimizada para polling automático:
+    // - Session corto (1.5s vs 5s del manual) para reactividad
+    // - Menos muestras (8-15 vs 10-25) para no bloquear el bloc
+    _sceneEngine = SceneEngine(
+      sessionTimeout: const Duration(milliseconds: 1500),
+      minSamples: 8,
+      maxSamples: 15,
+    );
+    
+    // Despertar el clasificador C++ para que la UI siga mostrando
+    // environmentClass básico en el chip indicador (backward-compat).
     () async {
       try {
         await const MethodChannel('com.psk.hearing_aid/audio')
             .invokeMethod<void>('updateAutoClassify', {'enabled': true});
+        
+        // Cargar settings del SceneEngine (toggle personalizar)
+        await _sceneEngine!.loadSettings();
+        
+        // Cargar audiograma para el análisis (lazy load, una sola vez)
+        try {
+          _audiogram = await _audiogramRepository.getAudiogram();
+        } catch (_) {
+          _audiogram = null; // Fallback a default en analyze()
+        }
       } catch (e, st) {
         developer.log(
-          '_startSmartPolling: updateAutoClassify(true) falló: $e',
+          '_startSmartPolling: init falló: $e',
           name: 'AmplificationBloc',
           level: 800,
           error: e,
@@ -4359,19 +4406,25 @@ class AmplificationBloc
         );
       }
     }();
+    
+    // Polling mejorado cada 12 segundos (vs 1s del viejo)
     _smartPollTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _onSmartPoll(),
+      const Duration(seconds: 12),
+      (_) => _onSmartPollV2(),
     );
   }
 
-  /// Cancela el polling 1 Hz, apaga el clasificador C++, libera el pin
-  /// del preset Smart, y restaura la intensidad de DNN del usuario
-  /// (uncap). Idempotente.
+  /// Cancela el polling Smart, apaga el clasificador C++, libera el pin
+  /// del preset Smart, restaura la intensidad de DNN del usuario (uncap),
+  /// y limpia el SceneEngine. Idempotente.
   void _stopSmartPolling() {
     _smartPollTimer?.cancel();
     _smartPollTimer = null;
     _lastEnvClass = null;
+    _lastSceneClass = null;
+    _sceneEngine = null;
+    _audiogram = null;
+    
     () async {
       try {
         await const MethodChannel('com.psk.hearing_aid/audio')
@@ -4391,8 +4444,158 @@ class AmplificationBloc
     }();
   }
 
-  /// Tick del polling Smart. Lee la clase del entorno, aplica cap de
-  /// DNN, y dispara `ChangeProfile` si la clase cambió.
+  /// Tick del polling Smart mejorado (v2).
+  ///
+  /// En lugar de solo leer `environmentClass` básico y despachar
+  /// `ChangeProfile`, ahora:
+  /// 1. Ejecuta análisis completo con `SceneEngine.analyze()` (1.5s)
+  /// 2. Usa features espectrales avanzadas (VAD, tilt, centroid, flux)
+  /// 3. Genera preset personalizado con audiograma
+  /// 4. Aplica preset completo automáticamente (EQ + WDRC + NR + TNR)
+  /// 5. Solo si la SceneClass cambió (idempotencia)
+  ///
+  /// Mismo comportamiento que el botón manual "Detectar y aplicar" de
+  /// `smart_scene_screen.dart`, pero corriendo invisible cada 12s.
+  Future<void> _onSmartPollV2() async {
+    if (!_smartEnabled) return;
+    if (_sceneEngine == null) {
+      developer.log(
+        'Smart poll v2: SceneEngine null (init failed?)',
+        name: 'SmartAutoV2',
+        level: 800,
+      );
+      return;
+    }
+
+    // Análisis completo (SceneAnalyzer C++ + SceneDecisionMaker)
+    SceneAnalysisResult result;
+    try {
+      // Obtener perfil activo actual para pasarlo al analyze()
+      // (determina el PrescriptionMode del bundle base)
+      final currentProfile = _getCurrentEnvironmentProfile();
+      
+      result = await _sceneEngine!.analyze(
+        audiogram: _audiogram, // null → fallback a default
+        profile: currentProfile,
+      );
+      
+      developer.log(
+        'Smart auto: clase=${result.sceneClass.name}, '
+        'conf=${(result.confidence * 100).toStringAsFixed(0)}%, '
+        'samples=${result.sampleCount}, '
+        'usedDefault=${result.usedDefaultAudiogram}',
+        name: 'SmartAutoV2',
+        level: 300,
+      );
+    } catch (e, st) {
+      developer.log(
+        'Smart auto analyze failed: $e',
+        name: 'SmartAutoV2',
+        level: 800,
+        error: e,
+        stackTrace: st,
+      );
+      return; // Reintentar en próximo tick (12s)
+    }
+
+    // Idempotencia: solo aplicar si la clase de escena cambió
+    if (result.sceneClass == _lastSceneClass) {
+      developer.log(
+        'Smart auto: clase sin cambios (${result.sceneClass.name}), skip apply',
+        name: 'SmartAutoV2',
+        level: 300,
+      );
+      return;
+    }
+    
+    final previousClass = _lastSceneClass;
+    _lastSceneClass = result.sceneClass;
+
+    // Aplicar preset completo automáticamente
+    try {
+      await _sceneEngine!.apply(result, bloc: this);
+      
+      developer.log(
+        'Smart auto: preset aplicado OK '
+        '(${previousClass?.name ?? "null"} → ${result.sceneClass.name})',
+        name: 'SmartAutoV2',
+        level: 300,
+      );
+    } catch (e, st) {
+      developer.log(
+        'Smart auto apply failed: $e',
+        name: 'SmartAutoV2',
+        level: 800,
+        error: e,
+        stackTrace: st,
+      );
+      // Revertir _lastSceneClass para reintentar en próximo tick
+      _lastSceneClass = previousClass;
+    }
+    
+    // Backward-compat: actualizar también _lastEnvClass para el chip
+    // indicador de escena en main_screen.dart (mapea SceneClass → int)
+    _lastEnvClass = _sceneClassToEnvClass(result.sceneClass);
+  }
+
+  /// Helper: obtiene el EnvironmentProfile activo actual para pasarlo
+  /// a `SceneEngine.analyze()`. Devuelve null si no hay perfil activo
+  /// (fallback a PrescriptionMode.quiet en el bundle builder).
+  EnvironmentProfile? _getCurrentEnvironmentProfile() {
+    final st = state;
+    String? activeProfileName;
+    
+    if (st is AmplificationActive) {
+      activeProfileName = st.activeProfile;
+    } else if (st is AmplificationPaused) {
+      activeProfileName = st.lastActiveProfile;
+    }
+    
+    if (activeProfileName == null) return null;
+    
+    // Mapear nombre de perfil → enum EnvironmentProfile
+    switch (activeProfileName) {
+      case 'Silencioso':
+        return EnvironmentProfile.quiet;
+      case 'Conversación':
+        return EnvironmentProfile.conversation;
+      case 'Ruidoso':
+        return EnvironmentProfile.noisy;
+      default:
+        return null;
+    }
+  }
+
+  /// Helper: mapea SceneClass → int environmentClass para backward-compat
+  /// con el chip indicador de escena en main_screen.dart.
+  ///
+  /// Mapeo aproximado (la semántica NO es 1:1):
+  /// - unknown/silence → QUIET (0)
+  /// - voiceOnly → SPEECH (1)
+  /// - voiceInNoiseLow/Mid → SPEECH_IN_NOISE (2)
+  /// - noiseLowDominant/noiseHighDominant/music → NOISE (3)
+  int _sceneClassToEnvClass(SceneClass sceneClass) {
+    switch (sceneClass) {
+      case SceneClass.unknown:
+      case SceneClass.silence:
+        return 0; // QUIET
+      case SceneClass.voiceOnly:
+        return 1; // SPEECH
+      case SceneClass.voiceInNoiseLow:
+      case SceneClass.voiceInNoiseMid:
+        return 2; // SPEECH_IN_NOISE
+      case SceneClass.noiseLowDominant:
+      case SceneClass.noiseHighDominant:
+      case SceneClass.music:
+        return 3; // NOISE
+    }
+  }
+
+  /// Tick del polling Smart VIEJO (fallback si v2 falla).
+  /// Mantiene la lógica original de leer environmentClass básico y
+  /// despachar ChangeProfile. NO debería llamarse con la v2 activa,
+  /// pero lo dejamos comentado como referencia histórica.
+  @Deprecated('Reemplazado por _onSmartPollV2')
   Future<void> _onSmartPoll() async {
     if (!_smartEnabled) return;
     Map<String, dynamic>? metrics;
