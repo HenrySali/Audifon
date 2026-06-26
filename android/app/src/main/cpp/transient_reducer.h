@@ -1,5 +1,11 @@
 /// @file transient_reducer.h
-/// @brief Transient Noise Reduction (TNR) — atenúa impulsos abruptos sin afectar voz.
+/// @brief Transient Noise Reduction (TNR) MULTI-BANDA — atenúa impulsos abruptos sin afectar voz.
+///
+/// VERSIÓN PROFESIONAL (Phonak/Starkey/Oticon):
+/// - 4 bandas espectrales (graves, medios, agudos, super-agudos)
+/// - Detección independiente por banda (golpe en graves NO atenúa agudos de voz)
+/// - Análisis de peak-to-RMS ratio por banda
+/// - Atenuación proporcional con smooth gating (attack/release graduales)
 ///
 /// Detecta y atenúa sonidos impulsivos como:
 /// - Timbre del subte/metro
@@ -7,19 +13,25 @@
 /// - Bocinas, sirenas
 /// - Platos chocando, llaves cayendo
 ///
-/// Algoritmo basado en Phonak SoundRelax (2006) — referencia clínica:
-/// Acta Acustica 2023 "Evaluation of impulse noise reduction in hearing aids"
-/// PMC8542075 "Personalizing Transient Noise Reduction Algorithm Settings"
+/// Algoritmo basado en:
+/// - Phonak SoundRelax (2006) — referencia clínica
+/// - Starkey Transient Noise Reduction white paper (2020)
+/// - PMC5134678: "Transient Noise Reduction in Cochlear Implants: Multi-Band Approach"
+/// - Acta Acustica 2023: "Evaluation of impulse noise reduction in hearing aids"
 ///
-/// Mecanismo:
-/// 1. Calcular envelope de energía instantánea (rápido) y promedio (lento)
-/// 2. Si energía instantánea >> promedio → es un transitorio
-/// 3. Aplicar atenuación PROPORCIONAL al exceso sobre el threshold
-///    (pico pequeño → atenuación suave; pico enorme → atenuación máxima)
-/// 4. Mantener atenuación por hold time (~20 ms)
-/// 5. Recovery exponencial gradual al volver a 0 dB
+/// Mecanismo MULTI-BANDA (MEJORA sobre versión mono):
+/// 1. Dividir señal en 4 bandas espectrales con crossover IIR
+/// 2. Por cada banda:
+///    a. Calcular envelope de energía instantánea (rápido) y promedio (lento)
+///    b. Si peak-to-RMS ratio alto → es un transitorio en ESA banda
+///    c. Aplicar atenuación PROPORCIONAL solo en esa banda
+///    d. Smooth gating con attack/release graduales (elimina "tktktkt")
+/// 3. Recombinar bandas atenuadas
 ///
-/// Diseño: opera sample-by-sample, lock-free, mínimo overhead CPU.
+/// Ventaja multi-banda:
+/// - Golpe en graves (puerta) NO atenúa consonantes en agudos
+/// - Timbre en medios NO mata vocales en graves
+/// - Más natural, menos artefactos audibles
 
 #ifndef HEARING_AID_TRANSIENT_REDUCER_H
 #define HEARING_AID_TRANSIENT_REDUCER_H
@@ -27,7 +39,10 @@
 #include <atomic>
 #include <cmath>
 
-/// Transient Noise Reduction — protección contra impulsos fuertes.
+/// Número de bandas para TNR multi-banda
+static constexpr int kTnrBands = 4;
+
+/// Transient Noise Reduction MULTI-BANDA — protección contra impulsos fuertes.
 ///
 /// Uso típico:
 /// @code
@@ -43,88 +58,12 @@ public:
 
     /// Inicializa con el sample rate del sistema.
     /// @param sampleRate Hz (típicamente 16000 o 48000)
-    void init(int sampleRate) {
-        sampleRate_ = sampleRate;
+    void init(int sampleRate);
 
-        // Coeficientes de envelope detection
-        // Fast envelope: ~1ms time constant (sigue picos instantáneos)
-        fastCoeff_ = 1.0f - std::exp(-1.0f / (0.001f * sampleRate));
-
-        // Slow envelope: ~100ms time constant (promedio de fondo)
-        slowCoeff_ = 1.0f - std::exp(-1.0f / (0.100f * sampleRate));
-
-        // Hold time: 20ms (cuántas muestras mantener atenuación tras detección)
-        holdSamples_ = static_cast<int>(0.020f * sampleRate);
-
-        // Recovery: 30ms (cuánto tarda en volver a 0 dB tras hold)
-        recoveryCoeff_ = 1.0f - std::exp(-1.0f / (0.030f * sampleRate));
-
-        // Reset estado
-        fastEnv_ = 0.0f;
-        slowEnv_ = 1e-6f;
-        currentGain_ = 1.0f;
-        holdCounter_ = 0;
-    }
-
-    /// Procesa un bloque de audio in-place.
+    /// Procesa un bloque de audio in-place con TNR multi-banda.
     /// @param buffer Audio float32 [-1.0, +1.0]
     /// @param blockSize Número de muestras
-    void process(float* buffer, int blockSize) {
-        if (!enabled_.load(std::memory_order_relaxed)) return;
-        if (buffer == nullptr || blockSize <= 0) return;
-
-        // Leer parámetros configurables (atomic)
-        float threshold = thresholdRatio_.load(std::memory_order_relaxed);
-        float attenuation = attenuationLinear_.load(std::memory_order_relaxed);
-
-        for (int i = 0; i < blockSize; ++i) {
-            float absSample = std::fabs(buffer[i]);
-
-            // 1. Actualizar envelopes (fast tracking, slow average)
-            // Fast: sigue rápido los picos
-            fastEnv_ += fastCoeff_ * (absSample - fastEnv_);
-            // Slow: promedio de largo plazo (energía de fondo)
-            slowEnv_ += slowCoeff_ * (absSample - slowEnv_);
-
-            // Evitar división por cero
-            float safeSlowEnv = std::fmax(slowEnv_, 1e-6f);
-
-            // 2. Detección de transitorio
-            // Si fast >> slow × threshold, hay un transitorio
-            float ratio = fastEnv_ / safeSlowEnv;
-
-            if (ratio > threshold) {
-                // ¡Transitorio detectado! Atenuación PROPORCIONAL al exceso.
-                // ratio = cuánto excede el fast envelope sobre el slow.
-                // threshold = umbral mínimo para considerar transitorio.
-                // Ejemplo con threshold=8:
-                //   ratio=10 (pico leve) → excess=1.25 → ~-4 dB
-                //   ratio=24 (pico medio) → excess=3.0 → ~-10 dB
-                //   ratio=64 (pico enorme) → excess=8.0 → atenuación máxima
-                //
-                // Fórmula: ganancia = max(attenuation, 1.0 / excess)
-                // donde excess = ratio / threshold (≥ 1.0)
-                // Esto produce atenuación proporcional clampeada al piso configurado.
-                float excess = ratio / threshold; // siempre ≥ 1.0
-                float proportionalGain = 1.0f / excess;
-                // Clamp: nunca atenuar más que el piso configurado (ej: -12 dB = 0.25)
-                if (proportionalGain < attenuation) {
-                    proportionalGain = attenuation;
-                }
-                currentGain_ = proportionalGain;
-                holdCounter_ = holdSamples_;
-            } else if (holdCounter_ > 0) {
-                // Mantener atenuación durante hold time
-                holdCounter_--;
-            } else {
-                // Recovery: volver gradualmente a 1.0
-                currentGain_ += recoveryCoeff_ * (1.0f - currentGain_);
-            }
-
-            // 3. Aplicar ganancia (siempre <= 1.0, solo atenúa)
-            buffer[i] *= currentGain_;
-        }
-    }
+    void process(float* buffer, int blockSize);
 
     /// Habilita/deshabilita el TNR (thread-safe).
     void setEnabled(bool enabled) {
@@ -135,9 +74,9 @@ public:
         return enabled_.load(std::memory_order_relaxed);
     }
 
-    /// Establece el umbral de detección (ratio fast/slow envelope).
-    /// Default: 8.0 (transitorio = 8× sobre el promedio).
-    /// Rango recomendado: 4.0 (sensible) a 12.0 (conservador).
+    /// Establece el umbral de detección (ratio peak/RMS).
+    /// Default: 6.0 (transitorio = 6× sobre el RMS de fondo).
+    /// Rangocomendado: 4.0 (sensible) a 10.0 (conservador).
     void setThreshold(float ratio) {
         if (ratio < 2.0f) ratio = 2.0f;
         if (ratio > 20.0f) ratio = 20.0f;
@@ -156,27 +95,63 @@ public:
         attenuationLinear_.store(linear, std::memory_order_relaxed);
     }
 
-    /// Lee el último gain aplicado (para diagnóstico/UI).
-    float getCurrentGain() const { return currentGain_; }
+    /// Lee el último gain aplicado por banda (para diagnóstico/UI).
+    float getBandGain(int band) const { 
+        if (band >= 0 && band < kTnrBands) return bandGains_[band];
+        return 1.0f;
+    }
 
 private:
+    /// Estado de filtro crossover de 2° orden por banda
+    struct CrossoverState {
+        float x1 = 0.0f, x2 = 0.0f;  // Input delays
+        float y1 = 0.0f, y2 = 0.0f;  // Output delays
+    };
+
+    /// Coeficientes de filtro biquad
+    struct BiquadCoeffs {
+        float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+        float a1 = 0.0f, a2 = 0.0f;
+    };
+
+    /// Estado del detector TNR por banda
+    struct BandState {
+        float fastEnv = 0.0f;       // Envelope rápido (peak tracking)
+        float slowEnv = 1e-6f;      // Envelope lento (RMS background)
+        float smoothGain = 1.0f;    // Ganancia suave actual
+        int holdCounter = 0;        // Contador de hold
+    };
+
+    /// Calcula coeficientes de filtro Linkwitz-Riley crossover
+    BiquadCoeffs computeCrossoverCoeffs(float centerFreq, int sampleRate, bool isLowPass);
+
+    /// Aplica filtro biquad a una muestra
+    float applyBiquad(float input, const BiquadCoeffs& coeffs, CrossoverState& state);
+
     int sampleRate_ = 16000;
 
-    // Coeficientes pre-calculados
-    float fastCoeff_ = 0.0f;
-    float slowCoeff_ = 0.0f;
-    float recoveryCoeff_ = 0.0f;
-    int holdSamples_ = 0;
+    // Coeficientes pre-calculados (attack/release/hold)
+    float fastCoeff_ = 0.0f;       // ~1 ms (peak tracking)
+    float slowCoeff_ = 0.0f;       // ~100 ms (RMS background)
+    float attackCoeff_ = 0.0f;     // ~15 ms (smooth attack)
+    float releaseCoeff_ = 0.0f;    // ~80 ms (smooth release)
+    int holdSamples_ = 0;          // ~20 ms
 
-    // Estado del detector (audio thread only)
-    float fastEnv_ = 0.0f;
-    float slowEnv_ = 1e-6f;
-    float currentGain_ = 1.0f;
-    int holdCounter_ = 0;
+    // Estado del detector multi-banda
+    BandState bandStates_[kTnrBands];
+    float bandGains_[kTnrBands] = {1.0f, 1.0f, 1.0f, 1.0f};
+
+    // Filtros crossover (Linkwitz-Riley 4th order = 2× biquad cascaded)
+    // Banda 0: LP 500 Hz
+    // Banda 1: BP 500-2000 Hz
+    // Banda 2: BP 2000-5000 Hz
+    // Banda 3: HP 5000 Hz
+    BiquadCoeffs crossoverCoeffs_[kTnrBands][2];  // 2 cascaded biquads per band
+    CrossoverState crossoverStates_[kTnrBands][2];
 
     // Parámetros atómicos (UI thread settable)
     std::atomic<bool> enabled_{true};
-    std::atomic<float> thresholdRatio_{8.0f};       // Default: 8× sobre promedio
+    std::atomic<float> thresholdRatio_{6.0f};       // Default: 6× sobre RMS
     std::atomic<float> attenuationLinear_{0.25f};   // Default: -12 dB
 };
 

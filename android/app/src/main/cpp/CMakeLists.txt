@@ -42,6 +42,7 @@ add_library(
     dsp_pipeline.cpp
     # Módulos individuales del pipeline
     noise_reduction.cpp
+    transient_reducer.cpp
     equalizer.cpp
     wdrc_processor.cpp
     mpo_limiter.cpp

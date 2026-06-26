@@ -166,6 +166,14 @@ private:
     /// Ganancia compuesta del bloque anterior (para suavizado temporal).
     float prevGain_ = 1.0f;
 
+    // --- MEJORA PROFESIONAL: Smooth envelope follower ---
+    /// Envelope follower para smooth gating (elimina "tktktkt")
+    /// Attack: 40 ms (rise time moderado, deja pasar transientes leves)
+    /// Release: 250 ms (fade lento, evita cortes abruptos)
+    float smoothEnvelope_ = 1.0f;
+    float attackCoeff_ = 0.0f;   // Calculado en init() basado en sampleRate
+    float releaseCoeff_ = 0.0f;  // Calculado en init() basado en sampleRate
+
     // --- Constantes de suavizado ---
     /// Coeficiente de actualización de ruido (lento, ~500 ms)
     static constexpr float kNoiseAlpha = 0.02f;

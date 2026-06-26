@@ -87,6 +87,13 @@ void NoiseReduction::init(int sampleRate) {
             static_cast<float>(sampleRate_)
         );
     }
+
+    // MEJORA PROFESIONAL: Calcular coeficientes de smooth envelope follower
+    // Attack: 40 ms (rise time moderado - deja pasar transientes leves)
+    attackCoeff_ = 1.0f - std::exp(-1.0f / (0.040f * sampleRate_));
+    // Release: 250 ms (fade lento - evita cortes abruptos "tktktkt")
+    releaseCoeff_ = 1.0f - std::exp(-1.0f / (0.250f * sampleRate_));
+
     reset();
 }
 
@@ -102,6 +109,7 @@ void NoiseReduction::reset() {
         bandEnergy_[i] = 0.0f;
     }
     prevGain_ = 1.0f;
+    smoothEnvelope_ = 1.0f;  // Inicializar smooth envelope en 1.0 (pass-through)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,20 +185,20 @@ void NoiseReduction::process(float* buffer, int blockSize) {
     compositeGain = std::max(compositeGain, gainFloor);
     compositeGain = std::min(compositeGain, 1.0f);
 
-    // Suavizado temporal: attack rápido (ruido aparece), release lento (ruido desaparece)
-    // Esto evita clicks y transiciones abruptas entre bloques.
-    if (compositeGain < prevGain_) {
-        // Attack: ruido detectado → atenuar rápido (~5ms)
-        compositeGain = prevGain_ + 0.4f * (compositeGain - prevGain_);
-    } else {
-        // Release: ruido desaparece → restaurar lento (~50ms)
-        compositeGain = prevGain_ + 0.1f * (compositeGain - prevGain_);
-    }
-    prevGain_ = compositeGain;
+    // Suavizado temporal MEJORADO: smooth envelope follower (elimina "tktktkt")
+    // ANTES: attack/release lineal con alpha fijos (0.4/0.1) → saltos audibles
+    // AHORA: envelope exponencial con attack 40ms / release 250ms → transiciones suaves
+    float targetGain = compositeGain;
+    float coeff = (targetGain < smoothEnvelope_) ? attackCoeff_ : releaseCoeff_;
+    smoothEnvelope_ += coeff * (targetGain - smoothEnvelope_);
+    
+    // Clamp para evitar valores fuera de [gainFloor, 1.0]
+    if (smoothEnvelope_ < gainFloor) smoothEnvelope_ = gainFloor;
+    if (smoothEnvelope_ > 1.0f) smoothEnvelope_ = 1.0f;
 
-    // Aplicar ganancia compuesta al buffer
+    // Aplicar ganancia SUAVE al buffer (sin clicks ni "tktktkt")
     for (int i = 0; i < blockSize; ++i) {
-        buffer[i] *= compositeGain;
+        buffer[i] *= smoothEnvelope_;
     }
 }
 
