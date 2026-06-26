@@ -743,4 +743,3 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
       ),
     );
   }
-}
