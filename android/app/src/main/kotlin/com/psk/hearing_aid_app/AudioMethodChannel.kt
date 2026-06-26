@@ -607,6 +607,44 @@ class AudioMethodChannel(
                 BluetoothScoController.Result.Failed -> "failed"
             }
             Log.i(TAG, "setConversationMode(true) → SCO start result=$scoStatus")
+            
+            // FIX: Si SCO falló completamente, revertir a modo normal
+            if (scoStatus == "failed") {
+                Log.e(TAG, "SCO failed, reverting to normal mode")
+                conversationMode = false
+                // Reiniciar en modo normal (48 kHz)
+                val sampleRate = 48_000
+                val bufferSize = 256
+                nativeBridge.nativeSetConversationMode(false)
+                
+                nativeBridge.start(
+                    sampleRate = sampleRate,
+                    bufferSize = bufferSize,
+                    eqGains = lastEqGains,
+                    volumeDb = lastVolumeDb,
+                    expansionKnee = lastExpKnee,
+                    expansionRatio = lastExpRatio,
+                    compressionKnee = lastCompKnee,
+                    compressionRatio = lastCompRatio,
+                    attackMs = lastAttackMs,
+                    releaseMs = lastReleaseMs,
+                    nrLevel = 0,
+                    mpoThresholdDbSpl = lastMpoDbSpl,
+                    splOffset = 120f
+                )
+                
+                // Re-init DNN
+                try {
+                    nativeBridge.nativeInitDnnDenoiser(context.assets)
+                    nativeBridge.nativeSetDnnEnabled(lastDnnEnabled)
+                    nativeBridge.nativeSetDnnIntensity(lastDnnIntensity)
+                } catch (e: Exception) {
+                    Log.w(TAG, "DNN re-init failed after SCO failure: ${e.message}")
+                }
+                
+                result.success("failed")
+                return
+            }
         } else {
             scoController.stop()
             scoStatus = "disabled"

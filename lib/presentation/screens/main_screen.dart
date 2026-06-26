@@ -1049,9 +1049,6 @@ class _ActiveView extends StatelessWidget {
           // Slider de volumen (-20 a +10 dB) — Req 5.3
           _VolumeSlider(volumeDb: state.volumeDb),
           const SizedBox(height: 8),
-          // ─── Limpiador de ruido (DNN) en pantalla principal ─────────
-          const _DnnNoiseCleanerCard(),
-          const SizedBox(height: 8),
           // Slider de intensidad de amplificación (gainScale) — Req 13.5, 13.6, 13.11
           // Visible sólo en Modo Amplificador (el widget se auto-oculta en
           // Modo Diagnóstico vía BlocBuilder + operatingMode interno).
