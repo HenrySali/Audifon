@@ -1049,6 +1049,7 @@ class AmplificationBloc
               compressionRatios: baseBundle.compressionRatios,
               compressionKneesDbSpl: baseBundle.compressionKneesDbSpl,
               mpoProfileDbSpl: baseBundle.mpoProfileDbSpl,
+              prescribedTargetsDb: baseBundle.prescribedTargetsDb,
               nrLevel: adjustedNrLevel,
               wdrcAttackMs: baseBundle.wdrcAttackMs,
               wdrcReleaseMs: baseBundle.wdrcReleaseMs,
