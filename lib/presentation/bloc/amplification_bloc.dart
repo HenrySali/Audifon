@@ -589,6 +589,7 @@ class AmplificationBloc
           operatingMode: _operatingMode,
           gainScale: _gainScale,
           recdProvider: _maybeRecdProvider(),
+          prescribedTargetsDb: prescribedTargets,
         );
 
         // 8. AudioConfig usado por startAudio (Phase 2). Aquí pasamos
