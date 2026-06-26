@@ -579,9 +579,6 @@ class AmplificationBloc
 
         // 7. Bundle clínico inicial — fuente de verdad para los
         //    setters runtime de Phase 4 (gains, WDRC, MPO, NR).
-        final prescribedTargets = nl3Result != null
-            ? nl3Result!.prescribedGains
-            : _lastNl2Gains;
         initialBundle = _bundleBuilder.buildFromAudiogram(
           _currentAudiogram!,
           profile: _buildPatientProfile(),
@@ -589,7 +586,6 @@ class AmplificationBloc
           operatingMode: _operatingMode,
           gainScale: _gainScale,
           recdProvider: _maybeRecdProvider(),
-          prescribedTargetsDb: prescribedTargets,
         );
 
         // 8. AudioConfig usado por startAudio (Phase 2). Aquí pasamos
@@ -1053,7 +1049,6 @@ class AmplificationBloc
               compressionRatios: baseBundle.compressionRatios,
               compressionKneesDbSpl: baseBundle.compressionKneesDbSpl,
               mpoProfileDbSpl: baseBundle.mpoProfileDbSpl,
-              prescribedTargetsDb: baseBundle.prescribedTargetsDb,
               nrLevel: adjustedNrLevel,
               wdrcAttackMs: baseBundle.wdrcAttackMs,
               wdrcReleaseMs: baseBundle.wdrcReleaseMs,
