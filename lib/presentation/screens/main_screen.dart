@@ -1084,6 +1084,9 @@ class _ActiveView extends StatelessWidget {
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
           const SizedBox(height: 16),
+          // Limpiador de ruido DNN (IA) — anti "tktktkt"
+          const _DnnNoiseCleanerCard(),
+          const SizedBox(height: 16),
           // Visualización del EQ activo (ganancias calculadas del audiograma)
           if (state.bundle?.gainsDb != null)
             ActiveEqVisualization(
