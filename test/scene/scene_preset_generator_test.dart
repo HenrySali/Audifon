@@ -58,6 +58,7 @@ AudiogramDrivenBundle _flatBundle({
     compressionRatios: List<double>.filled(12, 1.5),
     compressionKneesDbSpl: List<double>.filled(12, 50.0),
     mpoProfileDbSpl: List<double>.filled(12, mpoDbSpl),
+    prescribedTargetsDb: List<double>.filled(12, gainDb),
     nrLevel: 1,
     wdrcAttackMs: 5.0,
     wdrcReleaseMs: 100.0,

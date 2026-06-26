@@ -27,6 +27,7 @@ AudiogramDrivenBundle _fakeBundle() {
     compressionRatios: List<double>.filled(12, 1.5),
     compressionKneesDbSpl: List<double>.filled(12, 50.0),
     mpoProfileDbSpl: List<double>.filled(12, 110.0),
+    prescribedTargetsDb: List<double>.filled(12, 5.0),
     nrLevel: 1,
     wdrcAttackMs: 5.0,
     wdrcReleaseMs: 100.0,

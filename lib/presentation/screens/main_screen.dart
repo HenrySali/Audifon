@@ -144,11 +144,6 @@ class MainScreen extends StatelessWidget {
       AmplificationError() => _ErrorView(state: state),
     };
   }
-
-  /// Muestra un bottom sheet con vista detallada del EQ activo,
-  /// incluyendo targets NAL-NL3, badge de tolerancia, y sección de MPO.
-  void _showEqDetailBottomSheet(BuildContext context, AmplificationActive state) =>
-      _showEqDetailBottomSheetImpl(context, state);
 }
 
 /// Widget auxiliar para mostrar una fila de información en el bottom sheet.
