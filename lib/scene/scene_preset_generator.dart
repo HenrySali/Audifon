@@ -16,6 +16,7 @@
 /// Validates: Requirements 7.1, 7.4, 7.5, 7.6, 10.3, 10.6
 
 import '../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import 'noise_level_calculator.dart';
 import 'scene_snapshot.dart' show SceneClass, SceneSnapshot;
 import 'smart_preset.dart';
 
@@ -118,6 +119,11 @@ class SceneGenericPresetGenerator {
   }) {
     final tuning = _tuningFor(sceneClass);
     final input = snapshot.inputDbSpl;
+    
+    // Smart con NR automático: calcular nrLevel basándose en las métricas
+    // de ruido del snapshot en vez de usar el valor fijo del tuning.
+    // Requisito: Smart con detección automática de nivel de ruido (2026-06-27)
+    final nrLevel = NoiseLevelCalculator.calculateNrLevel(snapshot);
 
     final gains = List<double>.filled(
       AudiogramDrivenBundle.bandCount,
@@ -155,7 +161,7 @@ class SceneGenericPresetGenerator {
       compressionRatio: tuning.compressionRatioOverride,
       compressionKnee: tuning.compressionKneeOverride,
       expansionKnee: bundle.expansionKneeDbSpl,
-      nrLevel: tuning.nrLevel,
+      nrLevel: nrLevel, // Usar NR calculado automáticamente, no el del tuning
       tnrEnabled: tuning.tnrEnabled,
       volumeDeltaDb: tuning.volumeDeltaDb,
       confidence: confidence,

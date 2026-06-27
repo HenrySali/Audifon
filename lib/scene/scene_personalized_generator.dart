@@ -21,6 +21,7 @@
 /// Validates: Requirements 7.1, 7.4, 7.7, 10.3, 10.4, 10.6
 
 import '../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
+import 'noise_level_calculator.dart';
 import 'scene_snapshot.dart' show SceneClass, SceneSnapshot;
 import 'smart_preset.dart';
 
@@ -102,6 +103,11 @@ class ScenePersonalizedPresetGenerator {
     final tuning = _tuningFor(sceneClass);
     final timestamp =
         DateTime.now().millisecondsSinceEpoch.remainder(100000);
+    
+    // Smart con NR automático: calcular nrLevel basándose en las métricas
+    // de ruido del snapshot en vez de usar el valor fijo del tuning.
+    // Requisito: Smart con detección automática de nivel de ruido (2026-06-27)
+    final nrLevel = NoiseLevelCalculator.calculateNrLevel(snapshot);
 
     return SmartPreset(
       name: 'SmartScenePerso_${sceneClass.name}_$timestamp',
@@ -111,7 +117,7 @@ class ScenePersonalizedPresetGenerator {
       compressionRatio: tuning.compressionRatio,
       compressionKnee: tuning.compressionKnee,
       expansionKnee: tuning.expansionKnee,
-      nrLevel: tuning.nrLevel,
+      nrLevel: nrLevel, // Usar NR calculado automáticamente, no el del tuning
       tnrEnabled: tuning.tnrEnabled,
       volumeDeltaDb: tuning.volumeDeltaDb,
       confidence: confidence,
