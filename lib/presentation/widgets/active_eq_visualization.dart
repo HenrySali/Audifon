@@ -91,12 +91,12 @@ class ActiveEqVisualization extends StatelessWidget {
 
             // Gráfico de barras (12 bandas)
             SizedBox(
-              height: 50,
+              height: 74,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: List.generate(12, (i) {
                   final g = gains[i];
-                  final h = (g / maxGain * 46).clamp(2.0, 46.0);
+                  final h = (g / maxGain * 49).clamp(2.0, 49.0);
                   final freq = EqPreset.bandFrequencies[i];
                   return Expanded(
                     child: Padding(
