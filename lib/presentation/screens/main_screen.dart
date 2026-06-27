@@ -1084,12 +1084,14 @@ class _ActiveView extends StatelessWidget {
           // Limpiador de ruido DNN (IA) — anti "tktktkt"
           const _DnnNoiseCleanerCard(),
           const SizedBox(height: 16),
-          // Visualización del EQ activo (ganancias calculadas del audiograma)
-          if (state.bundle?.gainsDb != null)
+          // Visualización del EQ activo (ganancias realmente aplicadas al DSP).
+          // Prioriza `activeEqGains` (preset aplicado, ej: Smart Scene) sobre
+          // `bundle.gainsDb` (prescripción base sin personalizar).
+          if (state.activeEqGains != null || state.bundle?.gainsDb != null)
             ActiveEqVisualization(
-              gains: state.bundle!.gainsDb,
+              gains: state.activeEqGains ?? state.bundle!.gainsDb,
               environmentName: state.activeProfile,
-          onTap: () => _showEqDetailBottomSheetImpl(context, state),
+              onTap: () => _showEqDetailBottomSheetImpl(context, state),
             ),
           if (state.activeEqPreset == _kPersonalPresetName) ...[
             const SizedBox(height: 16),
@@ -2233,25 +2235,26 @@ class _ProcessingReport extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-              GestureDetector(
-                onTap: () => _showDebugInfo(context),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.bug_report, color: Colors.orange, size: 14),
-                      SizedBox(width: 4),
-                      Text('Debug', style: TextStyle(color: Colors.orange, fontSize: 11)),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
+              // Debug button oculto en producción
+              // GestureDetector(
+              //   onTap: () => _showDebugInfo(context),
+              //   child: Container(
+              //     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              //     decoration: BoxDecoration(
+              //       color: Colors.orange.withOpacity(0.15),
+              //       borderRadius: BorderRadius.circular(6),
+              //     ),
+              //     child: const Row(
+              //       mainAxisSize: MainAxisSize.min,
+              //       children: [
+              //         Icon(Icons.bug_report, color: Colors.orange, size: 14),
+              //         SizedBox(width: 4),
+              //         Text('Debug', style: TextStyle(color: Colors.orange, fontSize: 11)),
+              //       ],
+              //     ),
+              //   ),
+              // ),
+              // const SizedBox(width: 6),
               // Botón DSP Pipeline Test
               GestureDetector(
                 onTap: () {

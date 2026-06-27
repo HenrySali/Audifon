@@ -1655,11 +1655,15 @@ class AmplificationBloc
         );
       }
 
-      // 2d. Re-emitir el state activo con el nombre del preset. Se
-      //     re-evalúa `state` post-await (puede haber cambiado).
+      // 2d. Re-emitir el state activo con el nombre del preset Y las
+      //     ganancias realmente aplicadas. Se re-evalúa `state` post-await
+      //     (puede haber cambiado).
       final current = state;
       if (current is AmplificationActive) {
-        emit(current.copyWith(activeEqPreset: presetName));
+        emit(current.copyWith(
+          activeEqPreset: presetName,
+          activeEqGains: clampedGains,
+        ));
       }
     } catch (_) {
       // No interrumpir por error de actualización de EQ.
@@ -3449,6 +3453,7 @@ class AmplificationBloc
         lossType: bundle.lossType,
         prescriptionMode: bundle.prescriptionMode,
         activeNrLevel: nrLevel,
+        activeEqGains: finalGains,
       ));
     }
   }

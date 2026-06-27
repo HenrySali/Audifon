@@ -177,6 +177,16 @@ class AmplificationActive extends AmplificationState {
   /// Requisitos: modo-conversacion-sco
   final bool conversationMode;
 
+  /// Ganancias EQ activas realmente aplicadas al motor DSP (12 bandas).
+  ///
+  /// Cuando se aplica un preset (manual, Smart Scene, etc.), estas
+  /// ganancias reflejan exactamente lo que está corriendo en el pipeline.
+  /// La UI las usa en [ActiveEqVisualization] para mostrar el espectro
+  /// real en vez del bundle base (que es la prescripción sin personalizar).
+  ///
+  /// `null` cuando todavía no se aplicó ningún preset en esta sesión.
+  final List<double>? activeEqGains;
+
   const AmplificationActive({
     required this.inputLevelDb,
     required this.activeProfile,
@@ -200,6 +210,7 @@ class AmplificationActive extends AmplificationState {
     this.operatingMode = OperatingMode.diagnostic,
     this.gainScale = 1.0,
     this.customPresetsStale = false,
+    this.activeEqGains,
   });
 
   /// Crea una copia con campos actualizados.
@@ -230,6 +241,8 @@ class AmplificationActive extends AmplificationState {
     OperatingMode? operatingMode,
     double? gainScale,
     bool? customPresetsStale,
+    List<double>? activeEqGains,
+    bool clearActiveEqGains = false,
   }) {
     return AmplificationActive(
       inputLevelDb: inputLevelDb ?? this.inputLevelDb,
@@ -257,6 +270,9 @@ class AmplificationActive extends AmplificationState {
       operatingMode: operatingMode ?? this.operatingMode,
       gainScale: gainScale ?? this.gainScale,
       customPresetsStale: customPresetsStale ?? this.customPresetsStale,
+      activeEqGains: clearActiveEqGains
+          ? null
+          : (activeEqGains ?? this.activeEqGains),
     );
   }
 
