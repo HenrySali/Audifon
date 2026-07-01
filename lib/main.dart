@@ -140,9 +140,8 @@ class HearingAidApp extends StatelessWidget {
 Future<void> _initAdaptiveLearning() async {
   AdaptiveLearningService.instance.configure(
     const AdaptiveLearningConfig(
-      // Por defecto apunta a localhost. En producción, cambiar a la IP
-      // del servidor Hermes (ej: 'http://192.168.1.100:8080').
-      hermesBaseUrl: 'http://localhost:8080',
+      // Servidor Hermes en el mismo VPS que corre oirpro/admin
+      hermesBaseUrl: 'http://149.50.137.2:8080',
       requestTimeout: Duration(seconds: 15),
       maxObservations: 200,
     ),
