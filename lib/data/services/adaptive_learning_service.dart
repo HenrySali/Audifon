@@ -134,12 +134,12 @@ class AdaptiveLearningService {
     // Leer escena actual.
     final state = bloc.state;
     final sceneClass = state is AmplificationActive
-        ? _intToSceneClass(state.lastEnvironmentClass)
+        ? _intToSceneClass(state.activeNrLevel)
         : SceneClass.unknown;
 
     // Leer EQ + NR + volumen actuales del estado.
     final currentGains = state is AmplificationActive
-        ? List<double>.from(state.eqGains)
+        ? List<double>.from(state.activeEqGains ?? List<double>.filled(12, 0.0))
         : List<double>.filled(12, 0.0);
     final currentNr =
         state is AmplificationActive ? state.activeNrLevel : 1;
@@ -257,7 +257,7 @@ class AdaptiveLearningService {
 
       final state = bloc.state;
       final currentGains = state is AmplificationActive
-          ? List<double>.from(state.eqGains)
+          ? List<double>.from(state.activeEqGains ?? List<double>.filled(12, 0.0))
           : List<double>.filled(12, 0.0);
       final currentNr =
           state is AmplificationActive ? state.activeNrLevel : 1;

@@ -101,7 +101,7 @@ class _AdaptiveLearningScreenState extends State<AdaptiveLearningScreen> {
                           'Describe el entorno...\nej: "Restaurante ruidoso, voz baja del compañero"',
                       border: const OutlineInputBorder(),
                       filled: true,
-                      fillColor: colors.surfaceContainerLow,
+                      fillColor: colors.surface,
                     ),
                   ),
                 ),
@@ -197,7 +197,7 @@ class _StatusBar extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      color: colors.surfaceContainerHighest,
+      color: colors.surfaceVariant,
       child: Row(
         children: [
           Icon(Icons.auto_awesome, size: 16, color: colors.primary),
