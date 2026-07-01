@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'data/bridges/audio_bridge_impl.dart';
 import 'data/hive_initializer.dart';
+import 'data/services/adaptive_learning_service.dart';
 import 'data/services/remote_config_service.dart';
 import 'domain/entities/audiogram.dart';
 import 'domain/gain_prescriber.dart';
@@ -57,6 +58,10 @@ void main() async {
   // bloquear esperando IO al inicializar — el fetch en si dispara
   // después de la biometría (R6.2).
   await RemoteConfigService.instance.init();
+
+  // Aprendizaje Adaptativo: init (carga historial desde Hive).
+  // La URL del backend se puede cambiar después vía la UI de settings.
+  await _initAdaptiveLearning();
 
   runApp(
     BiometricGate(
@@ -125,4 +130,22 @@ class HearingAidApp extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Inicializa el servicio de aprendizaje adaptativo.
+///
+/// Configura la URL del backend Hermes y carga el historial de
+/// observaciones desde Hive. Si la inicialización falla (ej: Hive
+/// corrupto), el servicio sigue funcionando en memoria.
+Future<void> _initAdaptiveLearning() async {
+  AdaptiveLearningService.instance.configure(
+    const AdaptiveLearningConfig(
+      // Por defecto apunta a localhost. En producción, cambiar a la IP
+      // del servidor Hermes (ej: 'http://192.168.1.100:8080').
+      hermesBaseUrl: 'http://localhost:8080',
+      requestTimeout: Duration(seconds: 15),
+      maxObservations: 200,
+    ),
+  );
+  await AdaptiveLearningService.instance.init();
 }

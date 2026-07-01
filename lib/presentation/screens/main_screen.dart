@@ -36,6 +36,7 @@ import 'diagnostic/diagnostic_flow_screen.dart';
 import 'diagnostic_analyzer_screen.dart';
 import 'diagnostico_dsp_screen.dart';
 import 'session_log_screen.dart';
+import 'adaptive_learning_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
@@ -693,6 +694,28 @@ class _StatusBar extends StatelessWidget {
                             builder: (_) => BlocProvider.value(
                               value: context.read<AmplificationBloc>(),
                               child: const SessionLogScreen(),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Aprendizaje Adaptativo — Hermes Agent observa entornos
+                  // y sugiere ajustes DSP basados en observaciones del técnico.
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.psychology,
+                          color: Colors.amberAccent, size: 21),
+                      tooltip: 'Aprendizaje Adaptativo',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BlocProvider.value(
+                              value: context.read<AmplificationBloc>(),
+                              child: const AdaptiveLearningScreen(),
                             ),
                           ),
                         );
