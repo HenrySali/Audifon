@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'repositories/audiogram_repository_impl.dart';
@@ -18,6 +19,7 @@ import 'repositories/settings_repository_impl.dart';
 /// - audiogram_box: Almacena el audiograma del usuario
 /// - profiles_box: Almacena perfiles personalizados
 /// - settings_box: Almacena configuración (lastProfile, lastVolume, calibración)
+/// - calibration_box: Almacena offsets de calibracion y audit trail
 class HiveInitializer {
   HiveInitializer._();
 
@@ -45,6 +47,23 @@ class HiveInitializer {
     final audiogramBox = await AudiogramRepositoryImpl.openBox();
     final profilesBox = await ProfileRepositoryImpl.openBox();
     final settingsBox = await SettingsRepositoryImpl.openBox();
+
+    // Abrir calibration_box para persistencia de offsets y audit trail.
+    final calibrationBox = await Hive.openBox('calibration_box');
+
+    // Si hay un SPL offset manual persistido, aplicarlo al native bridge
+    // para que el pipeline DSP arranque con el valor correcto.
+    try {
+      final splOffset = calibrationBox.get('manual_spl_offset');
+      if (splOffset != null) {
+        const channel = MethodChannel('com.psk.hearing_aid/audio');
+        await channel.invokeMethod('applyCalibration', {
+          'micSplOffset': (splOffset as num).toDouble(),
+        });
+      }
+    } catch (_) {
+      // Si falla (ej. canal no listo), no bloquear el arranque.
+    }
 
     return HiveRepositories(
       audiogramRepository: AudiogramRepositoryImpl(audiogramBox),

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'diagnostic/calibration_step.dart';
 import 'bundle_export_screen.dart';
 import 'calibration_spectrum_screen.dart';
@@ -87,6 +89,19 @@ class TechnicalServiceScreen extends StatelessWidget {
                 'Usar en cada nuevo dispositivo o cambio de auriculares.',
             buttonText: 'Iniciar Calibración',
             onTap: () => _openCalibration(context),
+          ),
+          const SizedBox(height: 12),
+
+          // Tarjeta: Ajuste SPL Offset (Micrófono)
+          _ServiceCard(
+            icon: Icons.mic_external_on,
+            iconColor: Colors.yellowAccent,
+            title: 'Ajuste SPL Offset (Micrófono)',
+            description:
+                'Si el nivel que reporta la app no coincide con la realidad, '
+                'ajustá el offset. Moto G32 típico: ~140. Samsung gama alta: ~120.',
+            buttonText: 'Ajustar Offset',
+            onTap: () => _showSplOffsetDialog(context),
           ),
           const SizedBox(height: 12),
 
@@ -297,6 +312,115 @@ class TechnicalServiceScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  void _showSplOffsetDialog(BuildContext context) {
+    double currentValue = 120;
+    try {
+      final box = Hive.box('calibration_box');
+      final stored = box.get('manual_spl_offset');
+      if (stored is num) {
+        currentValue = stored.toDouble();
+      }
+    } catch (_) {
+      // Box not open or error reading; use default 120.
+    }
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF16213e),
+              title: const Text(
+                'Ajuste SPL Offset (Micrófono)',
+                style: TextStyle(color: Colors.yellowAccent, fontSize: 16),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Ajustá el offset hasta que el nivel reportado coincida '
+                    'con un sonómetro externo. Rango típico: 110-150 dB.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '${currentValue.round()} dB',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Slider(
+                    min: 90,
+                    max: 160,
+                    divisions: 70,
+                    value: currentValue,
+                    activeColor: Colors.yellowAccent,
+                    inactiveColor: Colors.yellowAccent.withOpacity(0.3),
+                    onChanged: (v) {
+                      setDialogState(() => currentValue = v);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text(
+                    'Cancelar',
+                    style: TextStyle(color: Colors.white54),
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.yellowAccent.withOpacity(0.15),
+                    foregroundColor: Colors.yellowAccent,
+                  ),
+                  onPressed: () async {
+                    final intValue = currentValue.round();
+                    // Persistir en Hive
+                    try {
+                      final box = Hive.box('calibration_box');
+                      await box.put('manual_spl_offset', intValue.toDouble());
+                    } catch (_) {
+                      // Si el box no está disponible, continuar igual.
+                    }
+
+                    // Aplicar via MethodChannel
+                    const channel =
+                        MethodChannel('com.psk.hearing_aid/audio');
+                    try {
+                      await channel.invokeMethod('applyCalibration', {
+                        'micSplOffset': intValue.toDouble(),
+                      });
+                    } catch (_) {
+                      // Canal puede no responder en modo debug.
+                    }
+
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                    }
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content:
+                              Text('SPL Offset actualizado a $intValue dB'),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Aplicar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }
