@@ -11,7 +11,7 @@ class AiChatService {
 
   AiChatService({
     required this.apiKey,
-    this.serverUrl = 'http://10.0.2.2:8080', // Android emulator → localhost
+    this.serverUrl = 'http://149.50.137.2:8080', // VPS real
   });
 
   /// Envía un mensaje al servidor RAG y obtiene respuesta con contexto

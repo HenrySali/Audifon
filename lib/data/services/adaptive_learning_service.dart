@@ -38,7 +38,7 @@ class AdaptiveLearningConfig {
   final int maxObservations;
 
   const AdaptiveLearningConfig({
-    this.hermesBaseUrl = 'http://localhost:8080',
+    this.hermesBaseUrl = 'http://149.50.137.2:8080',
     this.requestTimeout = const Duration(seconds: 15),
     this.maxObservations = 200,
   });
