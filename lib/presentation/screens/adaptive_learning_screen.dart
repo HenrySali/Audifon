@@ -83,6 +83,33 @@ class _AdaptiveLearningScreenState extends State<AdaptiveLearningScreen> {
           // ─── Barra de estado ───────────────────────────────────────
           _StatusBar(service: _service),
 
+          // ─── Toggle auto-apply ─────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(
+              children: [
+                Icon(Icons.auto_mode, size: 18, color: colors.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Hermes aplica automáticamente',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.onSurface,
+                    ),
+                  ),
+                ),
+                Switch(
+                  value: _service.autoApply,
+                  onChanged: (value) {
+                    _service.setAutoApply(value);
+                    setState(() {});
+                  },
+                  activeColor: colors.primary,
+                ),
+              ],
+            ),
+          ),
+
           // ─── Input de observación ──────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(12),

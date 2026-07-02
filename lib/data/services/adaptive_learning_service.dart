@@ -55,6 +55,9 @@ class AdaptiveLearningService {
   final List<LearningObservation> _observations = [];
   bool _initialized = false;
 
+  /// Si es true, Hermes aplica automáticamente las sugerencias al recibirlas.
+  bool autoApply = false;
+
   final StreamController<void> _changeController =
       StreamController<void>.broadcast();
 
@@ -82,11 +85,21 @@ class AdaptiveLearningService {
     _config = config;
   }
 
+  /// Activa o desactiva la aplicación automática de sugerencias.
+  void setAutoApply(bool value) async {
+    autoApply = value;
+    try {
+      final box = await _openBox();
+      await box.put('auto_apply', value);
+    } catch (_) {}
+  }
+
   /// Inicializa cargando el historial desde Hive.
   Future<void> init() async {
     if (_initialized) return;
     try {
       final box = await _openBox();
+      autoApply = box.get('auto_apply', defaultValue: false) as bool;
       final entries = box.values.toList();
       _observations.clear();
       for (final raw in entries) {
@@ -179,7 +192,7 @@ class AdaptiveLearningService {
     _changeController.add(null);
 
     // Enviar a Hermes en background (no bloquea la UI).
-    _sendToHermes(observation);
+    _sendToHermes(observation, bloc: bloc);
 
     return observation;
   }
@@ -289,7 +302,7 @@ class AdaptiveLearningService {
   }
 
   /// Envía la observación a Hermes para análisis. No bloquea.
-  Future<void> _sendToHermes(LearningObservation obs) async {
+  Future<void> _sendToHermes(LearningObservation obs, {required AmplificationBloc bloc}) async {
     final idx = _observations.indexWhere((o) => o.id == obs.id);
     if (idx < 0) return;
 
@@ -324,6 +337,11 @@ class AdaptiveLearningService {
           );
           await _persist(_observations[newIdx]);
           _changeController.add(null);
+
+          // Auto-apply si está activado.
+          if (autoApply) {
+            await applySuggestion(obs.id, bloc);
+          }
         }
       } else {
         developer.log(
