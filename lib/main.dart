@@ -1,5 +1,8 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:hive/hive.dart';
 
 import 'data/bridges/audio_bridge_impl.dart';
 import 'data/hive_initializer.dart';
@@ -147,4 +150,27 @@ Future<void> _initAdaptiveLearning() async {
     ),
   );
   await AdaptiveLearningService.instance.init();
+
+  // Set device ID for Hermes tracking
+  final deviceId = await _getOrCreateDeviceId();
+  AdaptiveLearningService.instance.setDeviceId(deviceId);
+  // Sync history from server (non-blocking)
+  AdaptiveLearningService.instance.syncFromServer();
+}
+
+
+/// Obtiene o crea un ID de dispositivo único para tracking de Hermes.
+///
+/// Se persiste en Hive (settings_box) para sobrevivir reinicios de app.
+/// Si no existe, genera un hex aleatorio de 16 caracteres.
+Future<String> _getOrCreateDeviceId() async {
+  final box = await Hive.openBox('settings_box');
+  final existing = box.get('hermes_device_id') as String?;
+  if (existing != null && existing.isNotEmpty) return existing;
+
+  final rng = Random.secure();
+  final bytes = List<int>.generate(8, (_) => rng.nextInt(256));
+  final id = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  await box.put('hermes_device_id', id);
+  return id;
 }

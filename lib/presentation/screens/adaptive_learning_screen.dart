@@ -70,6 +70,11 @@ class _AdaptiveLearningScreenState extends State<AdaptiveLearningScreen> {
       appBar: AppBar(
         title: const Text('Aprendizaje Adaptativo'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Historial de ajustes',
+            onPressed: () => _showAppliedHistory(context),
+          ),
           if (_service.observations.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_outline),
@@ -207,6 +212,170 @@ class _AdaptiveLearningScreenState extends State<AdaptiveLearningScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showAppliedHistory(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final history = _service.appliedHistory;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1a1a2e),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (_, scrollController) {
+            return Column(
+              children: [
+                // Handle bar
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colors.outline,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.history, color: colors.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Ajustes aplicados por Hermes',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: history.isEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.history_toggle_off,
+                                    size: 48, color: colors.outline),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No hay ajustes aplicados aún',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: colors.outline,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: scrollController,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          itemCount: history.length,
+                          itemBuilder: (_, i) {
+                            final obs = history[i];
+                            final suggestion = obs.suggestion!;
+                            final truncatedText = obs.userText.length > 50
+                                ? '${obs.userText.substring(0, 50)}...'
+                                : obs.userText;
+
+                            return Card(
+                              margin: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 4),
+                              color: colors.surface,
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Date/time
+                                    Row(
+                                      children: [
+                                        Icon(Icons.access_time,
+                                            size: 14, color: colors.outline),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '${obs.timestamp.day}/${obs.timestamp.month}/${obs.timestamp.year} '
+                                          '${obs.timestamp.hour.toString().padLeft(2, '0')}:'
+                                          '${obs.timestamp.minute.toString().padLeft(2, '0')}',
+                                          style: theme.textTheme.labelSmall
+                                              ?.copyWith(color: colors.outline),
+                                        ),
+                                        const Spacer(),
+                                        // Feedback indicator
+                                        if (obs.feedback != null)
+                                          Icon(
+                                            obs.feedback!
+                                                ? Icons.thumb_up
+                                                : Icons.thumb_down,
+                                            size: 14,
+                                            color: obs.feedback!
+                                                ? Colors.green
+                                                : Colors.orange,
+                                          )
+                                        else
+                                          Text('Pendiente',
+                                              style: theme.textTheme.labelSmall
+                                                  ?.copyWith(
+                                                      color: colors.outline)),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    // User text
+                                    Text(
+                                      truncatedText,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    // Reasoning
+                                    Text(
+                                      suggestion.reasoning,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: colors.secondary,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    // NR level change
+                                    Text(
+                                      'NR: ${obs.telemetry.nrLevel} → ${suggestion.suggestedNrLevel}',
+                                      style: theme.textTheme.labelSmall?.copyWith(
+                                        fontFamily: 'monospace',
+                                        color: colors.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

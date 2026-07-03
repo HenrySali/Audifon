@@ -55,6 +55,13 @@ class AdaptiveLearningService {
   final List<LearningObservation> _observations = [];
   bool _initialized = false;
 
+  String _deviceId = '';
+
+  /// Establece el ID de dispositivo para tracking en Hermes.
+  void setDeviceId(String id) {
+    _deviceId = id;
+  }
+
   /// Si es true, Hermes aplica automáticamente las sugerencias al recibirlas.
   bool autoApply = false;
 
@@ -260,6 +267,55 @@ class AdaptiveLearningService {
     _changeController.add(null);
   }
 
+  /// Sincroniza el historial desde el servidor Hermes.
+  /// Útil al reinstalar la app o al primer arranque.
+  Future<void> syncFromServer() async {
+    if (_deviceId.isEmpty) return;
+    try {
+      final uri = Uri.parse('${_config.hermesBaseUrl}/api/adaptive-learning/sync');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'deviceId': _deviceId}),
+      ).timeout(_config.requestTimeout);
+      
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final serverObs = json['observations'] as List? ?? [];
+        final autoRec = json['autoApplyRecommended'] as bool? ?? false;
+        
+        // Merge server observations with local (server wins on conflict)
+        for (final raw in serverObs) {
+          try {
+            final obs = LearningObservation.fromJson(Map<String, dynamic>.from(raw));
+            final existing = _observations.indexWhere((o) => o.id == obs.id);
+            if (existing < 0) {
+              _observations.add(obs);
+            } else {
+              // Server version wins
+              _observations[existing] = obs;
+            }
+          } catch (_) {}
+        }
+        _observations.sort((a, b) => b.id.compareTo(a.id));
+        
+        // If server recommends auto-apply and we don't have a local preference
+        if (autoRec && !autoApply) {
+          developer.log('AdaptiveLearning: server recommends autoApply', name: 'AdaptiveLearning');
+        }
+        
+        _changeController.add(null);
+        developer.log('AdaptiveLearning: synced ${serverObs.length} observations from server', name: 'AdaptiveLearning');
+      }
+    } catch (e) {
+      developer.log('AdaptiveLearning: sync failed: $e', name: 'AdaptiveLearning');
+    }
+  }
+
+  /// Returns only observations that were applied (with their suggestions).
+  List<LearningObservation> get appliedHistory =>
+      _observations.where((o) => o.status == ObservationStatus.applied && o.suggestion != null).toList();
+
   // ─── Internos ────────────────────────────────────────────────────────────
 
   Future<DspTelemetrySnapshot?> _captureTelemetry(
@@ -318,6 +374,7 @@ class AdaptiveLearningService {
         'detectedScene': obs.detectedScene.index,
         'sceneName': obs.detectedScene.name,
         'timestamp': obs.timestamp.toIso8601String(),
+        'deviceId': _deviceId,
       });
 
       final response = await http
@@ -382,6 +439,7 @@ class AdaptiveLearningService {
                 'suggestion': obs.suggestion?.toJson(),
                 'telemetry': obs.telemetry.toJson(),
                 'sceneName': obs.detectedScene.name,
+                'deviceId': _deviceId,
               }))
           .timeout(_config.requestTimeout);
     } catch (_) {
