@@ -143,3 +143,78 @@ Widget `AudioRecommendationWidget` en la pantalla principal que monitorea condic
 - Subir el server-patch.js al VPS (pendiente de sesión anterior)
 - Probar slider SPL Offset en supermercado (pendiente de sesión anterior)
 - Evaluar si bajar los tiempos de detección para testing (ej: 4s en vez de 10s para voz baja)
+
+
+
+---
+
+## Sesión 2 (continuación) — 3 julio 2026
+
+### Mejoras adicionales implementadas
+
+**Opción C — Hermes modo automático (LED verde + acordeón):**
+- `autoApply=true`: widget aplica ajuste LOCAL inmediato (no espera al VPS)
+- LED verde pulsante confirma el ajuste (4 segundos, sin banner)
+- Hermes recibe la observación con prefijo `[Auto-Applied]` → solo registra, no reaplica
+- Ventana de Hermes: lista principal solo muestra observaciones manuales
+- Botón verde "N ajustes automáticos" abre bottom sheet acordeón con los eventos auto
+- Cada tile expandible muestra: evento + solución + botones 👍/👎
+- Solo 👍 envía feedback positivo al servidor (Hermes aprende)
+
+**5 Reglas clínicas (basadas en NAL-NL2, Phonak, Oticon, Starkey, U. of Illinois):**
+1. Speech Guard: nunca bajar volumen/ganancia si hay voz detectada
+2. Floor absoluto: volumen nunca baja de 0 dB
+3. Banda de habla protegida: bandas 4-7 (1-3 kHz) intocables con SPEECH
+4. Tope acumulado: máx -5 dB de reducción total por sesión
+5. Reducción selectiva: solo fuera de banda de habla cuando hay voz
+
+**Audio routing (3 features):**
+- Bloqueo sin auricular: NO se puede activar amplificación solo con speaker del celular
+- Selector de micrófono: ícono 🎙️ en StatusBar → bottom sheet con lista de mics (Builtin/BT/USB)
+- Accesible en modo usuario Y técnico (no requiere Servicio Técnico)
+- Persistido en Hive, se aplica al boot y en caliente
+- Nativo: Oboe usa `preferredInputDeviceId_` al abrir input stream
+- BT paralelo (mic+speaker): ya funcionaba vía Modo Conversación (SCO)
+
+### Estado de OpenAI / costos
+- Gasto julio 2026: $0.05 / $5.00 (1% del budget)
+- Saldo acreedor: $4.30
+- 102.179 fichas (tokens) consumidas en 24h
+- 7 respuestas generadas
+
+### Commits de esta continuación
+- `ee9e6e4` — fix: auto-apply recommendations immediately when Hermes is in auto mode
+- `3b5d97f` — feat: option C - instant local fix + Hermes registers only + green LED + accordion
+- `f33a1ec` — fix: volume floor at -5 dB + robust auto-event filter
+- `76bfed1` — feat: implement 5 clinical rules for audio adjustments
+- `881fe24` — feat: audio routing - headset gate + mic selector + native support
+- `c6ea2ba` — feat: mic selector in StatusBar (accessible in user + tech mode)
+
+### PLAN: Optimización de costos OpenAI (próxima sesión)
+
+**Problema:** Cada detección automática = 1 llamada a OpenAI = tokens. Con 20 detecciones disparándose cada 60s de cooldown, puede haber docenas de llamadas/hora.
+
+**Solución propuesta — Batch + Cache:**
+- Acumular observaciones localmente durante 12 horas (no enviar a OpenAI en tiempo real)
+- Cada 12h (o al conectar WiFi): enviar batch consolidado a OpenAI con todas las observaciones juntas
+- OpenAI responde UNA vez con análisis del patrón del período completo
+- Esa respuesta queda cacheada en disco como "regla aprendida"
+- Las detecciones futuras se resuelven con el cache local (sin llamar a OpenAI)
+- Solo se consulta de nuevo cuando aparece un patrón nuevo no cacheado
+
+**Resultado esperado:** 1-2 llamadas a OpenAI por día en vez de 50+
+
+**Implementación requiere:**
+- Timer de 12h en el servidor (o cron job) que procese la cola
+- Endpoint `/api/adaptive-learning/batch-analyze` que tome N observaciones juntas
+- Cache de respuestas indexado por (escena + condición + telemetría similar)
+- Lógica de "cache hit" en la app: antes de enviar al VPS, verificar si hay regla cacheada
+- Fallback a reglas keyword locales cuando no hay cache ni internet
+
+### Pendiente para próxima sesión
+- Implementar el sistema batch + cache de OpenAI
+- Probar las 20 detecciones en campo (Moto G32)
+- Verificar bloqueo sin auricular
+- Probar selector de micrófono con auricular BT
+- Subir server-patch.js al VPS
+- Duplicar cambios a app usuario (Audifon-usuario)
