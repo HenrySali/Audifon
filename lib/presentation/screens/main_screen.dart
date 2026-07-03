@@ -530,6 +530,239 @@ void _showEqDetailBottomSheetImpl(BuildContext context, AmplificationActive stat
   }
 
 // =============================================================================
+// MICROPHONE SELECTOR BOTTOM SHEET — Accesible en modo usuario y técnico
+// =============================================================================
+
+/// Bottom sheet para seleccionar el micrófono de entrada.
+/// Se abre desde el ícono 🎙️ en la StatusBar.
+void _showMicSelectorBottomSheet(BuildContext context) {
+  final bloc = context.read<AmplificationBloc>();
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: const Color(0xFF0f1b2d),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => _MicSelectorSheet(bloc: bloc),
+  );
+}
+
+/// Contenido del bottom sheet de selección de micrófono.
+class _MicSelectorSheet extends StatefulWidget {
+  final AmplificationBloc bloc;
+  const _MicSelectorSheet({required this.bloc});
+
+  @override
+  State<_MicSelectorSheet> createState() => _MicSelectorSheetState();
+}
+
+class _MicSelectorSheetState extends State<_MicSelectorSheet> {
+  List<Map<String, dynamic>> _mics = [];
+  int _selectedId = -1;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final mics = await widget.bloc.audioBridge.getAvailableMicrophones();
+      final box = await Hive.openBox<dynamic>('settings_box');
+      final savedId = box.get('preferred_mic_id');
+      if (mounted) {
+        setState(() {
+          _mics = mics;
+          _selectedId = savedId is int ? savedId : -1;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _select(int deviceId) async {
+    setState(() => _selectedId = deviceId);
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      await box.put('preferred_mic_id', deviceId);
+    } catch (_) {}
+    try {
+      await widget.bloc.audioBridge.setPreferredMicrophone(deviceId);
+    } catch (_) {}
+  }
+
+  IconData _iconFor(int type) {
+    switch (type) {
+      case 15: return Icons.phone_android; // BUILTIN_MIC
+      case 7: return Icons.bluetooth_audio; // BT_SCO
+      case 8: return Icons.bluetooth_audio; // BT_A2DP
+      case 22: return Icons.usb; // USB
+      case 25: return Icons.bluetooth_audio; // BLE
+      default: return Icons.mic;
+    }
+  }
+
+  String _typeLabel(int type) {
+    switch (type) {
+      case 15: return 'Integrado';
+      case 7: return 'Bluetooth SCO';
+      case 8: return 'Bluetooth A2DP';
+      case 22: return 'USB';
+      case 25: return 'Bluetooth BLE';
+      default: return 'Externo';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle.
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white30,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Header.
+            const Row(
+              children: [
+                Icon(Icons.mic, color: Colors.cyan, size: 22),
+                SizedBox(width: 10),
+                Text(
+                  'Micrófono de entrada',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Seleccioná cuál micrófono usa la app para capturar audio.',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Loading o lista.
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(color: Colors.cyan, strokeWidth: 2),
+              )
+            else ...[
+              // Opción default.
+              _MicTile(
+                icon: Icons.auto_mode,
+                name: 'Automático',
+                subtitle: 'El sistema elige el mejor',
+                isSelected: _selectedId == -1,
+                onTap: () => _select(-1),
+              ),
+              // Micrófonos disponibles.
+              ..._mics.map((mic) {
+                final id = mic['id'] as int? ?? -1;
+                final name = mic['name'] as String? ?? 'Desconocido';
+                final type = mic['type'] as int? ?? -1;
+                return _MicTile(
+                  icon: _iconFor(type),
+                  name: name,
+                  subtitle: _typeLabel(type),
+                  isSelected: _selectedId == id,
+                  onTap: () => _select(id),
+                );
+              }),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tile para cada opción de micrófono en el bottom sheet.
+class _MicTile extends StatelessWidget {
+  final IconData icon;
+  final String name;
+  final String subtitle;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _MicTile({
+    required this.icon,
+    required this.name,
+    required this.subtitle,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.cyan.withOpacity(0.12) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? Colors.cyan.withOpacity(0.5) : Colors.white12,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: isSelected ? Colors.cyan : Colors.white54, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      color: isSelected ? Colors.cyan : Colors.white,
+                      fontSize: 14,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: isSelected ? Colors.cyan.withOpacity(0.7) : Colors.white38,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              const Icon(Icons.check_circle, color: Colors.cyan, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
 // STATUS BAR — Indicador de auriculares + perfil activo (siempre visible)
 // =============================================================================
 
@@ -756,6 +989,17 @@ class _StatusBar extends StatelessWidget {
                           ),
                         );
                       },
+                    ),
+                  ),
+                  // Botón de selector de micrófono — accesible en modo
+                  // usuario y técnico. Abre bottom sheet con lista de mics.
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.mic, color: Colors.white70, size: 21),
+                      tooltip: 'Micrófono',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () => _showMicSelectorBottomSheet(context),
                     ),
                   ),
                   // Botón de Servicio Técnico (calibración, info del sistema)
