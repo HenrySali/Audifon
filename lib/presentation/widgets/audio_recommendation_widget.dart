@@ -249,6 +249,28 @@ class _AudioRecommendationWidgetState
       // Si hay una nueva recomendación, enviarla a Hermes.
       if (recommendation != null) {
         _sendToHermes(recommendation, state, bloc);
+
+        // Si Hermes está en modo automático, ejecutar la acción rápida
+        // local INMEDIATAMENTE sin esperar la respuesta del VPS.
+        // El usuario no debería tener que tocar nada.
+        if (_hermes.autoApply) {
+          final rec = _buildRecommendation(recommendation, state, bloc);
+          if (rec.action != null) {
+            rec.action!();
+            // No mostrar el banner — ya se aplicó automáticamente.
+            // Solo mostrar un snackbar breve confirmando.
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('⚡ ${rec.title} — ajuste aplicado automáticamente'),
+                  duration: const Duration(seconds: 3),
+                  backgroundColor: rec.color.withOpacity(0.9),
+                ),
+              );
+            }
+            return;
+          }
+        }
       }
       setState(() {
         _activeRecommendation = recommendation != null
