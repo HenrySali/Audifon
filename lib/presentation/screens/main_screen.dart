@@ -30,6 +30,7 @@ import '../../data/bridges/audio_bridge_impl.dart';
 import '../../data/repositories/settings_repository_impl.dart';
 import '../../domain/audiogram_driven_presets/operating_mode.dart';
 import '../widgets/active_eq_visualization.dart';
+import '../widgets/audio_recommendation_widget.dart';
 import 'ai_chat_screen.dart';
 import 'audiogram_screen.dart';
 import 'diagnostic/diagnostic_flow_screen.dart';
@@ -985,6 +986,10 @@ class _ActiveView extends StatelessWidget {
           // AmplificationBloc con buildWhen filtrando por bundle, lossType
           // y prescriptionMode (hallazgo A-9).
           const ClinicalInfoChips(),
+          // Recomendaciones contextuales de audio: eco, voz baja,
+          // saturación EQ, sugerencias de ambiente. Aparecen como
+          // banners animados descartables con cooldown de 30s.
+          const AudioRecommendationWidget(),
           // Banner de presets personalizados obsoletos (audiograma cambió
           // tras crear el preset). Permite regenerarlos in-situ. Si no hay
           // presets stale, se renderiza como SizedBox.shrink (hallazgo A-9).
