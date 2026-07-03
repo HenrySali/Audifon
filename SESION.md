@@ -41,3 +41,47 @@
 ### Celular de prueba
 - Motorola Moto G32, Android 13
 - splOffset sugerido: ~140 (verificar en campo)
+
+
+---
+
+## Sesión 1 (continuación) — Hermes Colectivo
+
+### Lo que se implementó
+
+**Servidor Hermes v2 (archivo listo para subir al VPS):**
+- Persistencia en disco de observaciones por dispositivo (`data/<deviceId>/observations.json`)
+- Pool colectivo con todas las observaciones de todos los usuarios (`data/_collective/observations.json`)
+- Endpoint GET `/api/adaptive-learning/history/:deviceId` — historial por dispositivo
+- Endpoint GET `/api/adaptive-learning/collective-insights` — patrones cruzados entre usuarios
+- Endpoint POST `/api/adaptive-learning/sync` — recuperación tras reinstalación
+- El archivo está en `hermes-server-upgrade/server-patch.js` del repo Audifon
+
+**App técnico:**
+- Cada request a Hermes ahora envía `deviceId` (hex 16 chars, generado y persistido en Hive)
+- Al abrir la app, sincroniza historial desde el VPS (recupera observaciones previas)
+- Botón de historial (ícono reloj) que abre un modal con todos los ajustes aplicados
+- Toggle "Hermes aplica automáticamente" persiste entre sesiones
+
+### Para desplegar en el VPS
+
+```bash
+# Desde tu PC (copiar el server nuevo):
+scp hermes-server-upgrade/server-patch.js root@149.50.137.2:"/var/www/OirPro K/adaptive-learning/server.js"
+
+# En el VPS via SSH:
+ssh root@149.50.137.2
+mkdir -p "/var/www/OirPro K/adaptive-learning/data/_collective"
+pm2 restart hermes-learning
+curl http://localhost:8080/health
+# Debe decir version: "2.0.0"
+```
+
+### Pendiente para próxima sesión
+- Subir el server-patch.js al VPS y reiniciar Hermes
+- Verificar que /health dice version 2.0.0
+- Probar analyze con deviceId y verificar que persiste en data/
+- Probar sync desde la app tras limpiar datos locales
+- Duplicar cambios a la app de usuario (Audifon-usuario)
+- Probar el slider SPL Offset en el supermercado (Moto G32, valor ~140)
+- Evaluar script de sincronización automática entre repos
