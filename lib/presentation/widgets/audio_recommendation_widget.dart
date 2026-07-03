@@ -1023,12 +1023,7 @@ class _AudioRecommendationWidgetState
               'La señal está saturando (distorsión digital). '
               'Reducí el volumen o las ganancias del EQ.',
           actionLabel: 'Reducir volumen',
-          action: () {
-            // Piso: nunca bajar más allá de -5 dB (preservar conversación).
-            final newVol = (state.volumeDb - 2.0).clamp(-5.0, 10.0);
-            bloc.add(ChangeVolume(volumeDb: newVol));
-            _dismiss(AudioRecommendationType.clipping);
-          },
+          action: () => _reduceVolumeSafe(bloc, state, AudioRecommendationType.clipping),
           icon: Icons.broken_image,
           color: Colors.red.shade600,
         );
@@ -1055,6 +1050,7 @@ class _AudioRecommendationWidgetState
               'Bajá la intensidad del DNN o reducí el NR.',
           actionLabel: 'Bajar NR',
           action: () {
+            // Bajar NR es seguro (preserva más voz, no la mata).
             final newNr = (state.activeNrLevel - 1).clamp(0, 3);
             bloc.add(UpdateNrLevel(level: newNr));
             _dismiss(AudioRecommendationType.dnnKillingVoice);
@@ -1159,6 +1155,7 @@ class _AudioRecommendationWidgetState
               'Subir el NR puede mejorar la inteligibilidad.',
           actionLabel: 'Subir NR',
           action: () {
+            // Subir NR es seguro — preserva habla y reduce ruido.
             final newNr = (state.activeNrLevel + 1).clamp(0, 3);
             bloc.add(UpdateNrLevel(level: newNr));
             _dismiss(AudioRecommendationType.nrInsufficient);
@@ -1191,48 +1188,136 @@ class _AudioRecommendationWidgetState
               'El nivel promedio de la sesión supera 80 dB. '
               'Riesgo de fatiga. Reducí volumen o tomá un descanso.',
           actionLabel: 'Reducir volumen',
-          action: () {
-            // Piso: nunca bajar más allá de -5 dB (preservar conversación).
-            final newVol = (state.volumeDb - 2.0).clamp(-5.0, 10.0);
-            bloc.add(ChangeVolume(volumeDb: newVol));
-            _dismiss(AudioRecommendationType.noiseExposure);
-          },
+          action: () => _reduceVolumeSafe(bloc, state, AudioRecommendationType.noiseExposure),
           icon: Icons.health_and_safety,
           color: Colors.red.shade300,
         );
     }
   }
 
-  // ─── Acciones rápidas ──────────────────────────────────────────────
+  // ─── Acciones rápidas (con reglas clínicas de la industria) ─────────
+  //
+  // Reglas basadas en: NAL-NL2, Phonak AutoSense OS, Oticon Intent,
+  // Starkey Omega AI, U. of Illinois SNR-Aware DRC.
+  //
+  // 1. SPEECH GUARD: nunca bajar volumen/ganancia si hay voz detectada
+  // 2. FLOOR ABSOLUTO: volumen nunca baja de 0 dB (audibilidad mínima)
+  // 3. BANDA DE HABLA PROTEGIDA: bandas 4-7 (1-3 kHz) intocables con SPEECH
+  // 4. TOPE ACUMULADO: máx -5 dB de reducción total por sesión
+  // 5. SELECTIVIDAD: reducir solo fuera de banda de habla cuando hay voz
+  // ════════════════════════════════════════════════════════════════════════
+
+  /// Reducción acumulada de volumen en esta sesión (para tope de -5 dB).
+  double _cumulativeVolumeReduction = 0.0;
+
+  /// Reducción acumulada de ganancias EQ en esta sesión.
+  double _cumulativeGainReduction = 0.0;
+
+  /// Tope máximo de reducción acumulada por sesión (dB).
+  static const double _kMaxCumulativeReductionDb = 5.0;
+
+  /// Bandas de habla protegidas (1-3 kHz): índices 4, 5, 6, 7.
+  /// Nunca se reducen automáticamente cuando el clasificador detecta voz.
+  static const List<int> _kSpeechBands = [4, 5, 6, 7];
+
+  /// Verifica si hay voz activa (Speech Guard).
+  /// Si hay voz, bloquea reducciones de volumen y de bandas de habla.
+  bool _isSpeechActive() {
+    return _lastEnvClass == 1 || _lastEnvClass == 2;
+  }
+
+  /// Verifica si se puede reducir más (tope acumulado no alcanzado).
+  bool _canReduceMore(double proposedReduction) {
+    return (_cumulativeVolumeReduction + _cumulativeGainReduction).abs() +
+            proposedReduction.abs() <=
+        _kMaxCumulativeReductionDb;
+  }
 
   void _reduceHighFreqGains(AmplificationBloc bloc, AmplificationActive state) {
+    // REGLA 1: Speech Guard — si hay voz, no reducir (el eco puede ser
+    // la voz del interlocutor amplificada, no feedback real).
+    if (_isSpeechActive()) {
+      // Solo sugerir, no aplicar.
+      _dismiss(AudioRecommendationType.echo);
+      return;
+    }
+
+    // REGLA 4: Tope acumulado.
+    if (!_canReduceMore(3.0)) {
+      _dismiss(AudioRecommendationType.echo);
+      return;
+    }
+
     final gains = List<double>.from(
       state.activeEqGains ?? state.bundle?.gainsDb ?? List.filled(12, 0.0),
     );
-    // Reducir agudos (bandas 8-11) en -5 dB.
+    // Reducir agudos (bandas 8-11) en -3 dB — SOLO fuera de banda de habla.
     for (int i = 8; i < 12 && i < gains.length; i++) {
-      gains[i] = (gains[i] - 5.0).clamp(0.0, 50.0);
+      gains[i] = (gains[i] - 3.0).clamp(0.0, 50.0);
     }
+    _cumulativeGainReduction += 3.0;
     bloc.add(UpdateEqGains(gains: gains, presetName: state.activeEqPreset));
     _dismiss(AudioRecommendationType.echo);
   }
 
   void _increaseVolume(AmplificationBloc bloc, AmplificationActive state) {
+    // Sin restricción para subir (solo clampar al techo hardware).
     final newVol = (state.volumeDb + 3.0).clamp(-20.0, 10.0);
     bloc.add(ChangeVolume(volumeDb: newVol));
     _dismiss(AudioRecommendationType.lowVoice);
   }
 
   void _reduceAllGains(AmplificationBloc bloc, AmplificationActive state) {
+    // REGLA 1: Speech Guard — si hay voz, proteger bandas de habla.
+    // REGLA 4: Tope acumulado.
+    if (!_canReduceMore(2.0)) {
+      _dismiss(AudioRecommendationType.eqSaturation);
+      return;
+    }
+
     final gains = List<double>.from(
       state.activeEqGains ?? state.bundle?.gainsDb ?? List.filled(12, 0.0),
     );
-    // Reducir todas las bandas en -2 dB (conservador para no matar conversación).
+
     for (int i = 0; i < gains.length; i++) {
+      // REGLA 3: Banda de habla protegida — si hay voz, no tocar 1-3 kHz.
+      if (_isSpeechActive() && _kSpeechBands.contains(i)) {
+        continue; // Preservar banda de habla.
+      }
       gains[i] = (gains[i] - 2.0).clamp(0.0, 50.0);
     }
+    _cumulativeGainReduction += 2.0;
     bloc.add(UpdateEqGains(gains: gains, presetName: state.activeEqPreset));
     _dismiss(AudioRecommendationType.eqSaturation);
+  }
+
+  /// Reduce volumen respetando las 5 reglas clínicas.
+  void _reduceVolumeSafe(AmplificationBloc bloc, AmplificationActive state,
+      AudioRecommendationType type) {
+    // REGLA 1: Speech Guard — NUNCA bajar volumen si hay conversación.
+    if (_isSpeechActive()) {
+      _dismiss(type);
+      return;
+    }
+
+    // REGLA 4: Tope acumulado.
+    if (!_canReduceMore(2.0)) {
+      _dismiss(type);
+      return;
+    }
+
+    // REGLA 2: Floor absoluto en 0 dB (preservar audibilidad mínima).
+    final newVol = (state.volumeDb - 2.0).clamp(0.0, 10.0);
+
+    // Si ya estamos en el floor, no hacer nada.
+    if (newVol >= state.volumeDb) {
+      _dismiss(type);
+      return;
+    }
+
+    _cumulativeVolumeReduction += (state.volumeDb - newVol);
+    bloc.add(ChangeVolume(volumeDb: newVol));
+    _dismiss(type);
   }
 
   void _changeProfile(AmplificationBloc bloc, String profile) {
