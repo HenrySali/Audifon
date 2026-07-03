@@ -196,6 +196,10 @@ public:
     int32_t getInputDeviceId() const;
     int32_t getOutputDeviceId() const;
 
+    /// Establece el micrófono preferido por device ID.
+    /// -1 = restaurar al default del sistema (kUnspecified).
+    void setPreferredInputDevice(int32_t deviceId);
+
     /// Retorna el audio session ID del input stream (para NoiseSuppressor Android).
     /// @return Session ID (>0 si válido), o -1 si el stream no está activo.
     int32_t getInputSessionId() const;
@@ -307,6 +311,9 @@ private:
     // ─── Oboe Streams ───────────────────────────────────────────────────
     std::shared_ptr<oboe::AudioStream> inputStream_;
     std::shared_ptr<oboe::AudioStream> outputStream_;
+
+    /// Device ID preferido para input (-1 = kUnspecified/default).
+    int32_t preferredInputDeviceId_ = -1;
 
     // ─── Estado ─────────────────────────────────────────────────────────
     std::atomic<bool> running_{false};

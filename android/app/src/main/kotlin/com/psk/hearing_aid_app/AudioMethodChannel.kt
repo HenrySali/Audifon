@@ -210,6 +210,15 @@ class AudioMethodChannel(
                 "setMpoThresholdDbSpl" -> handleSetMpoThresholdDbSpl(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
                 "getDeviceInfo" -> handleGetDeviceInfo(result)
+                "hasExternalOutput" -> {
+                    val monitor = AudioRouteMonitor(context)
+                    result.success(monitor.hasHeadsetOutput())
+                }
+                "setPreferredInputDevice" -> {
+                    val deviceId = call.argument<Int>("deviceId") ?: -1
+                    val success = nativeBridge.setPreferredInputDevice(deviceId)
+                    result.success(success)
+                }
                 // Spectrum Analyzer
                 "startSpectrumAnalysis" -> { nativeBridge.nativeStartSpectrumAnalysis(); result.success(null) }
                 "stopSpectrumAnalysis" -> { nativeBridge.nativeStopSpectrumAnalysis(); result.success(null) }

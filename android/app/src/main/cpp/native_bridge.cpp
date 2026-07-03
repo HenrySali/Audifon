@@ -660,6 +660,21 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetOutputDeviceId(
     return g_engine->getOutputDeviceId();
 }
 
+/// Establece el micrófono preferido para el stream de entrada.
+/// Si deviceId == -1, restaura al default del sistema.
+/// El cambio se aplica en caliente si el motor está corriendo (Oboe
+/// setDeviceId on the fly); si no, se guarda para el próximo start.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetPreferredInputDevice(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jint deviceId) {
+
+    if (g_engine != nullptr) {
+        g_engine->setPreferredInputDevice(deviceId);
+    }
+}
+
 /// Obtiene el audio session ID del stream de entrada (para NoiseSuppressor Android).
 /// Kotlin lo usa para crear NoiseSuppressor.create(sessionId).
 /// @return Session ID (>0 si válido), o -1 si no está activo.

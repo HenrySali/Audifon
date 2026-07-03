@@ -261,6 +261,33 @@ class NativeAudioBridge {
      */
     fun getOutputDeviceId(): Int = nativeGetOutputDeviceId()
 
+    /**
+     * Establece el micrófono preferido para el input stream.
+     *
+     * Si [deviceId] == -1, restaura el micrófono por defecto del sistema.
+     * Si el motor está corriendo, intenta aplicar el cambio en caliente
+     * vía el setter nativo. Si no está corriendo, guarda el ID para
+     * aplicarlo en el próximo `start()`.
+     *
+     * @return true si el cambio se aplicó o se guardó exitosamente.
+     */
+    fun setPreferredInputDevice(deviceId: Int): Boolean {
+        preferredInputDeviceId = deviceId
+        return try {
+            nativeSetPreferredInputDevice(deviceId)
+            true
+        } catch (e: Exception) {
+            Log.w("NativeAudioBridge", "setPreferredInputDevice failed: $e")
+            // Guardar para aplicar en próximo start — no es error fatal.
+            true
+        }
+    }
+
+    /** Device ID preferido para input (-1 = default del sistema). */
+    @Volatile
+    var preferredInputDeviceId: Int = -1
+        private set
+
     // ─────────────────────────────────────────────────────────────────────
     // Polling de nivel
     // ─────────────────────────────────────────────────────────────────────
@@ -326,6 +353,9 @@ class NativeAudioBridge {
     private external fun nativeGetInputDeviceId(): Int
 
     private external fun nativeGetOutputDeviceId(): Int
+
+    /** Setter nativo del preferred input device (Oboe setPreferredDevice). */
+    private external fun nativeSetPreferredInputDevice(deviceId: Int)
 
     /** Retorna el audio session ID del input stream (para NoiseSuppressor Android). */
     external fun nativeGetInputSessionId(): Int

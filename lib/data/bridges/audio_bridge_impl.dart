@@ -709,7 +709,67 @@ class AudioBridgeImpl implements AudioBridge {
       'bluetoothConnected': false,
       'bluetoothName': '',
       'bluetoothIsA2dp': false,
+      'hasExternalOutput': false,
+      'availableInputDevices': <Map<String, dynamic>>[],
+      'availableOutputDevices': <Map<String, dynamic>>[],
     };
+  }
+
+  @override
+  Future<bool> hasExternalOutput() async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>('hasExternalOutput');
+      return result ?? false;
+    } catch (_) {
+      // Fallback: consultar getDeviceInfo.
+      try {
+        final info = await getDeviceInfo();
+        return info['bluetoothConnected'] == true;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> getAvailableMicrophones() async {
+    try {
+      final info = await getDeviceInfo();
+      final devices = info['availableInputDevices'];
+      if (devices is List) {
+        return devices.map((d) {
+          final map = Map<String, dynamic>.from(d as Map);
+          map['typeName'] = _micTypeName(map['type'] as int? ?? -1);
+          return map;
+        }).toList();
+      }
+    } catch (_) {}
+    return <Map<String, dynamic>>[];
+  }
+
+  @override
+  Future<bool> setPreferredMicrophone(int deviceId) async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>(
+        'setPreferredInputDevice',
+        {'deviceId': deviceId},
+      );
+      return result ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Nombre legible para cada tipo de AudioDeviceInfo.
+  static String _micTypeName(int type) {
+    switch (type) {
+      case 15: return 'Builtin'; // TYPE_BUILTIN_MIC
+      case 7: return 'Bluetooth SCO'; // TYPE_BLUETOOTH_SCO
+      case 8: return 'Bluetooth A2DP'; // TYPE_BLUETOOTH_A2DP
+      case 22: return 'USB'; // TYPE_USB_HEADSET
+      case 25: return 'BLE'; // TYPE_BLE_HEADSET
+      default: return 'Externo';
+    }
   }
 
   /// Convierte un valor dinámico del EventChannel a [AudioEngineState].

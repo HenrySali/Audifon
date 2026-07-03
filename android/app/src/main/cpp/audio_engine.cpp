@@ -57,7 +57,10 @@ oboe::Result AudioEngine::openInputStream() {
     builder.setDirection(oboe::Direction::Input);
     // Only set deviceId if explicitly provided (non-zero)
     // When 0, let Oboe use the system default input device (built-in mic)
-    if (config_.builtInMicDeviceId != 0) {
+    if (preferredInputDeviceId_ > 0) {
+        // User selected a specific microphone via the UI.
+        builder.setDeviceId(preferredInputDeviceId_);
+    } else if (config_.builtInMicDeviceId != 0) {
         builder.setDeviceId(config_.builtInMicDeviceId);
     }
     builder.setSampleRate(config_.sampleRate);
@@ -403,6 +406,16 @@ int32_t AudioEngine::getOutputDeviceId() const {
         return outputStream_->getDeviceId();
     }
     return -1;
+}
+
+void AudioEngine::setPreferredInputDevice(int32_t deviceId) {
+    preferredInputDeviceId_ = deviceId;
+    // Si el stream está corriendo, aplicar en caliente.
+    if (inputStream_) {
+        // Oboe no soporta cambiar deviceId en caliente sin re-abrir.
+        // Guardamos el valor para el próximo restart. Si se necesita
+        // efecto inmediato, el caller debe hacer stop/start.
+    }
 }
 
 int32_t AudioEngine::getInputSessionId() const {

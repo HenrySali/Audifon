@@ -510,6 +510,30 @@ class AmplificationBloc
     emit(const AmplificationStarting());
 
     // ─────────────────────────────────────────────────────────────
+    // Fase 0 — Verificación de auricular externo (seguridad).
+    // Las ganancias EQ de 20-50 dB diseñadas para auricular saturan
+    // y distorsionan en un speaker a 5 cm del oído. Bloquear inicio.
+    // ─────────────────────────────────────────────────────────────
+    try {
+      final hasExternal = await _audioBridge.hasExternalOutput();
+      if (!hasExternal) {
+        emit(const AmplificationError(
+          message: 'Conectá un auricular o parlante externo para activar. '
+              'El parlante del celular no es seguro para amplificación.',
+        ));
+        return;
+      }
+    } catch (e) {
+      // Si falla el check (API no disponible), permitir continuar
+      // con advertencia. No bloquear por un fallo de consulta.
+      developer.log(
+        'Boot Phase 0: hasExternalOutput falló: $e — continuando.',
+        name: 'AmplificationBloc',
+        level: 800,
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Fase 1 — Carga de estado persistido (timeout 2000 ms).
     // Sin tocar el motor nativo (Req 3.1, 3.2).
     // ─────────────────────────────────────────────────────────────
@@ -796,6 +820,24 @@ class AmplificationBloc
     } catch (e, st) {
       developer.log(
         'Boot Phase 4: initDnnDenoiser falló: $e — NR Wiener activo.',
+        name: 'AmplificationBloc',
+        level: 800,
+        error: e,
+        stackTrace: st,
+      );
+    }
+
+    // 1c) Aplicar micrófono preferido si hay uno persistido.
+    // Tolerante: si falla, el motor usa el mic default (builtin).
+    try {
+      final box = await _openSettingsBox();
+      final preferredMicId = box?.get('preferred_mic_id');
+      if (preferredMicId is int && preferredMicId != -1) {
+        await _audioBridge.setPreferredMicrophone(preferredMicId);
+      }
+    } catch (e, st) {
+      developer.log(
+        'Boot Phase 4: setPreferredMicrophone falló: $e — mic default.',
         name: 'AmplificationBloc',
         level: 800,
         error: e,

@@ -194,7 +194,38 @@ abstract class AudioBridge {
   /// - bluetoothConnected: si hay auricular BT conectado
   /// - bluetoothName: nombre del dispositivo BT
   /// - bluetoothIsA2dp: si la conexión es A2DP (alta calidad)
+  /// - availableInputDevices: lista de micrófonos disponibles
+  /// - availableOutputDevices: lista de salidas disponibles
+  /// - hasExternalOutput: true si hay auricular/parlante externo conectado
   Future<Map<String, dynamic>> getDeviceInfo();
+
+  /// Verifica si hay un auricular o parlante externo conectado.
+  ///
+  /// Retorna `true` si hay BT A2DP, BT SCO, cableado, o USB.
+  /// Retorna `false` si la única salida es el parlante builtin.
+  ///
+  /// Usado para bloquear `StartAmplification` cuando no hay auricular:
+  /// las ganancias EQ de 20-50 dB diseñadas para auricular saturan y
+  /// distorsionan en un parlante a 5 cm del oído.
+  Future<bool> hasExternalOutput();
+
+  /// Retorna la lista de micrófonos disponibles en el dispositivo.
+  ///
+  /// Cada entrada contiene:
+  /// - id: int (device ID del sistema)
+  /// - name: String (nombre comercial del dispositivo)
+  /// - type: int (AudioDeviceInfo.TYPE_*)
+  /// - typeName: String (nombre legible del tipo: "Builtin", "Bluetooth", "USB")
+  Future<List<Map<String, dynamic>>> getAvailableMicrophones();
+
+  /// Selecciona un micrófono específico por su device ID.
+  ///
+  /// [deviceId] es el ID obtenido de [getAvailableMicrophones].
+  /// Si [deviceId] es -1, se restaura el micrófono por defecto del sistema.
+  ///
+  /// El motor debe estar corriendo para que el cambio surta efecto.
+  /// Si no está corriendo, el device ID se aplica en el próximo `startAudio`.
+  Future<bool> setPreferredMicrophone(int deviceId);
 
   // ─── Diagnostic Recording (DSP Verification) ────────────────────────────
 

@@ -13,6 +13,7 @@ import '../../data/services/remote_config_service.dart';
 import '../../feedback_checklist/screens/feedback_export_screen.dart';
 import '../../security/security_settings_repository.dart';
 import '../bloc/amplification_bloc.dart';
+import '../widgets/microphone_selector_widget.dart';
 
 /// Pantalla de Servicio Técnico — herramientas para técnicos/audiólogos.
 ///
@@ -103,6 +104,10 @@ class TechnicalServiceScreen extends StatelessWidget {
             buttonText: 'Ajustar Offset',
             onTap: () => _showSplOffsetDialog(context),
           ),
+          const SizedBox(height: 12),
+
+          // Selector de micrófono de entrada (Builtin / BT / USB)
+          const MicrophoneSelectorWidget(),
           const SizedBox(height: 12),
 
           // Tarjeta: Calibración de Ganancia Máxima (Gain Ceiling)
