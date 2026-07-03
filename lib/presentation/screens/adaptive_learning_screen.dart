@@ -157,36 +157,191 @@ class _AdaptiveLearningScreenState extends State<AdaptiveLearningScreen> {
 
           // ─── Lista de observaciones ────────────────────────────────
           Expanded(
-            child: _service.observations.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.psychology_outlined,
-                              size: 64, color: colors.outline),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Describe lo que experimentas en distintos entornos.\n'
-                            'Hermes aprenderá y sugerirá ajustes automáticos.',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: colors.outline,
-                            ),
+            child: _buildObservationsList(theme, colors),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Construye la lista principal (solo observaciones manuales) con
+  /// un botón para ver los eventos automáticos en un bottom sheet.
+  Widget _buildObservationsList(ThemeData theme, ColorScheme colors) {
+    // Separar manuales de auto-applied.
+    final manualObs = _service.observations
+        .where((o) => !o.userText.contains('[Auto-Applied]') && !o.userText.startsWith('[Auto]'))
+        .toList();
+    final autoObs = _service.observations
+        .where((o) => o.userText.contains('[Auto-Applied]') || o.userText.startsWith('[Auto]'))
+        .toList();
+
+    if (manualObs.isEmpty && autoObs.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.psychology_outlined, size: 64, color: colors.outline),
+              const SizedBox(height: 16),
+              Text(
+                'Describe lo que experimentas en distintos entornos.\n'
+                'Hermes aprenderá y sugerirá ajustes automáticos.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.outline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        // Botón de eventos automáticos (si hay).
+        if (autoObs.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: InkWell(
+              onTap: () => _showAutoEventsModal(context, autoObs),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.green.shade400,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.green.withOpacity(0.4),
+                            blurRadius: 4,
                           ),
                         ],
                       ),
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: _service.observations.length,
-                    itemBuilder: (ctx, i) =>
-                        _ObservationCard(observation: _service.observations[i]),
-                  ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${autoObs.length} ajustes automáticos',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.green.shade300,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Icon(Icons.expand_more, color: Colors.green.shade300, size: 20),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ],
+        // Lista principal (solo manuales).
+        Expanded(
+          child: manualObs.isEmpty
+              ? Center(
+                  child: Text(
+                    'Sin observaciones manuales.\nEscribí arriba para agregar.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.outline,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: manualObs.length,
+                  itemBuilder: (ctx, i) =>
+                      _ObservationCard(observation: manualObs[i]),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// Modal (bottom sheet) con los eventos automáticos en acordeón.
+  void _showAutoEventsModal(BuildContext context, List<LearningObservation> autoObs) {
+    final theme = Theme.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0f1b2d),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (ctx, scrollController) => Column(
+          children: [
+            // Handle.
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 8),
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white30,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            // Title.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.green.shade400,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Ajustes automáticos (${autoObs.length})',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white12),
+            // List of auto events as expandable tiles.
+            Expanded(
+              child: ListView.builder(
+                controller: scrollController,
+                itemCount: autoObs.length,
+                itemBuilder: (ctx, i) {
+                  final obs = autoObs[i];
+                  return _AutoEventTile(
+                    observation: obs,
+                    onFeedback: (positive) {
+                      _service.addFeedback(obs.id, positive: positive);
+                      Navigator.pop(ctx);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -694,6 +849,148 @@ class _FeedbackButtons extends StatelessWidget {
           onPressed: () =>
               service.addFeedback(observationId, positive: false),
         ),
+      ],
+    );
+  }
+}
+
+
+/// Tile expandible para eventos automáticos en el modal.
+///
+/// Muestra: evento detectado + solución aplicada + botones 👍/👎.
+/// Solo envía feedback al servidor cuando el usuario confirma con 👍.
+class _AutoEventTile extends StatelessWidget {
+  final LearningObservation observation;
+  final void Function(bool positive) onFeedback;
+
+  const _AutoEventTile({
+    required this.observation,
+    required this.onFeedback,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Extraer el tipo de evento del texto (entre [Auto-Applied] y el primer punto).
+    final text = observation.userText
+        .replaceFirst('[Auto-Applied] ', '')
+        .replaceFirst('[Auto] ', '');
+    final eventTitle = text.split('.').first;
+    final detail = text.contains('.') ? text.substring(text.indexOf('.') + 1).trim() : '';
+    final suggestion = observation.suggestion;
+    final time = '${observation.timestamp.hour.toString().padLeft(2, '0')}:'
+        '${observation.timestamp.minute.toString().padLeft(2, '0')}';
+
+    return ExpansionTile(
+      tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      leading: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: observation.feedback == true
+              ? Colors.green
+              : observation.feedback == false
+                  ? Colors.orange
+                  : Colors.green.shade300,
+        ),
+      ),
+      title: Text(
+        eventTitle,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        time,
+        style: theme.textTheme.labelSmall?.copyWith(color: Colors.white38),
+      ),
+      trailing: observation.feedback != null
+          ? Icon(
+              observation.feedback! ? Icons.thumb_up : Icons.thumb_down,
+              size: 16,
+              color: observation.feedback! ? Colors.green : Colors.orange,
+            )
+          : const Icon(Icons.expand_more, color: Colors.white38, size: 18),
+      children: [
+        // Detalle del evento.
+        if (detail.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              detail,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.white60,
+                height: 1.3,
+              ),
+            ),
+          ),
+        // Lo que se aplicó como solución.
+        if (suggestion != null) ...[
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.green.withOpacity(0.2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Solución aplicada:',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: Colors.green.shade300,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  suggestion.reasoning.isNotEmpty
+                      ? suggestion.reasoning
+                      : 'NR: ${observation.telemetry.nrLevel} → ${suggestion.suggestedNrLevel}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        // Feedback buttons (solo si no hay feedback aún).
+        if (observation.feedback == null) ...[
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Text(
+                '¿Funcionó?',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: Colors.white38,
+                ),
+              ),
+              const SizedBox(width: 12),
+              IconButton(
+                icon: const Icon(Icons.thumb_down_outlined),
+                iconSize: 18,
+                color: Colors.orange,
+                onPressed: () => onFeedback(false),
+                tooltip: 'No funcionó',
+              ),
+              IconButton(
+                icon: const Icon(Icons.thumb_up_outlined),
+                iconSize: 18,
+                color: Colors.green,
+                onPressed: () => onFeedback(true),
+                tooltip: 'Funcionó correctamente',
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }

@@ -395,8 +395,9 @@ class AdaptiveLearningService {
           await _persist(_observations[newIdx]);
           _changeController.add(null);
 
-          // Auto-apply si está activado.
-          if (autoApply) {
+          // Auto-apply si está activado Y el texto NO tiene [Auto-Applied]
+          // (que indica que ya se aplicó localmente).
+          if (autoApply && !obs.userText.contains('[Auto-Applied]')) {
             await applySuggestion(obs.id, bloc);
           }
         }

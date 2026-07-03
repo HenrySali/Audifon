@@ -185,6 +185,13 @@ class _AudioRecommendationWidgetState
   /// Cooldown de Hermes: no reenviar la misma detección por 60 segundos.
   static const _kHermesCooldown = Duration(seconds: 60);
 
+  /// Flag: LED verde visible (auto-ajuste aplicado). Se apaga tras 4 segundos.
+  bool _showGreenLed = false;
+  Timer? _ledTimer;
+
+  /// Texto del último ajuste aplicado automáticamente (para el LED tooltip).
+  String _lastAutoAppliedLabel = '';
+
   @override
   void initState() {
     super.initState();
@@ -197,6 +204,7 @@ class _AudioRecommendationWidgetState
   @override
   void dispose() {
     _evaluationTimer?.cancel();
+    _ledTimer?.cancel();
     super.dispose();
   }
 
@@ -246,31 +254,28 @@ class _AudioRecommendationWidgetState
     final recommendation = _detectHighestPriority(state, bloc);
 
     if (recommendation != _activeRecommendation?.type) {
-      // Si hay una nueva recomendación, enviarla a Hermes.
       if (recommendation != null) {
-        _sendToHermes(recommendation, state, bloc);
-
-        // Si Hermes está en modo automático, ejecutar la acción rápida
-        // local INMEDIATAMENTE sin esperar la respuesta del VPS.
-        // El usuario no debería tener que tocar nada.
+        // Si Hermes está en modo automático: aplicar local inmediato,
+        // NO mostrar banner, encender LED verde, y enviar a Hermes
+        // con prefijo [Auto-Applied] para que registre sin reaplicar.
         if (_hermes.autoApply) {
           final rec = _buildRecommendation(recommendation, state, bloc);
           if (rec.action != null) {
             rec.action!();
-            // No mostrar el banner — ya se aplicó automáticamente.
-            // Solo mostrar un snackbar breve confirmando.
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('⚡ ${rec.title} — ajuste aplicado automáticamente'),
-                  duration: const Duration(seconds: 3),
-                  backgroundColor: rec.color.withOpacity(0.9),
-                ),
-              );
-            }
-            return;
           }
+          // Enviar a Hermes con marca de "ya aplicado localmente".
+          _sendToHermesAutoApplied(recommendation, state, bloc);
+          // Encender LED verde.
+          _activateGreenLed(rec.title);
+          // Limpiar banner activo (no mostrar nada interactivo).
+          if (_activeRecommendation != null) {
+            setState(() => _activeRecommendation = null);
+          }
+          return;
         }
+
+        // Modo manual: enviar a Hermes normalmente y mostrar banner.
+        _sendToHermes(recommendation, state, bloc);
       }
       setState(() {
         _activeRecommendation = recommendation != null
@@ -278,6 +283,16 @@ class _AudioRecommendationWidgetState
             : null;
       });
     }
+  }
+
+  /// Enciende el LED verde por 4 segundos.
+  void _activateGreenLed(String label) {
+    _lastAutoAppliedLabel = label;
+    _ledTimer?.cancel();
+    setState(() => _showGreenLed = true);
+    _ledTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _showGreenLed = false);
+    });
   }
 
   // ─── Integración Hermes ─────────────────────────────────────────────
@@ -310,6 +325,27 @@ class _AudioRecommendationWidgetState
     // El servicio ya maneja autoApply internamente:
     // - autoApply=true → aplica la sugerencia de Hermes automáticamente.
     // - autoApply=false → la deja como sugerencia visible en el historial.
+    _hermes.addObservation(userText: userText, bloc: bloc);
+  }
+
+  /// Envía a Hermes con prefijo `[Auto-Applied]` indicando que el ajuste
+  /// ya se aplicó localmente. Hermes NO debe reaplicar — solo registrar.
+  void _sendToHermesAutoApplied(
+    AudioRecommendationType type,
+    AmplificationActive state,
+    AmplificationBloc bloc,
+  ) {
+    final lastSent = _hermesSentAt[type];
+    if (lastSent != null &&
+        DateTime.now().difference(lastSent) < _kHermesCooldown) {
+      return;
+    }
+
+    final baseText = _hermesTextFor(type, state);
+    // Reemplazar [Auto] por [Auto-Applied] para que el service no reaplique.
+    final userText = baseText.replaceFirst('[Auto]', '[Auto-Applied]');
+
+    _hermesSentAt[type] = DateTime.now();
     _hermes.addObservation(userText: userText, bloc: bloc);
   }
 
@@ -1246,16 +1282,24 @@ class _AudioRecommendationWidgetState
   @override
   Widget build(BuildContext context) {
     final rec = _activeRecommendation;
-    if (rec == null) return const SizedBox.shrink();
 
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-      child: _RecommendationBanner(
-        recommendation: rec,
-        onDismiss: () => _dismiss(rec.type),
-        onAction: rec.action,
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // LED verde pulsante cuando se aplicó un ajuste automático.
+        if (_showGreenLed) _GreenLedIndicator(label: _lastAutoAppliedLabel),
+        // Banner interactivo (solo en modo manual).
+        if (rec != null)
+          AnimatedSize(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            child: _RecommendationBanner(
+              recommendation: rec,
+              onDismiss: () => _dismiss(rec.type),
+              onAction: rec.action,
+            ),
+          ),
+      ],
     );
   }
 }
@@ -1371,6 +1415,94 @@ class _RecommendationBanner extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+
+/// LED verde pulsante que indica que un ajuste automático se aplicó.
+///
+/// Aparece brevemente (4 segundos) con una animación de pulso y el
+/// nombre del ajuste aplicado. Visualmente simula un diodo LED
+/// encendiéndose en verde para confirmar la acción sin interrumpir.
+class _GreenLedIndicator extends StatefulWidget {
+  final String label;
+  const _GreenLedIndicator({required this.label});
+
+  @override
+  State<_GreenLedIndicator> createState() => _GreenLedIndicatorState();
+}
+
+class _GreenLedIndicatorState extends State<_GreenLedIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, child) {
+        final pulse = _pulseController.value;
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.08 + pulse * 0.07),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: Colors.green.withOpacity(0.3 + pulse * 0.3),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // LED circle con glow pulsante.
+              Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.green.shade400,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.green.withOpacity(0.4 + pulse * 0.4),
+                      blurRadius: 6 + pulse * 4,
+                      spreadRadius: pulse * 2,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: Colors.green.shade300,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
