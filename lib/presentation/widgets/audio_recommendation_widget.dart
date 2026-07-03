@@ -31,6 +31,42 @@ enum AudioRecommendationType {
 
   /// Nivel muy bajo prolongado — posible problema de micrófono.
   veryLowInput,
+
+  /// Clipping detectado — ganancia total excesiva, clipCount alto.
+  clipping,
+
+  /// MPO limitando de forma sostenida — output pegado al techo.
+  mpoLimitingSustained,
+
+  /// DNN matando la voz — postNrLevel mucho menor que input con SPEECH.
+  dnnKillingVoice,
+
+  /// Ganancia asimétrica extrema — diferencia >15 dB entre graves y agudos.
+  asymmetricGain,
+
+  /// Roce de ropa / chasquido — transient burst en graves sin voz.
+  clothingRustle,
+
+  /// Música detectada — espectro amplio sin VAD → sugerir Modo Música.
+  musicDetected,
+
+  /// Viento detectado — energía concentrada <250 Hz con variación rápida.
+  windDetected,
+
+  /// Fatiga auditiva — sesión activa >2 horas continuas.
+  listeningFatigue,
+
+  /// Volumen al máximo (+10 dB) — sugerir recalibrar ganancias base.
+  volumeMaxed,
+
+  /// NR insuficiente — ruido alto con NR bajo.
+  nrInsufficient,
+
+  /// Perfil estático mucho tiempo — >30 min sin cambiar con ambiente variable.
+  staleProfile,
+
+  /// Exposición acumulada alta — dosis de ruido acercándose a límites.
+  noiseExposure,
 }
 
 /// Modelo de una recomendación activa.
@@ -115,6 +151,27 @@ class _AudioRecommendationWidgetState
   /// Último perfil activo conocido.
   String? _lastActiveProfile;
 
+  /// Contadores para nuevas detecciones.
+  int _clippingTicks = 0;
+  int _mpoSustainedTicks = 0;
+  int _dnnKillingVoiceTicks = 0;
+  int _clothingRustleTicks = 0;
+  int _musicTicks = 0;
+  int _windTicks = 0;
+  int _volumeMaxTicks = 0;
+  int _nrInsufficientTicks = 0;
+  int _staleProfileTicks = 0;
+
+  /// Timestamp de inicio de la sesión de amplificación activa.
+  DateTime? _sessionStart;
+
+  /// Historial de niveles recientes para detección de transientes (ropa).
+  final List<double> _transientHistory = [];
+
+  /// Acumulador de exposición (suma de niveles en dB por tick para LEQ).
+  double _exposureAccumulator = 0.0;
+  int _exposureTicks = 0;
+
   /// Canal para consultar métricas DSP.
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
 
@@ -161,6 +218,19 @@ class _AudioRecommendationWidgetState
     if (_recentLevels.length > _kMaxLevelSamples) {
       _recentLevels.removeAt(0);
     }
+
+    // Tracking de transientes para detección de roce de ropa.
+    _transientHistory.add(state.inputLevelDb);
+    if (_transientHistory.length > 20) {
+      _transientHistory.removeAt(0);
+    }
+
+    // Tracking de sesión activa para fatiga.
+    _sessionStart ??= DateTime.now();
+
+    // Acumular exposición (LEQ simplificado).
+    _exposureAccumulator += state.inputLevelDb;
+    _exposureTicks++;
 
     // Actualizar contadores de ambiente.
     final envClass = bloc.lastEnvClass;
@@ -274,6 +344,66 @@ class _AudioRecommendationWidgetState
             'durante >20 segundos. Nivel: $level dB SPL. '
             'Posible problema con micrófono bloqueado o permisos. '
             'Verificar hardware.';
+
+      case AudioRecommendationType.clipping:
+        return '[Auto] Clipping detectado. Nivel entrada: $level dB SPL. '
+            'La señal satura el conversor AD. '
+            'Sugerir reducción de volumen master o ganancias EQ.';
+
+      case AudioRecommendationType.mpoLimitingSustained:
+        return '[Auto] MPO limitando de forma sostenida. Nivel entrada: $level dB SPL. '
+            'La salida está pegada al techo MPO. Sonido aplastado sin dinámica. '
+            'Sugerir reducción de ganancias o aumento del umbral MPO.';
+
+      case AudioRecommendationType.dnnKillingVoice:
+        return '[Auto] DNN/NR excesivo matando la voz. Nivel entrada: $level dB SPL, '
+            'NR nivel: ${state.activeNrLevel}, clasificador: SPEECH. '
+            'El filtro IA atenúa la voz junto con el ruido. '
+            'Sugerir reducir NR o bajar intensidad DNN.';
+
+      case AudioRecommendationType.clothingRustle:
+        return '[Auto] Roce de ropa / chasquido detectado. Nivel: $level dB SPL. '
+            'Transientes repetitivos en graves sin voz (patrón de tela/bolsillo/mesa). '
+            'Sugerir activar TNR o corte de graves <500 Hz.';
+
+      case AudioRecommendationType.asymmetricGain:
+        return '[Auto] Ganancia asimétrica extrema (>15 dB diferencia graves vs agudos). '
+            'Promedio agudos: $highGain dB. Perfil: $profile. '
+            'Puede causar molestia. Sugerir balancear la curva EQ.';
+
+      case AudioRecommendationType.musicDetected:
+        return '[Auto] Música detectada. Nivel: $level dB SPL, espectro amplio, '
+            'sin voz clasificada, sostenido >16s. '
+            'Sugerir activar Modo Música (NR=0, DNN=0) para preservar dinámica.';
+
+      case AudioRecommendationType.windDetected:
+        return '[Auto] Viento detectado. Nivel: $level dB SPL, energía concentrada '
+            'en graves (<500 Hz) con clasificador NOISE. '
+            'Sugerir corte de graves (-8 dB bandas 0-3) o windguard.';
+
+      case AudioRecommendationType.listeningFatigue:
+        return '[Auto] Sesión prolongada (>2 horas continuas de amplificación activa). '
+            'Riesgo de fatiga auditiva. Sugerir descanso o reducción de volumen.';
+
+      case AudioRecommendationType.volumeMaxed:
+        return '[Auto] Volumen al máximo (+10 dB) sostenido >10s. '
+            'Nivel entrada: $level dB SPL. Perfil: $profile. '
+            'Si el paciente necesita más, recalibrar ganancias base del EQ.';
+
+      case AudioRecommendationType.nrInsufficient:
+        return '[Auto] NR insuficiente. Clasificador: NOISE, NR nivel: '
+            '${state.activeNrLevel}. Nivel entrada: $level dB SPL. '
+            'Sugerir aumentar NR a nivel 2-3 para mejorar SNR.';
+
+      case AudioRecommendationType.staleProfile:
+        return '[Auto] Perfil "$profile" sin cambios >15 minutos con ambiente variable. '
+            'Nivel entrada: $level dB SPL. '
+            'Sugerir activar Smart automático o cambiar perfil manualmente.';
+
+      case AudioRecommendationType.noiseExposure:
+        return '[Auto] Exposición acumulada alta. LEQ de sesión >80 dB. '
+            'Nivel actual: $level dB SPL. '
+            'Riesgo de daño auditivo acumulativo. Sugerir reducir volumen o descanso.';
     }
   }
 
@@ -326,6 +456,90 @@ class _AudioRecommendationWidgetState
     if (_detectVeryLowInput(state)) {
       if (!_isInCooldown(AudioRecommendationType.veryLowInput)) {
         return AudioRecommendationType.veryLowInput;
+      }
+    }
+
+    // 4b. PRIORIDAD ALTA — Clipping (clipCount alto).
+    if (_detectClipping(state)) {
+      if (!_isInCooldown(AudioRecommendationType.clipping)) {
+        return AudioRecommendationType.clipping;
+      }
+    }
+
+    // 4c. PRIORIDAD ALTA — MPO limitando sostenido.
+    if (_detectMpoSustained(state)) {
+      if (!_isInCooldown(AudioRecommendationType.mpoLimitingSustained)) {
+        return AudioRecommendationType.mpoLimitingSustained;
+      }
+    }
+
+    // 4d. PRIORIDAD MEDIA — DNN matando la voz.
+    if (_detectDnnKillingVoice(state)) {
+      if (!_isInCooldown(AudioRecommendationType.dnnKillingVoice)) {
+        return AudioRecommendationType.dnnKillingVoice;
+      }
+    }
+
+    // 4e. PRIORIDAD MEDIA — Roce de ropa / chasquido.
+    if (_detectClothingRustle(state)) {
+      if (!_isInCooldown(AudioRecommendationType.clothingRustle)) {
+        return AudioRecommendationType.clothingRustle;
+      }
+    }
+
+    // 4f. PRIORIDAD MEDIA — Ganancia asimétrica extrema.
+    if (_detectAsymmetricGain(state)) {
+      if (!_isInCooldown(AudioRecommendationType.asymmetricGain)) {
+        return AudioRecommendationType.asymmetricGain;
+      }
+    }
+
+    // 4g. PRIORIDAD MEDIA — Volumen al máximo.
+    if (_detectVolumeMaxed(state)) {
+      if (!_isInCooldown(AudioRecommendationType.volumeMaxed)) {
+        return AudioRecommendationType.volumeMaxed;
+      }
+    }
+
+    // 4h. PRIORIDAD MEDIA — NR insuficiente.
+    if (_detectNrInsufficient(state)) {
+      if (!_isInCooldown(AudioRecommendationType.nrInsufficient)) {
+        return AudioRecommendationType.nrInsufficient;
+      }
+    }
+
+    // 4i. PRIORIDAD BAJA — Música detectada.
+    if (_detectMusic(state)) {
+      if (!_isInCooldown(AudioRecommendationType.musicDetected)) {
+        return AudioRecommendationType.musicDetected;
+      }
+    }
+
+    // 4j. PRIORIDAD BAJA — Viento.
+    if (_detectWind(state)) {
+      if (!_isInCooldown(AudioRecommendationType.windDetected)) {
+        return AudioRecommendationType.windDetected;
+      }
+    }
+
+    // 4k. PRIORIDAD BAJA — Fatiga auditiva (>2 horas).
+    if (_detectListeningFatigue()) {
+      if (!_isInCooldown(AudioRecommendationType.listeningFatigue)) {
+        return AudioRecommendationType.listeningFatigue;
+      }
+    }
+
+    // 4l. PRIORIDAD BAJA — Exposición acumulada alta.
+    if (_detectNoiseExposure()) {
+      if (!_isInCooldown(AudioRecommendationType.noiseExposure)) {
+        return AudioRecommendationType.noiseExposure;
+      }
+    }
+
+    // 4m. PRIORIDAD BAJA — Perfil estático mucho tiempo.
+    if (_detectStaleProfile(state, bloc)) {
+      if (!_isInCooldown(AudioRecommendationType.staleProfile)) {
+        return AudioRecommendationType.staleProfile;
       }
     }
 
@@ -433,6 +647,179 @@ class _AudioRecommendationWidgetState
 
     // Alertar si 3 o más bandas están saturando.
     return saturatedBands >= 3;
+  }
+
+  /// Detecta clipping: nivel de pico cercano a 1.0 (0 dBFS) sostenido.
+  bool _detectClipping(AmplificationActive state) {
+    // Nivel muy alto (>90 dB SPL) = probable clipping en el pipeline.
+    if (state.inputLevelDb > 90) {
+      _clippingTicks++;
+    } else {
+      _clippingTicks = 0;
+    }
+    return _clippingTicks >= 3; // 6 segundos sostenidos.
+  }
+
+  /// Detecta MPO limitando de forma sostenida (output pegado al techo).
+  bool _detectMpoSustained(AmplificationActive state) {
+    final gains = state.activeEqGains ?? state.bundle?.gainsDb;
+    final mpo = state.bundle?.mpoProfileDbSpl;
+    if (gains == null || mpo == null) return false;
+    // Si el nivel + ganancia promedio supera el MPO promedio.
+    final avgGain = gains.reduce((a, b) => a + b) / gains.length;
+    final avgMpo = mpo.reduce((a, b) => a + b) / mpo.length;
+    if (state.inputLevelDb + avgGain > avgMpo - 2.0) {
+      _mpoSustainedTicks++;
+    } else {
+      _mpoSustainedTicks = 0;
+    }
+    return _mpoSustainedTicks >= 4; // 8 segundos.
+  }
+
+  /// Detecta DNN matando la voz: postNrLevel mucho menor que input
+  /// cuando el clasificador indica SPEECH.
+  bool _detectDnnKillingVoice(AmplificationActive state) {
+    final envClass = _lastEnvClass;
+    // Solo aplica si hay voz clasificada.
+    if (envClass != 1 && envClass != 2) {
+      _dnnKillingVoiceTicks = 0;
+      return false;
+    }
+    // Indicador indirecto: nivel de entrada alto pero volumen
+    // percibido bajo (NR nivel 3 + DNN alta intensidad).
+    if (state.inputLevelDb > 55 && state.activeNrLevel >= 3) {
+      _dnnKillingVoiceTicks++;
+    } else {
+      _dnnKillingVoiceTicks = 0;
+    }
+    return _dnnKillingVoiceTicks >= 5; // 10 segundos.
+  }
+
+  /// Detecta roce de ropa / chasquido del móvil contra superficies.
+  ///
+  /// Patrón: picos transitorios bruscos (>15 dB de variación entre
+  /// muestras consecutivas) repetidos, sin que el clasificador
+  /// detecte SPEECH. Típico del celular en el bolsillo o rozando ropa.
+  bool _detectClothingRustle(AmplificationActive state) {
+    if (_transientHistory.length < 10) return false;
+    final envClass = _lastEnvClass;
+    // Si hay voz detectada, no es roce de ropa.
+    if (envClass == 1 || envClass == 2) {
+      _clothingRustleTicks = 0;
+      return false;
+    }
+    // Contar transientes bruscos en las últimas 20 muestras.
+    int spikes = 0;
+    for (int i = 1; i < _transientHistory.length; i++) {
+      final diff = (_transientHistory[i] - _transientHistory[i - 1]).abs();
+      if (diff > 15.0) spikes++;
+    }
+    // Si hay muchos spikes (>5 en 20 muestras) = patrón de roce.
+    if (spikes > 5) {
+      _clothingRustleTicks++;
+    } else {
+      _clothingRustleTicks = 0;
+    }
+    return _clothingRustleTicks >= 3; // 6 segundos con patrón de roce.
+  }
+
+  /// Detecta ganancia asimétrica extrema: >15 dB de diferencia
+  /// entre el promedio de graves y el promedio de agudos.
+  bool _detectAsymmetricGain(AmplificationActive state) {
+    final gains = state.activeEqGains ?? state.bundle?.gainsDb;
+    if (gains == null || gains.length != 12) return false;
+    final avgLow = (gains[0] + gains[1] + gains[2] + gains[3]) / 4;
+    final avgHigh = (gains[8] + gains[9] + gains[10] + gains[11]) / 4;
+    return (avgLow - avgHigh).abs() > 15.0;
+  }
+
+  /// Detecta música: nivel estable medio-alto sin voz clasificada,
+  /// espectro amplio (todas las bandas con ganancia >5 dB).
+  bool _detectMusic(AmplificationActive state) {
+    final envClass = _lastEnvClass;
+    // Sin voz, nivel medio, no silencio.
+    if (envClass == 1 || envClass == 2) {
+      _musicTicks = 0;
+      return false;
+    }
+    if (state.inputLevelDb > 45 && state.inputLevelDb < 80 && envClass == 3) {
+      // Verificar espectro amplio: ¿la varianza de niveles es baja?
+      // (música = energía distribuida; ruido = también, pero más random).
+      _musicTicks++;
+    } else {
+      _musicTicks = 0;
+    }
+    // Si Modo Música ya está activo, no sugerir.
+    if (state.musicModeActive) return false;
+    return _musicTicks >= 8; // 16 segundos estables.
+  }
+
+  /// Detecta viento: energía alta concentrada en graves (<500 Hz)
+  /// con variación rápida. Patrón: nivel alto + clasificador NOISE +
+  /// ganancia baja en agudos = probablemente viento.
+  bool _detectWind(AmplificationActive state) {
+    final envClass = _lastEnvClass;
+    final gains = state.activeEqGains ?? state.bundle?.gainsDb;
+    if (envClass != 3 || gains == null || gains.length != 12) {
+      _windTicks = 0;
+      return false;
+    }
+    final avgLow = (gains[0] + gains[1] + gains[2] + gains[3]) / 4;
+    final avgHigh = (gains[8] + gains[9] + gains[10] + gains[11]) / 4;
+    // Viento: mucha energía en graves, poca en agudos, nivel alto.
+    if (state.inputLevelDb > 60 && avgLow > avgHigh + 10) {
+      _windTicks++;
+    } else {
+      _windTicks = 0;
+    }
+    return _windTicks >= 4; // 8 segundos.
+  }
+
+  /// Detecta volumen al máximo (+10 dB) sostenido.
+  bool _detectVolumeMaxed(AmplificationActive state) {
+    if (state.volumeDb >= 9.5) {
+      _volumeMaxTicks++;
+    } else {
+      _volumeMaxTicks = 0;
+    }
+    return _volumeMaxTicks >= 5; // 10 segundos al máximo.
+  }
+
+  /// Detecta NR insuficiente: ambiente ruidoso con NR bajo.
+  bool _detectNrInsufficient(AmplificationActive state) {
+    final envClass = _lastEnvClass;
+    if ((envClass == 2 || envClass == 3) && state.activeNrLevel <= 1) {
+      _nrInsufficientTicks++;
+    } else {
+      _nrInsufficientTicks = 0;
+    }
+    return _nrInsufficientTicks >= 5; // 10 segundos.
+  }
+
+  /// Detecta fatiga auditiva: sesión continua >2 horas.
+  bool _detectListeningFatigue() {
+    if (_sessionStart == null) return false;
+    return DateTime.now().difference(_sessionStart!) >
+        const Duration(hours: 2);
+  }
+
+  /// Detecta exposición acumulada alta (LEQ aproximado >80 dBA).
+  bool _detectNoiseExposure() {
+    if (_exposureTicks < 30) return false; // mínimo 1 minuto de datos.
+    final leq = _exposureAccumulator / _exposureTicks;
+    return leq > 80.0;
+  }
+
+  /// Detecta perfil estático por mucho tiempo con ambiente variable.
+  bool _detectStaleProfile(AmplificationActive state, AmplificationBloc bloc) {
+    if (bloc.isSmartEnabled) return false; // Smart lo maneja.
+    // Si el perfil no cambió en >15 minutos (450 ticks de 2s).
+    _staleProfileTicks++;
+    if (_lastActiveProfile != state.activeProfile) {
+      _staleProfileTicks = 0;
+      _lastActiveProfile = state.activeProfile;
+    }
+    return _staleProfileTicks >= 450; // ~15 minutos.
   }
 
   /// Detecta si el ambiente sugiere un cambio de perfil no aplicado.
@@ -569,6 +956,190 @@ class _AudioRecommendationWidgetState
           icon: Icons.mic_off,
           color: Colors.red.shade300,
         );
+
+      case AudioRecommendationType.clipping:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Clipping detectado',
+          message:
+              'La señal está saturando (distorsión digital). '
+              'Reducí el volumen o las ganancias del EQ.',
+          actionLabel: 'Reducir volumen',
+          action: () {
+            final newVol = (state.volumeDb - 5.0).clamp(-20.0, 10.0);
+            bloc.add(ChangeVolume(volumeDb: newVol));
+            _dismiss(AudioRecommendationType.clipping);
+          },
+          icon: Icons.broken_image,
+          color: Colors.red.shade600,
+        );
+
+      case AudioRecommendationType.mpoLimitingSustained:
+        return _AudioRecommendation(
+          type: type,
+          title: 'MPO limitando (salida al techo)',
+          message:
+              'La salida está pegada al límite MPO. El sonido puede sonar '
+              'aplastado y sin dinámica. Reducí ganancias.',
+          actionLabel: 'Reducir ganancias',
+          action: () => _reduceAllGains(bloc, state),
+          icon: Icons.compress,
+          color: Colors.red.shade400,
+        );
+
+      case AudioRecommendationType.dnnKillingVoice:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Reducción de ruido excesiva',
+          message:
+              'El filtro IA (DNN) está atenuando la voz junto con el ruido. '
+              'Bajá la intensidad del DNN o reducí el NR.',
+          actionLabel: 'Bajar NR',
+          action: () {
+            final newNr = (state.activeNrLevel - 1).clamp(0, 3);
+            bloc.add(UpdateNrLevel(level: newNr));
+            _dismiss(AudioRecommendationType.dnnKillingVoice);
+          },
+          icon: Icons.voice_over_off,
+          color: Colors.orange.shade600,
+        );
+
+      case AudioRecommendationType.clothingRustle:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Roce de ropa / chasquido',
+          message:
+              'Se detectan transientes repetitivos (roce contra tela, '
+              'bolsillo, mesa). Activá el TNR o alejá el mic de la ropa.',
+          actionLabel: 'Activar TNR',
+          action: () {
+            _channel.invokeMethod('updateTnrEnabled', {'enabled': true});
+            _dismiss(AudioRecommendationType.clothingRustle);
+          },
+          icon: Icons.dry_cleaning,
+          color: Colors.brown.shade300,
+        );
+
+      case AudioRecommendationType.asymmetricGain:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Ganancia muy desbalanceada',
+          message:
+              'La diferencia entre graves y agudos es >15 dB. '
+              'Puede causar molestia o sonido poco natural.',
+          icon: Icons.balance,
+          color: Colors.amber.shade400,
+        );
+
+      case AudioRecommendationType.musicDetected:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Música detectada',
+          message:
+              'Se detecta un patrón musical. El Modo Música desactiva NR/DNN '
+              'para preservar la dinámica y los transientes.',
+          actionLabel: 'Modo Música',
+          action: () {
+            bloc.add(const ToggleMusicMode(activate: true));
+            _dismiss(AudioRecommendationType.musicDetected);
+          },
+          icon: Icons.music_note,
+          color: Colors.purple.shade300,
+        );
+
+      case AudioRecommendationType.windDetected:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Viento detectado',
+          message:
+              'Hay energía intensa en graves (patrón de viento). '
+              'Un corte de graves puede reducir la molestia.',
+          actionLabel: 'Cortar graves',
+          action: () {
+            final gains = List<double>.from(
+              state.activeEqGains ?? state.bundle?.gainsDb ?? List.filled(12, 0.0),
+            );
+            for (int i = 0; i < 4 && i < gains.length; i++) {
+              gains[i] = (gains[i] - 8.0).clamp(0.0, 50.0);
+            }
+            bloc.add(UpdateEqGains(gains: gains, presetName: state.activeEqPreset));
+            _dismiss(AudioRecommendationType.windDetected);
+          },
+          icon: Icons.air,
+          color: Colors.teal.shade300,
+        );
+
+      case AudioRecommendationType.listeningFatigue:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Sesión prolongada (>2 horas)',
+          message:
+              'Llevas más de 2 horas con amplificación activa. '
+              'Considerá un descanso para evitar fatiga auditiva.',
+          icon: Icons.timer_off,
+          color: Colors.blue.shade300,
+        );
+
+      case AudioRecommendationType.volumeMaxed:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Volumen al máximo',
+          message:
+              'El volumen está en +10 dB (tope). Si no alcanza, '
+              'recalibrá las ganancias base del EQ.',
+          icon: Icons.volume_up,
+          color: Colors.orange.shade400,
+        );
+
+      case AudioRecommendationType.nrInsufficient:
+        return _AudioRecommendation(
+          type: type,
+          title: 'NR insuficiente para este ruido',
+          message:
+              'El ambiente es ruidoso pero el NR está bajo. '
+              'Subir el NR puede mejorar la inteligibilidad.',
+          actionLabel: 'Subir NR',
+          action: () {
+            final newNr = (state.activeNrLevel + 1).clamp(0, 3);
+            bloc.add(UpdateNrLevel(level: newNr));
+            _dismiss(AudioRecommendationType.nrInsufficient);
+          },
+          icon: Icons.noise_aware,
+          color: Colors.cyan.shade600,
+        );
+
+      case AudioRecommendationType.staleProfile:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Perfil sin cambios hace rato',
+          message:
+              'Llevas >15 min en el mismo perfil. ¿Activar Smart '
+              'para que se adapte automáticamente al ambiente?',
+          actionLabel: 'Activar Smart',
+          action: () {
+            bloc.add(const ToggleSmart(activate: true));
+            _dismiss(AudioRecommendationType.staleProfile);
+          },
+          icon: Icons.update,
+          color: Colors.grey.shade400,
+        );
+
+      case AudioRecommendationType.noiseExposure:
+        return _AudioRecommendation(
+          type: type,
+          title: 'Exposición acumulada alta',
+          message:
+              'El nivel promedio de la sesión supera 80 dB. '
+              'Riesgo de fatiga. Reducí volumen o tomá un descanso.',
+          actionLabel: 'Reducir volumen',
+          action: () {
+            final newVol = (state.volumeDb - 3.0).clamp(-20.0, 10.0);
+            bloc.add(ChangeVolume(volumeDb: newVol));
+            _dismiss(AudioRecommendationType.noiseExposure);
+          },
+          icon: Icons.health_and_safety,
+          color: Colors.red.shade300,
+        );
     }
   }
 
@@ -620,10 +1191,31 @@ class _AudioRecommendationWidgetState
         _lowLevelTicks = 0;
       case AudioRecommendationType.veryLowInput:
         _veryLowLevelTicks = 0;
+      case AudioRecommendationType.clipping:
+        _clippingTicks = 0;
+      case AudioRecommendationType.mpoLimitingSustained:
+        _mpoSustainedTicks = 0;
+      case AudioRecommendationType.dnnKillingVoice:
+        _dnnKillingVoiceTicks = 0;
+      case AudioRecommendationType.clothingRustle:
+        _clothingRustleTicks = 0;
+      case AudioRecommendationType.musicDetected:
+        _musicTicks = 0;
+      case AudioRecommendationType.windDetected:
+        _windTicks = 0;
+      case AudioRecommendationType.volumeMaxed:
+        _volumeMaxTicks = 0;
+      case AudioRecommendationType.nrInsufficient:
+        _nrInsufficientTicks = 0;
+      case AudioRecommendationType.staleProfile:
+        _staleProfileTicks = 0;
       case AudioRecommendationType.eqSaturation:
       case AudioRecommendationType.conversationDetected:
       case AudioRecommendationType.noiseDetected:
       case AudioRecommendationType.silenceDetected:
+      case AudioRecommendationType.asymmetricGain:
+      case AudioRecommendationType.listeningFatigue:
+      case AudioRecommendationType.noiseExposure:
         break;
     }
     setState(() => _activeRecommendation = null);
