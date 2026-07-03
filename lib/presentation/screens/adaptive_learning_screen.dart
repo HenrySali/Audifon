@@ -168,11 +168,13 @@ class _AdaptiveLearningScreenState extends State<AdaptiveLearningScreen> {
   /// un botón para ver los eventos automáticos en un bottom sheet.
   Widget _buildObservationsList(ThemeData theme, ColorScheme colors) {
     // Separar manuales de auto-applied.
+    // Cualquier observación que contenga [Auto] en cualquier posición
+    // es un evento automático del widget de recomendaciones.
     final manualObs = _service.observations
-        .where((o) => !o.userText.contains('[Auto-Applied]') && !o.userText.startsWith('[Auto]'))
+        .where((o) => !o.userText.contains('[Auto'))
         .toList();
     final autoObs = _service.observations
-        .where((o) => o.userText.contains('[Auto-Applied]') || o.userText.startsWith('[Auto]'))
+        .where((o) => o.userText.contains('[Auto'))
         .toList();
 
     if (manualObs.isEmpty && autoObs.isEmpty) {

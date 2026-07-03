@@ -1024,7 +1024,8 @@ class _AudioRecommendationWidgetState
               'Reducí el volumen o las ganancias del EQ.',
           actionLabel: 'Reducir volumen',
           action: () {
-            final newVol = (state.volumeDb - 5.0).clamp(-20.0, 10.0);
+            // Piso: nunca bajar más allá de -5 dB (preservar conversación).
+            final newVol = (state.volumeDb - 2.0).clamp(-5.0, 10.0);
             bloc.add(ChangeVolume(volumeDb: newVol));
             _dismiss(AudioRecommendationType.clipping);
           },
@@ -1191,7 +1192,8 @@ class _AudioRecommendationWidgetState
               'Riesgo de fatiga. Reducí volumen o tomá un descanso.',
           actionLabel: 'Reducir volumen',
           action: () {
-            final newVol = (state.volumeDb - 3.0).clamp(-20.0, 10.0);
+            // Piso: nunca bajar más allá de -5 dB (preservar conversación).
+            final newVol = (state.volumeDb - 2.0).clamp(-5.0, 10.0);
             bloc.add(ChangeVolume(volumeDb: newVol));
             _dismiss(AudioRecommendationType.noiseExposure);
           },
@@ -1225,9 +1227,9 @@ class _AudioRecommendationWidgetState
     final gains = List<double>.from(
       state.activeEqGains ?? state.bundle?.gainsDb ?? List.filled(12, 0.0),
     );
-    // Reducir todas las bandas en -3 dB.
+    // Reducir todas las bandas en -2 dB (conservador para no matar conversación).
     for (int i = 0; i < gains.length; i++) {
-      gains[i] = (gains[i] - 3.0).clamp(0.0, 50.0);
+      gains[i] = (gains[i] - 2.0).clamp(0.0, 50.0);
     }
     bloc.add(UpdateEqGains(gains: gains, presetName: state.activeEqPreset));
     _dismiss(AudioRecommendationType.eqSaturation);
