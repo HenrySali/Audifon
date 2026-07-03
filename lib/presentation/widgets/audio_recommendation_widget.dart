@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../data/services/adaptive_learning_service.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
 import '../bloc/amplification_state.dart';
@@ -117,6 +118,16 @@ class _AudioRecommendationWidgetState
   /// Canal para consultar métricas DSP.
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
 
+  /// Referencia al servicio Hermes para enviar observaciones automáticas.
+  final AdaptiveLearningService _hermes = AdaptiveLearningService.instance;
+
+  /// Cooldown de envío a Hermes por tipo: evita spamear el VPS con la
+  /// misma detección repetida. Mínimo 60 segundos entre envíos del mismo tipo.
+  final Map<AudioRecommendationType, DateTime> _hermesSentAt = {};
+
+  /// Cooldown de Hermes: no reenviar la misma detección por 60 segundos.
+  static const _kHermesCooldown = Duration(seconds: 60);
+
   @override
   void initState() {
     super.initState();
@@ -165,6 +176,10 @@ class _AudioRecommendationWidgetState
     final recommendation = _detectHighestPriority(state, bloc);
 
     if (recommendation != _activeRecommendation?.type) {
+      // Si hay una nueva recomendación, enviarla a Hermes.
+      if (recommendation != null) {
+        _sendToHermes(recommendation, state, bloc);
+      }
       setState(() {
         _activeRecommendation = recommendation != null
             ? _buildRecommendation(recommendation, state, bloc)
@@ -172,6 +187,113 @@ class _AudioRecommendationWidgetState
       });
     }
   }
+
+  // ─── Integración Hermes ─────────────────────────────────────────────
+
+  /// Envía la detección como observación automática a Hermes.
+  ///
+  /// - Si `autoApply = true` → Hermes aplica el ajuste solo.
+  /// - Si `autoApply = false` → aparece como sugerencia en la ventana de Hermes.
+  ///
+  /// Respeta un cooldown de 60s por tipo para no spamear el VPS.
+  void _sendToHermes(
+    AudioRecommendationType type,
+    AmplificationActive state,
+    AmplificationBloc bloc,
+  ) {
+    // Verificar cooldown de Hermes para este tipo.
+    final lastSent = _hermesSentAt[type];
+    if (lastSent != null &&
+        DateTime.now().difference(lastSent) < _kHermesCooldown) {
+      return; // Aún en cooldown, no reenviar.
+    }
+
+    // Generar texto descriptivo para Hermes.
+    final userText = _hermesTextFor(type, state);
+
+    // Registrar timestamp del envío.
+    _hermesSentAt[type] = DateTime.now();
+
+    // Enviar en background (no bloquea la UI).
+    // El servicio ya maneja autoApply internamente:
+    // - autoApply=true → aplica la sugerencia de Hermes automáticamente.
+    // - autoApply=false → la deja como sugerencia visible en el historial.
+    _hermes.addObservation(userText: userText, bloc: bloc);
+  }
+
+  /// Genera el texto de observación que Hermes va a recibir para cada tipo.
+  ///
+  /// El prefijo `[Auto]` indica a Hermes que es una detección automática
+  /// (no escrita por el técnico). El texto incluye contexto numérico para
+  /// que el modelo de IA pueda generar una sugerencia precisa.
+  String _hermesTextFor(AudioRecommendationType type, AmplificationActive state) {
+    final level = state.inputLevelDb.toStringAsFixed(1);
+    final profile = state.activeProfile;
+    final gains = state.activeEqGains ?? state.bundle?.gainsDb;
+    final highGain = gains != null && gains.length == 12
+        ? ((gains[8] + gains[9] + gains[10] + gains[11]) / 4).toStringAsFixed(1)
+        : '?';
+
+    switch (type) {
+      case AudioRecommendationType.echo:
+        return '[Auto] Eco/feedback detectado. Nivel entrada: $level dB SPL, '
+            'ganancia promedio agudos: $highGain dB. '
+            'Patrón de realimentación acústica sostenido. '
+            'Sugerir reducción de ganancia en agudos o ajuste de auricular.';
+
+      case AudioRecommendationType.lowVoice:
+        return '[Auto] Voz baja detectada. Nivel entrada: $level dB SPL '
+            'con clasificador indicando voz/conversación. '
+            'El interlocutor habla a nivel inferior al normal (45-65 dB). '
+            'Sugerir aumento de volumen o ganancia en banda de habla.';
+
+      case AudioRecommendationType.eqSaturation:
+        final saturated = _countSaturatedBands(state);
+        return '[Auto] Saturación en ecualización. $saturated de 12 bandas '
+            'cerca del límite MPO. Nivel entrada: $level dB SPL. '
+            'Riesgo de distorsión audible. '
+            'Sugerir reducción de ganancias o ajuste de MPO.';
+
+      case AudioRecommendationType.conversationDetected:
+        return '[Auto] Ambiente de conversación detectado (clasificador: SPEECH). '
+            'Perfil activo: $profile. Nivel entrada: $level dB SPL. '
+            'Sugerir cambio a perfil Conversación para mejorar inteligibilidad.';
+
+      case AudioRecommendationType.noiseDetected:
+        return '[Auto] Ambiente ruidoso detectado (clasificador: NOISE). '
+            'Perfil activo: $profile. Nivel entrada: $level dB SPL. '
+            'Sugerir cambio a perfil Ruidoso y/o aumentar NR.';
+
+      case AudioRecommendationType.silenceDetected:
+        return '[Auto] Ambiente silencioso detectado (clasificador: QUIET). '
+            'Perfil activo: $profile. Nivel entrada: $level dB SPL. '
+            'Sugerir cambio a perfil Silencioso para reducir ruido de piso.';
+
+      case AudioRecommendationType.veryLowInput:
+        return '[Auto] Nivel de entrada extremadamente bajo (<25 dB SPL) '
+            'durante >20 segundos. Nivel: $level dB SPL. '
+            'Posible problema con micrófono bloqueado o permisos. '
+            'Verificar hardware.';
+    }
+  }
+
+  /// Cuenta cuántas bandas están saturando (para el texto de Hermes).
+  int _countSaturatedBands(AmplificationActive state) {
+    final gains = state.activeEqGains ?? state.bundle?.gainsDb;
+    final mpo = state.bundle?.mpoProfileDbSpl;
+    if (gains == null || gains.length != 12) return 0;
+    int count = 0;
+    for (int i = 0; i < 12; i++) {
+      if (mpo != null && mpo.length == 12) {
+        if (gains[i] + 65.0 > mpo[i] - 5.0) count++;
+      } else {
+        if (gains[i] > 30) count++;
+      }
+    }
+    return count;
+  }
+
+  // ─── Detección de condiciones ──────────────────────────────────────────
 
   /// Detecta la recomendación de mayor prioridad según las condiciones
   /// actuales. Retorna null si no hay nada que recomendar.
