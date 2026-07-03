@@ -723,6 +723,24 @@ class AmplificationBloc
     }
 
     // ─────────────────────────────────────────────────────────────
+    // Fase 1.5 — Aplicar micrófono preferido ANTES de startAudio.
+    // El nativo necesita el deviceId antes de abrir el stream.
+    // ─────────────────────────────────────────────────────────────
+    try {
+      final box = await _openSettingsBox();
+      final preferredMicId = box?.get('preferred_mic_id');
+      if (preferredMicId is int && preferredMicId != -1) {
+        await _audioBridge.setPreferredMicrophone(preferredMicId);
+      }
+    } catch (e) {
+      developer.log(
+        'Boot Phase 1.5: setPreferredMicrophone falló: $e — mic default.',
+        name: 'AmplificationBloc',
+        level: 800,
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Fase 2 — startAudio con timeout 5000 ms (Req 3.7).
     // ─────────────────────────────────────────────────────────────
     try {
@@ -820,24 +838,6 @@ class AmplificationBloc
     } catch (e, st) {
       developer.log(
         'Boot Phase 4: initDnnDenoiser falló: $e — NR Wiener activo.',
-        name: 'AmplificationBloc',
-        level: 800,
-        error: e,
-        stackTrace: st,
-      );
-    }
-
-    // 1c) Aplicar micrófono preferido si hay uno persistido.
-    // Tolerante: si falla, el motor usa el mic default (builtin).
-    try {
-      final box = await _openSettingsBox();
-      final preferredMicId = box?.get('preferred_mic_id');
-      if (preferredMicId is int && preferredMicId != -1) {
-        await _audioBridge.setPreferredMicrophone(preferredMicId);
-      }
-    } catch (e, st) {
-      developer.log(
-        'Boot Phase 4: setPreferredMicrophone falló: $e — mic default.',
         name: 'AmplificationBloc',
         level: 800,
         error: e,

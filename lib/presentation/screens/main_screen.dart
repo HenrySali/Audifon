@@ -621,7 +621,7 @@ class _MicSelectorSheetState extends State<_MicSelectorSheet> {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
