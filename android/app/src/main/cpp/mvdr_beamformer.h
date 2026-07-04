@@ -76,6 +76,7 @@ public:
         }
 
         rnnInitialized_ = false;
+        firstFrameProcessed_ = false;
         frameCount_ = 0;
     }
 
@@ -101,6 +102,49 @@ public:
         if (!enabled_.load(std::memory_order_acquire)) {
             // Bypass: copiar canal 0 directamente
             std::memcpy(output, ch0, numFrames * sizeof(float));
+            return;
+        }
+
+        // Passthrough ch0 until the first full STFT frame has been
+        // synthesized, to avoid startup silence from empty outputBuf_.
+        if (!firstFrameProcessed_) {
+            // Feed input into STFT buffers (building up for first frame)
+            int samplesProcessed = 0;
+            while (samplesProcessed < numFrames) {
+                int samplesToAdd = std::min(
+                    kFftSize - inputBufPos_, numFrames - samplesProcessed);
+
+                for (int i = 0; i < samplesToAdd; ++i) {
+                    inputBuf0_[inputBufPos_ + i] = ch0[samplesProcessed + i];
+                    inputBuf1_[inputBufPos_ + i] = ch1[samplesProcessed + i];
+                }
+                inputBufPos_ += samplesToAdd;
+                samplesProcessed += samplesToAdd;
+
+                if (inputBufPos_ >= kFftSize) {
+                    processFrame(vadActive);
+                    std::memmove(inputBuf0_, inputBuf0_ + kHopSize,
+                                 kHopSize * sizeof(float));
+                    std::memmove(inputBuf1_, inputBuf1_ + kHopSize,
+                                 kHopSize * sizeof(float));
+                    inputBufPos_ = kHopSize;
+                    firstFrameProcessed_ = true;
+                    break;
+                }
+            }
+
+            if (!firstFrameProcessed_) {
+                // Still priming: passthrough ch0 for this block
+                std::memcpy(output, ch0, numFrames * sizeof(float));
+                return;
+            }
+
+            // First frame just processed. For this transitional block,
+            // passthrough ch0 to avoid partial/glitchy output.
+            std::memcpy(output, ch0, numFrames * sizeof(float));
+            // Reset output buffer state for clean start on next call
+            std::memset(outputBuf_, 0, sizeof(outputBuf_));
+            outputBufPos_ = 0;
             return;
         }
 
@@ -190,16 +234,20 @@ private:
         realIFFT(Y, frameBuf, kFftSize);
 
         // Aplicar ventana de sintesis y acumular en output buffer
+        // Normalizacion: Hann ventana analisis+sintesis con 50% overlap
+        // produce un factor COLA de 0.75. Compensamos con 1/0.75 = 4/3.
+        static constexpr float kOlaNorm = 1.0f / 0.75f;
         for (int n = 0; n < kFftSize; ++n) {
-            outputBuf_[n] += frameBuf[n] * window_[n];
+            outputBuf_[n] += frameBuf[n] * window_[n] * kOlaNorm;
         }
-        // Normalizacion overlap-add (Hann 50% overlap: factor ya implicito)
 
         frameCount_++;
     }
 
     /// Actualiza la matriz de correlacion espacial del ruido (Rnn)
     /// con suavizado exponencial. Solo llamar durante noise-only.
+    /// Nota: diagonal loading se aplica en computeMvdrWeights() justo antes
+    /// de la inversion, no durante la acumulacion, para evitar drift.
     void updateRnn(const Complex* X0, const Complex* X1) {
         const float alpha = kRnnAlpha;
         const float oneMinusAlpha = 1.0f - alpha;
@@ -217,20 +265,23 @@ private:
                             oneMinusAlpha * (x1 * std::conj(x0));
             rnn_[k][1][1] = alpha * rnn_[k][1][1] +
                             oneMinusAlpha * (x1 * std::conj(x1));
-
-            // Diagonal loading para estabilidad
-            rnn_[k][0][0] += Complex(kReg, 0.0f);
-            rnn_[k][1][1] += Complex(kReg, 0.0f);
         }
     }
 
     /// Calcula los pesos MVDR para un bin de frecuencia.
     /// Invierte la matriz 2x2 Rnn analiticamente y aplica la formula cerrada.
+    /// Diagonal loading (kReg) se aplica aqui justo antes de la inversion
+    /// para no acumular regularizacion en la estimacion de Rnn.
     void computeMvdrWeights(int k, Complex* w) const {
+        // Aplicar diagonal loading a una copia local antes de invertir
+        Complex R00 = rnn_[k][0][0] + Complex(kReg, 0.0f);
+        Complex R01 = rnn_[k][0][1];
+        Complex R10 = rnn_[k][1][0];
+        Complex R11 = rnn_[k][1][1] + Complex(kReg, 0.0f);
+
         // Rnn^{-1} para matriz 2x2:
         // inv(R) = (1/det) * [R11, -R01; -R10, R00]
-        Complex det = rnn_[k][0][0] * rnn_[k][1][1] -
-                      rnn_[k][0][1] * rnn_[k][1][0];
+        Complex det = R00 * R11 - R01 * R10;
 
         // Guard contra determinante cercano a cero
         float detMag = std::abs(det);
@@ -243,10 +294,10 @@ private:
 
         Complex invDet = 1.0f / det;
         Complex Rinv[2][2];
-        Rinv[0][0] =  rnn_[k][1][1] * invDet;
-        Rinv[0][1] = -rnn_[k][0][1] * invDet;
-        Rinv[1][0] = -rnn_[k][1][0] * invDet;
-        Rinv[1][1] =  rnn_[k][0][0] * invDet;
+        Rinv[0][0] =  R11 * invDet;
+        Rinv[0][1] = -R01 * invDet;
+        Rinv[1][0] = -R10 * invDet;
+        Rinv[1][1] =  R00 * invDet;
 
         // Rinv * d
         Complex Rinv_d[2];
@@ -401,6 +452,7 @@ private:
     Complex rnn_[kNumBins][2][2] = {};
 
     bool rnnInitialized_ = false;
+    bool firstFrameProcessed_ = false;
     int frameCount_ = 0;
 };
 

@@ -499,7 +499,7 @@ void AudioEngine::setBeamformingEnabled(bool enabled) {
 }
 
 bool AudioEngine::isBeamformingActive() const {
-    return mvdrBeamformer_.isEnabled();
+    return mvdrBeamformer_.isEnabled() && stereoInputAvailable_;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -597,24 +597,37 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // ─── MVDR Beamforming: deinterleave stereo + process ─────────────────
     if (config_.beamformingEnabled && stereoInputAvailable_ && mvdrBeamformer_.isEnabled()) {
         // inputData es interleaved stereo: [L0, R0, L1, R1, ...]
-        // Deinterleave a 2 buffers mono temporales
-        int framesToProcess = std::min(numFrames, kMaxBeamBlockSize);
-        for (int i = 0; i < framesToProcess; ++i) {
-            beamCh0_[i] = inPtr[i * 2];      // Canal 0 (mic inferior)
-            beamCh1_[i] = inPtr[i * 2 + 1];  // Canal 1 (mic superior)
+        // Procesar en chunks de kMaxBeamBlockSize para no truncar frames
+        int framesRemaining = numFrames;
+        int offset = 0;
+        while (framesRemaining > 0) {
+            int chunkSize = std::min(framesRemaining, kMaxBeamBlockSize);
+            for (int i = 0; i < chunkSize; ++i) {
+                beamCh0_[i] = inPtr[(offset + i) * 2];      // Canal 0 (mic inferior)
+                beamCh1_[i] = inPtr[(offset + i) * 2 + 1];  // Canal 1 (mic superior)
+            }
+
+            // VAD del SceneAnalyzer (ultima lectura disponible)
+            bool vadActive = sceneAnalyzer_.getVad().isVoiceActive();
+
+            // Procesar MVDR -> salida mono en outPtr
+            mvdrBeamformer_.process(beamCh0_, beamCh1_,
+                                    outPtr + offset, chunkSize, vadActive);
+            offset += chunkSize;
+            framesRemaining -= chunkSize;
         }
-
-        // VAD del SceneAnalyzer (ultima lectura disponible)
-        bool vadActive = sceneAnalyzer_.getVad().isVoiceActive();
-
-        // Procesar MVDR -> salida mono en outPtr
-        mvdrBeamformer_.process(beamCh0_, beamCh1_,
-                                outPtr, framesToProcess, vadActive);
     } else if (config_.beamformingEnabled && stereoInputAvailable_) {
         // Beamformer deshabilitado pero captura estereo activa -> usar solo ch0
-        int framesToProcess = std::min(numFrames, kMaxBeamBlockSize);
-        for (int i = 0; i < framesToProcess; ++i) {
-            outPtr[i] = inPtr[i * 2];  // Solo mic inferior (canal 0)
+        // Procesar en chunks para no truncar frames
+        int framesRemaining = numFrames;
+        int offset = 0;
+        while (framesRemaining > 0) {
+            int chunkSize = std::min(framesRemaining, kMaxBeamBlockSize);
+            for (int i = 0; i < chunkSize; ++i) {
+                outPtr[offset + i] = inPtr[(offset + i) * 2];  // Solo mic inferior (canal 0)
+            }
+            offset += chunkSize;
+            framesRemaining -= chunkSize;
         }
     } else {
         // Legacy: mono directo
