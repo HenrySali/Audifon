@@ -1356,6 +1356,9 @@ class _ActiveView extends StatelessWidget {
           // Limpiador de ruido DNN (IA) — anti "tktktkt"
           const _DnnNoiseCleanerCard(),
           const SizedBox(height: 16),
+          // Beamforming MVDR dual-mic — prioriza voz frontal
+          const _BeamformingToggleCard(),
+          const SizedBox(height: 16),
           // Visualización del EQ activo (ganancias realmente aplicadas al DSP).
           // Prioriza `activeEqGains` (preset aplicado, ej: Smart Scene) sobre
           // `bundle.gainsDb` (prescripción base sin personalizar).
@@ -4079,6 +4082,105 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// BEAMFORMING MVDR 2-MIC — Toggle de habilitación/deshabilitación
+// =============================================================================
+
+/// Hive key para persistir el estado del beamforming MVDR dual-mic.
+const String _kBeamformingEnabledKey = 'beamformingEnabled';
+
+/// Toggle para habilitar/deshabilitar el beamformer MVDR dual-mic.
+///
+/// Persiste el estado en Hive (box `settings_box`, key `beamformingEnabled`,
+/// default `false`). Al cambiar, llama a
+/// `AudioBridgeImpl().setBeamformingEnabled(enabled)` para comunicar al
+/// motor nativo. Si el motor esta activo (AmplificationActive), el toggle
+/// tiene efecto inmediato. Si no, el valor se persiste y se aplica en el
+/// proximo `startAudio`.
+class _BeamformingToggleCard extends StatefulWidget {
+  const _BeamformingToggleCard();
+
+  @override
+  State<_BeamformingToggleCard> createState() => _BeamformingToggleCardState();
+}
+
+class _BeamformingToggleCardState extends State<_BeamformingToggleCard> {
+  bool _enabled = false;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFromHive();
+  }
+
+  Future<void> _loadFromHive() async {
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      final value = box.get(_kBeamformingEnabledKey);
+      if (mounted) {
+        setState(() {
+          _enabled = value is bool ? value : false;
+          _loaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  Future<void> _onChanged(bool enabled) async {
+    setState(() => _enabled = enabled);
+
+    // Persistir en Hive
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      await box.put(_kBeamformingEnabledKey, enabled);
+    } catch (_) {/* best effort */}
+
+    // Comunicar al motor nativo
+    try {
+      await AudioBridgeImpl().setBeamformingEnabled(enabled);
+    } catch (_) {/* tolera MissingPluginException si el motor no esta activo */}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox.shrink();
+
+    return Card(
+      color: const Color(0xFF16213e),
+      child: SwitchListTile(
+        secondary: Icon(
+          Icons.spatial_audio,
+          color: _enabled ? Colors.cyanAccent : Colors.white60,
+          size: 24,
+        ),
+        title: const Text(
+          'Beamforming 2-Mic',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: const Text(
+          'MVDR: prioriza voz frontal, atenúa ruido lateral',
+          style: TextStyle(
+            color: Colors.white60,
+            fontSize: 11,
+          ),
+        ),
+        value: _enabled,
+        onChanged: _onChanged,
+        activeColor: Colors.cyanAccent,
+        inactiveThumbColor: Colors.white60,
+        inactiveTrackColor: Colors.white12,
       ),
     );
   }
