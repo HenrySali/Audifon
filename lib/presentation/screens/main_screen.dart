@@ -1246,6 +1246,9 @@ class _ActiveView extends StatelessWidget {
               context.read<AmplificationBloc>().add(const StopAmplification());
             },
           ),
+          const SizedBox(height: 16),
+          // Beamforming MVDR dual-mic — prioriza voz frontal
+          const _BeamformingToggleCard(),
           const SizedBox(height: 20),
           // Selector de modo de prescriptor (Smart-NL2 / Smart-NL3) — Req 5.1–5.5
           PrescriberModeSelector(
@@ -1355,9 +1358,6 @@ class _ActiveView extends StatelessWidget {
           const SizedBox(height: 16),
           // Limpiador de ruido DNN (IA) — anti "tktktkt"
           const _DnnNoiseCleanerCard(),
-          const SizedBox(height: 16),
-          // Beamforming MVDR dual-mic — prioriza voz frontal
-          const _BeamformingToggleCard(),
           const SizedBox(height: 16),
           // Visualización del EQ activo (ganancias realmente aplicadas al DSP).
           // Prioriza `activeEqGains` (preset aplicado, ej: Smart Scene) sobre
