@@ -1181,6 +1181,41 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDnnIsActive(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MVDR Dual-Mic Beamforming — Phase 3 (JNI bridge)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Habilita/deshabilita el MVDR dual-mic beamformer.
+/// Thread-safe: delega a AudioEngine::setBeamformingEnabled (std::atomic).
+///
+/// @param enabled true para activar beamforming, false para bypass (mono passthrough).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetBeamformingEnabled(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setBeamformingEnabled(enabled == JNI_TRUE);
+}
+
+/// Consulta si el MVDR beamformer esta activo (enabled + procesando).
+/// Thread-safe: lee std::atomic<bool> interno.
+///
+/// @return true si el beamformer esta habilitado y procesando, false en caso contrario.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetBeamformingActive(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return g_engine->isBeamformingActive() ? JNI_TRUE : JNI_FALSE;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Diagnostic Recorder JNI Functions
 // ─────────────────────────────────────────────────────────────────────────────
 

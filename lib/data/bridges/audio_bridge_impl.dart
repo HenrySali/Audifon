@@ -404,6 +404,39 @@ class AudioBridgeImpl implements AudioBridge {
     }
   }
 
+  // ─── MVDR Dual-Mic Beamforming ─────────────────────────────────────────
+
+  @override
+  Future<void> setBeamformingEnabled(bool enabled) async {
+    await _safeInvokeVoid(
+      'setBeamformingEnabled',
+      <String, dynamic>{'enabled': enabled},
+    );
+  }
+
+  @override
+  Future<bool> getBeamformingActive() async {
+    try {
+      final result =
+          await _methodChannel.invokeMethod<bool>('getBeamformingActive');
+      return result ?? false;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'getBeamformingActive: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return false;
+    } on PlatformException catch (e) {
+      developer.log(
+        'getBeamformingActive PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return false;
+    }
+  }
+
   /// Identificador de logger usado en los métodos del bridge que toleran
   /// fallos nativos sin propagar excepción (MHL Prescripción, Modo Música,
   /// Diagnostic Recording).

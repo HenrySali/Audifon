@@ -336,6 +336,16 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetDnnIsActive()
                     result.success(active)
                 }
+                // ─── MVDR Dual-Mic Beamforming ──────────────────────────
+                "setBeamformingEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    nativeBridge.nativeSetBeamformingEnabled(enabled)
+                    result.success(null)
+                }
+                "getBeamformingActive" -> {
+                    val active = nativeBridge.nativeGetBeamformingActive()
+                    result.success(active)
+                }
                 // ─── MHL Prescripción / Modo Música ─────────────────────
                 // Espejo bit-a-bit de AudioMethodChannelPatient.kt
                 // (tecnico-paciente-feature-parity, Requirements 1.1 y 1.2).

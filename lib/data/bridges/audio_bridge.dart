@@ -345,4 +345,22 @@ abstract class AudioBridge {
   ///
   /// Requisitos: 2.1, 2.2, 2.10, 2.11, 2.12, 2.13, 6.13
   Future<Map<String, dynamic>?> getDspStageMetrics();
+
+  /// Habilita/deshabilita el MVDR dual-mic beamformer.
+  ///
+  /// Cuando está habilitado, el motor captura audio en estéreo desde dos
+  /// micrófonos y aplica el algoritmo MVDR (Minimum Variance Distortionless
+  /// Response) para mejorar la relación señal-ruido en la dirección frontal.
+  /// Cuando está deshabilitado, el motor vuelve a captura mono (un solo mic).
+  ///
+  /// El beamformer se inserta ANTES del DNN en el pipeline DSP.
+  /// Default: false (retrocompatible).
+  Future<void> setBeamformingEnabled(bool enabled);
+
+  /// Consulta si el MVDR beamformer está activo.
+  ///
+  /// Retorna `true` si el beamformer está habilitado y procesando audio
+  /// en modo estéreo. Retorna `false` si está deshabilitado, si el motor
+  /// no está corriendo, o si el dispositivo no soporta captura estéreo.
+  Future<bool> getBeamformingActive();
 }

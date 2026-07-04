@@ -511,6 +511,25 @@ class NativeAudioBridge {
      */
     external fun nativeGetDnnIsActive(): Boolean
 
+    // ─── MVDR Dual-Mic Beamforming ─────────────────────────────────────
+
+    /**
+     * Habilita/deshabilita el MVDR dual-mic beamformer.
+     * Thread-safe (std::atomic interno). Si el motor no está activo, la
+     * llamada se ignora silenciosamente.
+     *
+     * @param enabled true para activar beamforming, false para bypass mono.
+     */
+    external fun nativeSetBeamformingEnabled(enabled: Boolean)
+
+    /**
+     * Consulta si el MVDR beamformer está activo (enabled + procesando).
+     * Thread-safe (lee std::atomic<bool> interno).
+     *
+     * @return true si el beamformer está habilitado y procesando audio.
+     */
+    external fun nativeGetBeamformingActive(): Boolean
+
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.
