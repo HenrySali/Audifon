@@ -1249,6 +1249,76 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetBeamformingActive(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Enhancement Engine selector — spec gtcrn-dual-channel (tarea 4.1, JNI bridge)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Selecciona el motor de realce de voz (BYPASS / DUAL-DNN / MVDR).
+///
+/// Contrato JNI (NO reordenar — mapea al enum `EnhancementEngineMode`):
+///   0 → kBypass         (ch0 passthrough, sin realce; default de arranque)
+///   1 → kDualChannelDnn (2 mics → GTCRN dual → mono realzado)
+///   2 → kMvdrBackup     (2 mics → MVDR beamformer → mono realzado)
+///
+/// Los enteros fuera de [0, 2] se rechazan (no-op + LOGW) para no construir
+/// un `EnhancementEngineMode` inválido vía static_cast.
+///
+/// Geometría de captura: los modos DUAL y MVDR necesitan captura estéreo
+/// (2 canales) para recibir ch0/ch1. Reutilizamos el flag global
+/// `g_beamformingEnabled` (el mismo que consume `nativeStart` para abrir el
+/// stream estéreo) y lo actualizamos según el modo:
+///   - DUAL o MVDR → g_beamformingEnabled = true  (próximo start abre estéreo)
+///   - BYPASS      → g_beamformingEnabled = false (próximo start abre mono)
+/// Así, si el usuario elige DUAL/MVDR ANTES del start, `nativeStart` ya abre
+/// estéreo. Si el motor YA está corriendo, `AudioEngine::setEnhancementEngineMode`
+/// se encarga del re-open mono↔estéreo en caliente (Fix #3, tarea 3.4). El flag
+/// mantiene la geometría correcta para cualquier stop→start posterior.
+///
+/// @param mode 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetEnhancementEngineMode(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jint mode) {
+
+    // Validación de rango del contrato JNI antes del static_cast.
+    if (mode < 0 || mode > 2) {
+        LOGW("nativeSetEnhancementEngineMode: invalid mode %d (esperado 0..2) — ignorado", mode);
+        return;
+    }
+
+    // Actualizar la geometría de captura solicitada para el próximo start.
+    // DUAL (1) y MVDR (2) requieren estéreo; BYPASS (0) corre mono.
+    const bool needsStereo = (mode != 0);
+    g_beamformingEnabled.store(needsStereo, std::memory_order_release);
+
+    // Si el motor está corriendo, aplicar el modo en caliente. El AudioEngine
+    // maneja internamente el crossfade anti-clic y el re-open estéreo/mono si
+    // cambia la geometría. Si el motor está idle, el flag de arriba asegura
+    // que el próximo nativeStart abra con la geometría correcta.
+    if (g_running.load(std::memory_order_acquire) && g_engine != nullptr) {
+        g_engine->setEnhancementEngineMode(static_cast<EnhancementEngineMode>(mode));
+    }
+    LOGI("nativeSetEnhancementEngineMode: mode=%d (stereo=%s)",
+         mode, needsStereo ? "yes" : "no");
+}
+
+/// Consulta el motor de realce seleccionado actualmente.
+/// Thread-safe: lee el std::atomic<EnhancementEngineMode> interno del engine.
+///
+/// @return 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup. Si el motor no está
+///         activo devuelve 0 (kBypass), coherente con el default de arranque.
+JNIEXPORT jint JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetEnhancementEngineMode(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return 0;  // kBypass
+    }
+    return static_cast<jint>(g_engine->getEnhancementEngineMode());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Diagnostic Recorder JNI Functions
 // ─────────────────────────────────────────────────────────────────────────────
 

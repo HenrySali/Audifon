@@ -20,6 +20,42 @@ enum AudioEngineState {
   error,
 }
 
+/// Motor de realce de voz activo (spec `gtcrn-dual-channel`).
+///
+/// Reemplaza el toggle binario de beamforming por una selección de tres
+/// motores mutuamente excluyentes. El valor entero [nativeValue] es el
+/// contrato con el lado nativo: `setEnhancementEngineMode` espera
+/// `{"mode": Int}` donde 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup.
+enum EnhancementEngineMode {
+  /// Sin realce: passthrough del canal 0. Default de arranque seguro.
+  bypass(0),
+
+  /// Realce DNN dual-channel (GTCRN). Motor recomendado.
+  dualChannelDnn(1),
+
+  /// Beamformer MVDR clásico. Respaldo.
+  mvdrBackup(2);
+
+  const EnhancementEngineMode(this.nativeValue);
+
+  /// Valor entero enviado al motor nativo vía MethodChannel.
+  final int nativeValue;
+
+  /// Reconstruye el modo desde el entero nativo. Ante un valor
+  /// desconocido retorna [EnhancementEngineMode.bypass] (fail-safe).
+  static EnhancementEngineMode fromNative(int value) {
+    switch (value) {
+      case 1:
+        return EnhancementEngineMode.dualChannelDnn;
+      case 2:
+        return EnhancementEngineMode.mvdrBackup;
+      case 0:
+      default:
+        return EnhancementEngineMode.bypass;
+    }
+  }
+}
+
 /// Interfaz abstracta de comunicación Dart ↔ Android Native.
 ///
 /// Define el contrato para controlar el pipeline de audio DSP nativo
@@ -363,4 +399,45 @@ abstract class AudioBridge {
   /// en modo estéreo. Retorna `false` si está deshabilitado, si el motor
   /// no está corriendo, o si el dispositivo no soporta captura estéreo.
   Future<bool> getBeamformingActive();
+
+  // ─── Selector de motor de realce (spec gtcrn-dual-channel) ─────────────
+
+  /// Selecciona el motor de realce de voz activo.
+  ///
+  /// Envía `{"mode": Int}` al motor nativo (`setEnhancementEngineMode`),
+  /// donde el entero proviene de [EnhancementEngineMode.nativeValue]
+  /// (0=Bypass, 1=DualChannelDnn, 2=MvdrBackup). Reemplaza al toggle
+  /// binario [setBeamformingEnabled]. Si el motor está activo el cambio
+  /// tiene efecto inmediato (con crossfade anti-clic en nativo); si no,
+  /// se aplica en el próximo `startAudio`.
+  ///
+  /// Requisitos: 2.1, 2.2
+  Future<void> setEnhancementEngineMode(EnhancementEngineMode mode);
+
+  /// Consulta el motor de realce actualmente seleccionado.
+  ///
+  /// Retorna [EnhancementEngineMode.bypass] si el motor nativo está idle,
+  /// si el handler no está implementado, o ante cualquier fallo (fail-safe).
+  ///
+  /// Requisitos: 2.1
+  Future<EnhancementEngineMode> getEnhancementEngineMode();
+
+  /// Consulta si el DNN de realce está realmente activo y procesando.
+  ///
+  /// Retorna `true` solo si el modelo se cargó correctamente y el worker
+  /// está corriendo. Retorna `false` si el motor cayó a Bypass por fallo
+  /// de carga del `.pt`, si el motor no está corriendo, o si el handler
+  /// nativo no está implementado. Sirve para el indicador de estado real.
+  ///
+  /// Requisitos: 4.6, 5.2
+  Future<bool> getDnnIsActive();
+
+  /// Ajusta manualmente el tamaño de bloque / latencia del DNN.
+  ///
+  /// [blockSize] en muestras (por canal). El backend implementará el
+  /// setter nativo en la tarea 7; por ahora la llamada es tolerante a
+  /// `MissingPluginException` (no-op si el handler no existe).
+  ///
+  /// Requisitos: 5.3 (ajuste fino de latencia — próximamente en tarea 7)
+  Future<void> setDnnBlockSize(int blockSize);
 }

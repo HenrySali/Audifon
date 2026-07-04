@@ -85,6 +85,14 @@
 # Kotlin metadata (necesario para algunos plugins)
 -keep class kotlin.Metadata { *; }
 
+# PyTorch Android Lite — JNI bridge para inferencia del modelo GTCRN dual
+# Las clases org.pytorch.* usan native methods y reflection interna.
+-keep class org.pytorch.** { *; }
+-keep class com.facebook.jni.** { *; }
+-dontwarn org.pytorch.**
+-dontwarn com.facebook.jni.**
+-dontwarn com.facebook.soloader.**
+
 # AndroidX Core (por compatibilidad con compileSdk 34)
 -keep class androidx.core.** { *; }
 -dontwarn androidx.core.**

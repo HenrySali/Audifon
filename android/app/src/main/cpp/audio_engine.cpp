@@ -300,15 +300,40 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     // siga viendo audio a 16 kHz independientemente de lo que negocie Oboe.
     // Idempotente: si el sr no cambió respecto a la última llamada, es no-op.
     dnnDenoiser_.setInputSampleRate(effectiveSampleRate);
+    // Misma rate nativa para la instancia dual-channel (LibTorch). Su
+    // resampler interno lleva ambos canales a 16 kHz. Idempotente.
+    dnnDenoiserDual_.setInputSampleRate(effectiveSampleRate);
+
+    // ─── Enhancement Engine: crossfade y estado inicial (tarea 3.5/3.7) ──
+    // Crossfade entre motores ≈ 20 ms a la rate nativa (mínimo 1 sample).
+    engineXfadeSamples_ = std::max(1, static_cast<int>(effectiveSampleRate * 0.02f));
+    // Sin crossfade pendiente al arrancar; el callback lo dispara si el modo
+    // seleccionado difiere de `activeEngine_`.
+    engineXfadeRemaining_ = 0;
+    if (!firstStartDone_) {
+        // Tarea 3.7 / R8.3: el PRIMER arranque siempre es BYPASS, sin importar
+        // los flags de config (beamformingEnabled). El usuario cambia de modo
+        // desde la UI (tarea 5) vía setEnhancementEngineMode.
+        engineMode_.store(EnhancementEngineMode::kBypass, std::memory_order_release);
+        dnnDenoiserDual_.setEnabled(false);
+    }
+    // Sincronizar el motor "activo" del callback con el modo seleccionado
+    // (sin crossfade: es un arranque/re-open de stream, no un toggle runtime).
+    activeEngine_ = engineMode_.load(std::memory_order_acquire);
+    prevEngine_ = activeEngine_;
 
     // ─── Step 5b: Initialize Smart Scene Engine analyzer (Fase 1) ────────
     sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);
 
     // ─── Step 5c: Initialize MVDR Beamformer ─────────────────────────────
+    // El beamformer se habilita según el selector de motor (no ya según el
+    // flag legacy config_.beamformingEnabled): sólo procesa cuando el modo
+    // activo es kMvdrBackup y hay captura estéreo. renderEngineChunk() lo
+    // invoca directamente; si estuviera deshabilitado haría bypass a ch0.
     mvdrBeamformer_.init(effectiveSampleRate);
-    if (config_.beamformingEnabled && stereoInputAvailable_) {
-        mvdrBeamformer_.setEnabled(true);
-    }
+    const bool mvdrWanted =
+        (engineMode_.load(std::memory_order_acquire) == EnhancementEngineMode::kMvdrBackup);
+    mvdrBeamformer_.setEnabled(mvdrWanted && stereoInputAvailable_);
 
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
     setInputStream(inputStream_.get());
@@ -332,6 +357,7 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
 
     // ─── Step 8: Success ─────────────────────────────────────────────────
     running_.store(true, std::memory_order_release);
+    firstStartDone_ = true;
     callbackCounter_ = 0;
 
     LOGI("AudioEngine started — sampleRate=%d, framesPerBurst=%d, "
@@ -466,13 +492,36 @@ int32_t AudioEngine::getInputSessionId() const {
 
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
-    const bool ok = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
-    if (!ok) {
-        LOGW("initDnnDenoiser: model not loaded — DNN will be permanently bypassed");
+
+    // ─── Instancia mono legacy (GTCRN mono, ONNXRuntime) ────────────────
+    // Stage `process()` del chain post-realce, controlado por setDnnEnabled().
+    const bool okMono = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
+    if (!okMono) {
+        LOGW("initDnnDenoiser[mono]: model not loaded — mono DNN permanently bypassed");
     } else {
-        LOGI("initDnnDenoiser: model ready");
+        LOGI("initDnnDenoiser[mono]: model ready");
     }
-    return ok;
+
+    // ─── Instancia dual-channel (GTCRN dual, LibTorch) ──────────────────
+    // Motor de realce del modo kDualChannelDnn (spec gtcrn-dual-channel).
+    // Se inicializa aparte porque initialize()/initializeDual() son
+    // mutuamente excluyentes en el wrapper (cada uno arma UN worker para UN
+    // runtime). Si el .pt no carga o el shape no coincide, la instancia
+    // queda en bypass seguro (processStereo → ch0 passthrough) y el modo
+    // kDualChannelDnn se degrada a passthrough sin cortar el audio (R4.x).
+    const bool okDual =
+        dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.ptl");
+    if (!okDual) {
+        LOGW("initDnnDenoiser[dual]: .pt not loaded — kDualChannelDnn will bypass to ch0");
+    } else {
+        LOGI("initDnnDenoiser[dual]: model ready (inputChannels=%d)",
+             static_cast<int>(dnnDenoiserDual_.inputChannels()));
+    }
+
+    // Retornamos el estado del mono para no romper el contrato JNI existente
+    // (nativeInitDnnDenoiser). El estado del dual se consulta vía
+    // getEnhancementEngineMode + isActive de la instancia dual (tarea 5).
+    return okMono;
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {
@@ -495,27 +544,112 @@ void AudioEngine::setDnnIntensity(float intensity) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void AudioEngine::setBeamformingEnabled(bool enabled) {
-    mvdrBeamformer_.setEnabled(enabled);
-
-    // Fix #3 (auditoría MVDR): habilitar/deshabilitar en runtime requiere
-    // reabrir los streams porque la geometría de captura (mono vs estéreo)
-    // se decide en openInputStream() según config_.beamformingEnabled. Si el
-    // motor corre en mono y se pide beamforming, hay que reiniciar en estéreo
-    // (y viceversa). Si ya estamos en el modo correcto, solo togglea el flag
-    // del beamformer (arriba) sin tocar los streams.
-    if (enabled && running_.load(std::memory_order_acquire) && !stereoInputAvailable_) {
-        config_.beamformingEnabled = true;
-        stop();
-        start(config_);
-    } else if (!enabled && running_.load(std::memory_order_acquire) && stereoInputAvailable_) {
-        config_.beamformingEnabled = false;
-        stop();
-        start(config_);
-    }
+    // COMPAT (tarea 3.6): el toggle binario histórico de beamforming ahora
+    // mapea al selector de motor de 3 estados:
+    //   setBeamformingEnabled(true)  → kMvdrBackup  (2 mics → MVDR → mono)
+    //   setBeamformingEnabled(false) → kBypass      (ch0 passthrough)
+    // Toda la lógica de re-open estéreo/mono (Fix #3) vive ahora en
+    // setEnhancementEngineMode; este wrapper sólo traduce el bool al modo.
+    setEnhancementEngineMode(enabled ? EnhancementEngineMode::kMvdrBackup
+                                     : EnhancementEngineMode::kBypass);
 }
 
 bool AudioEngine::isBeamformingActive() const {
-    return mvdrBeamformer_.isEnabled() && stereoInputAvailable_;
+    return mvdrBeamformer_.isEnabled() && stereoInputAvailable_
+        && engineMode_.load(std::memory_order_acquire)
+               == EnhancementEngineMode::kMvdrBackup;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enhancement Engine selector (spec gtcrn-dual-channel, tarea 3)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// MAPEO DE SETTERS LEGACY (tarea 3.6) — documentado para no romper callers:
+//
+//   setBeamformingEnabled(true)   → setEnhancementEngineMode(kMvdrBackup)
+//   setBeamformingEnabled(false)  → setEnhancementEngineMode(kBypass)
+//
+//   setDnnEnabled(true/false)     → SIN CAMBIOS. Controla la instancia MONO
+//     legacy (dnnDenoiser_) que corre como stage `process()` del chain DSP,
+//     independiente del selector de motor. El motor dual (dnnDenoiserDual_)
+//     se selecciona SÓLO vía setEnhancementEngineMode(kDualChannelDnn).
+//     Rationale: el diseño exige coexistencia mono(ONNX)+dual(LibTorch); el
+//     mono legacy es una etapa distinta del pipeline y no debe verse forzado
+//     por el selector. Así, los callers de setDnnEnabled siguen funcionando.
+
+void AudioEngine::setEnhancementEngineMode(EnhancementEngineMode mode) {
+    const EnhancementEngineMode prev =
+        engineMode_.load(std::memory_order_acquire);
+
+    // Publicar el nuevo modo (lock-free). El callback lo leerá y arrancará
+    // el crossfade entre motores si difiere del `activeEngine_` corriente.
+    engineMode_.store(mode, std::memory_order_release);
+
+    // Mantener el flag del MVDR coherente con el modo (su process() hace
+    // bypass a ch0 si no está enabled; renderEngineChunk lo invoca directo).
+    mvdrBeamformer_.setEnabled(mode == EnhancementEngineMode::kMvdrBackup
+                               && stereoInputAvailable_);
+
+    // Habilitar/deshabilitar la instancia dual: processStereo() hace bypass a
+    // ch0 salvo que enabled_==true (usa su propio crossfade dry/wet interno
+    // de 50 ms, que complementa el crossfade ENTRE motores del callback).
+    dnnDenoiserDual_.setEnabled(mode == EnhancementEngineMode::kDualChannelDnn);
+
+    // Los modos kDualChannelDnn y kMvdrBackup requieren captura estéreo.
+    // Reutilizamos la lógica de re-open (Fix #3) SÓLO cuando cambia la
+    // geometría de captura mono→estéreo (tarea 3.4). kBypass no fuerza
+    // re-open: se queda en la geometría actual (lo más simple).
+    const bool needStereo = (mode == EnhancementEngineMode::kDualChannelDnn
+                             || mode == EnhancementEngineMode::kMvdrBackup);
+
+    if (needStereo && running_.load(std::memory_order_acquire)
+        && !stereoInputAvailable_) {
+        // Estamos en mono y el nuevo modo necesita 2 mics → re-open estéreo.
+        config_.beamformingEnabled = true;
+        stop();
+        start(config_);
+        // Tras el re-open, mvdrBeamformer_ ya quedó configurado por start()
+        // según el modo (Step 5c). Sincronizamos enabled por las dudas.
+        mvdrBeamformer_.setEnabled(mode == EnhancementEngineMode::kMvdrBackup
+                                   && stereoInputAvailable_);
+    }
+
+    LOGI("setEnhancementEngineMode: %d → %d (stereo=%d, running=%d)",
+         static_cast<int>(prev), static_cast<int>(mode),
+         stereoInputAvailable_ ? 1 : 0,
+         running_.load(std::memory_order_acquire) ? 1 : 0);
+}
+
+EnhancementEngineMode AudioEngine::getEnhancementEngineMode() const {
+    return engineMode_.load(std::memory_order_acquire);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enhancement Engine — render de un chunk por modo (audio thread, no alloc)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AudioEngine::renderEngineChunk(EnhancementEngineMode mode,
+                                    const float* ch0, const float* ch1,
+                                    float* dst, int chunk, bool vadActive) {
+    switch (mode) {
+        case EnhancementEngineMode::kDualChannelDnn:
+            // 2 mics → GTCRN dual (LibTorch). Bypass seguro interno si el
+            // modelo no cargó o hay underrun (processStereo copia ch0 a dst).
+            dnnDenoiserDual_.processStereo(ch0, ch1, dst, chunk);
+            break;
+        case EnhancementEngineMode::kMvdrBackup:
+            // 2 mics → MVDR → mono. Si el beamformer está deshabilitado,
+            // process() ya hace bypass a ch0 internamente.
+            mvdrBeamformer_.process(ch0, ch1, dst, chunk, vadActive);
+            break;
+        case EnhancementEngineMode::kBypass:
+        default:
+            // ch0 passthrough (Property 2: identidad bit-exact sobre ch0).
+            if (dst != ch0) {
+                std::memcpy(dst, ch0, chunk * sizeof(float));
+            }
+            break;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -610,44 +744,82 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     const float* inPtr = static_cast<const float*>(inputData);
     float* outPtr = static_cast<float*>(outputData);
 
-    // ─── MVDR Beamforming: deinterleave stereo + process ─────────────────
-    if (config_.beamformingEnabled && stereoInputAvailable_ && mvdrBeamformer_.isEnabled()) {
-        // inputData es interleaved stereo: [L0, R0, L1, R1, ...]
-        // Procesar en chunks de kMaxBeamBlockSize para no truncar frames
+    // ─── Enhancement Engine stage (spec gtcrn-dual-channel, tarea 3.3) ──
+    // Enruta el realce por EnhancementEngineMode y produce el mono `outPtr`:
+    //   kDualChannelDnn → deinterleave ch0/ch1 → DnnDenoiser::processStereo
+    //   kMvdrBackup     → deinterleave ch0/ch1 → MvdrBeamformer::process
+    //   kBypass         → ch0 passthrough (o mono directo)
+    // Se procesa en chunks de kMaxBeamBlockSize (contrato del MVDR: overread
+    // de su outputBuf_ si chunk > kFftSize; el dual y el bypass también van
+    // troceados para reutilizar los mismos buffers de deinterleave).
+    //
+    // Transición sin clic (R2.5, tarea 3.5): al cambiar de modo en runtime se
+    // hace un crossfade lineal corto ENTRE motores (distinto del crossfade
+    // dry/wet interno del DnnDenoiser). Durante la ventana se renderiza el
+    // motor saliente en `engineXfadeBuf_` y se mezcla con el entrante.
+    //
+    // Captura mono o modo dual/MVDR sin estéreo disponible → BYPASS
+    // (Property 5, R4.5).
+    {
+        EnhancementEngineMode target = engineMode_.load(std::memory_order_acquire);
+        if (!stereoInputAvailable_
+            && (target == EnhancementEngineMode::kDualChannelDnn
+                || target == EnhancementEngineMode::kMvdrBackup)) {
+            target = EnhancementEngineMode::kBypass;
+        }
+
+        // Disparar crossfade entre motores si cambió el modo activo.
+        if (target != activeEngine_) {
+            prevEngine_ = activeEngine_;
+            activeEngine_ = target;
+            engineXfadeRemaining_ = engineXfadeSamples_;
+        }
+
+        const float xfadeStepInv =
+            1.0f / static_cast<float>(engineXfadeSamples_ > 0 ? engineXfadeSamples_ : 1);
+        const bool vadActive = sceneAnalyzer_.getVad().isVoiceActive();
+
         int framesRemaining = numFrames;
         int offset = 0;
         while (framesRemaining > 0) {
-            int chunkSize = std::min(framesRemaining, kMaxBeamBlockSize);
-            for (int i = 0; i < chunkSize; ++i) {
-                beamCh0_[i] = inPtr[(offset + i) * 2];      // Canal 0 (mic inferior)
-                beamCh1_[i] = inPtr[(offset + i) * 2 + 1];  // Canal 1 (mic superior)
+            const int chunkSize = std::min(framesRemaining, kMaxBeamBlockSize);
+
+            // Deinterleave a ch0/ch1 (mono → ch0 = ch1 = input directo).
+            if (stereoInputAvailable_) {
+                for (int i = 0; i < chunkSize; ++i) {
+                    beamCh0_[i] = inPtr[(offset + i) * 2];      // mic inferior (ch0)
+                    beamCh1_[i] = inPtr[(offset + i) * 2 + 1];  // mic superior (ch1)
+                }
+            } else {
+                for (int i = 0; i < chunkSize; ++i) {
+                    beamCh0_[i] = inPtr[offset + i];
+                    beamCh1_[i] = beamCh0_[i];
+                }
             }
 
-            // VAD del SceneAnalyzer (ultima lectura disponible)
-            bool vadActive = sceneAnalyzer_.getVad().isVoiceActive();
+            // Motor entrante → outPtr + offset.
+            renderEngineChunk(activeEngine_, beamCh0_, beamCh1_,
+                              outPtr + offset, chunkSize, vadActive);
 
-            // Procesar MVDR -> salida mono en outPtr
-            mvdrBeamformer_.process(beamCh0_, beamCh1_,
-                                    outPtr + offset, chunkSize, vadActive);
+            // Crossfade entre motores: renderizar el saliente y mezclar.
+            if (engineXfadeRemaining_ > 0) {
+                renderEngineChunk(prevEngine_, beamCh0_, beamCh1_,
+                                  engineXfadeBuf_, chunkSize, vadActive);
+                for (int i = 0; i < chunkSize; ++i) {
+                    // g: 0 → 1 conforme remaining decrece (el entrante gana).
+                    float g = 1.0f -
+                        static_cast<float>(engineXfadeRemaining_) * xfadeStepInv;
+                    if (g < 0.0f) g = 0.0f;
+                    else if (g > 1.0f) g = 1.0f;
+                    outPtr[offset + i] =
+                        engineXfadeBuf_[i] * (1.0f - g) + outPtr[offset + i] * g;
+                    if (engineXfadeRemaining_ > 0) --engineXfadeRemaining_;
+                }
+            }
+
             offset += chunkSize;
             framesRemaining -= chunkSize;
         }
-    } else if (config_.beamformingEnabled && stereoInputAvailable_) {
-        // Beamformer deshabilitado pero captura estereo activa -> usar solo ch0
-        // Procesar en chunks para no truncar frames
-        int framesRemaining = numFrames;
-        int offset = 0;
-        while (framesRemaining > 0) {
-            int chunkSize = std::min(framesRemaining, kMaxBeamBlockSize);
-            for (int i = 0; i < chunkSize; ++i) {
-                outPtr[offset + i] = inPtr[(offset + i) * 2];  // Solo mic inferior (canal 0)
-            }
-            offset += chunkSize;
-            framesRemaining -= chunkSize;
-        }
-    } else {
-        // Legacy: mono directo
-        std::memcpy(outPtr, inPtr, numFrames * sizeof(float));
     }
 
     // ─── Diagnostic: check if input has actual audio data ────────────────
@@ -828,7 +1000,9 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // ─── Calibration Spectrum Validator (Fase 2, read-only on input) ─────
     // Sólo procesa si el técnico activó una secuencia de validación.
     // En modo estereo, alimentar con el canal de referencia (ch0, mono).
-    if (config_.beamformingEnabled && stereoInputAvailable_) {
+    // NOTA: beamCh0_ contiene el ÚLTIMO chunk deinterleaveado (igual que antes
+    // en modo chunked); es el canal de referencia disponible sin recomputar.
+    if (stereoInputAvailable_) {
         toneAnalyzer_.process(beamCh0_, numFrames);
     } else {
         toneAnalyzer_.process(inPtr, numFrames);
@@ -841,7 +1015,7 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
 
     // ─── Diagnostic Recorder: feed pre/post DSP ─────────────────────────
     // En modo estereo, el pre-DSP es el canal de referencia (ch0, mono).
-    if (config_.beamformingEnabled && stereoInputAvailable_) {
+    if (stereoInputAvailable_) {
         diagnosticRecorder_.feedPreDsp(beamCh0_, numFrames);
     } else {
         diagnosticRecorder_.feedPreDsp(inPtr, numFrames);

@@ -542,6 +542,31 @@ class NativeAudioBridge {
      */
     external fun nativeGetBeamformingActive(): Boolean
 
+    // ─── Enhancement Engine selector (spec gtcrn-dual-channel) ──────────
+
+    /**
+     * Selecciona el motor de realce de voz.
+     *
+     * Contrato del entero (mapea al enum C++ `EnhancementEngineMode`):
+     *   0 = Bypass (ch0 passthrough, default de arranque),
+     *   1 = DualChannelDnn (GTCRN dual → mono realzado),
+     *   2 = MvdrBackup (MVDR beamformer → mono realzado).
+     *
+     * Los modos 1 y 2 necesitan captura estéreo. El lado nativo actualiza
+     * el flag de captura estéreo solicitada (el mismo que consume
+     * `nativeStart`) según el modo, y hace el re-open en caliente si el
+     * motor ya está corriendo. Thread-safe. Valores fuera de [0,2] se
+     * ignoran en el lado nativo.
+     */
+    external fun nativeSetEnhancementEngineMode(mode: Int)
+
+    /**
+     * Consulta el motor de realce seleccionado actualmente.
+     * @return 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup. Devuelve 0 si el
+     *         motor nativo no está activo (coherente con el default).
+     */
+    external fun nativeGetEnhancementEngineMode(): Int
+
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.
      * Útil para la pantalla de diagnóstico DSP.

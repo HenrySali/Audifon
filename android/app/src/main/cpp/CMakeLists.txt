@@ -30,6 +30,54 @@ set_target_properties(onnxruntime PROPERTIES
         "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libonnxruntime.so"
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PyTorch Lite (LibTorch) — runtime para modelo GTCRN dual-channel (.ptl)
+# ─────────────────────────────────────────────────────────────────────────────
+# Las .so se extraen del AAR org.pytorch:pytorch_android_lite:2.1.0 y se
+# colocan en jniLibs/arm64-v8a/ (mismo patrón que OnnxRuntime).
+# Libs requeridas: libpytorch_jni_lite.so, libc10.so, libfbjni.so
+#
+# Headers mínimos del Lite Interpreter se colocan en:
+#   cpp/dnn_denoiser/pytorch_lite/
+# (descargados del release oficial pytorch/pytorch, branch v2.1.0,
+#  directorio torch/csrc/api/include/ + lite interpreter headers)
+#
+# Nota sobre conflictos: tanto ORT como LibTorch usan internamente XNNPACK
+# para cuantización; no debería haber conflicto de símbolos porque cada lib
+# empaqueta su propia copia como dependencia interna (linkeo estático interno).
+# Si surgiera conflicto, la solución es recompilar una de las dos con
+# -fvisibility=hidden (ORT ya lo hace por defecto).
+# ─────────────────────────────────────────────────────────────────────────────
+
+set(PYTORCH_JNI_SO "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libpytorch_jni_lite.so")
+
+if(EXISTS "${PYTORCH_JNI_SO}")
+    message(STATUS "PyTorch Lite: encontrado en jniLibs/${ANDROID_ABI}/")
+    set(HAVE_PYTORCH_LITE ON)
+
+    # Librería principal del JNI Lite Interpreter.
+    # NOTA: en pytorch_android_lite:2.1.0 la core tensor library (libc10)
+    # viene FUSIONADA dentro de libpytorch_jni_lite.so (por eso pesa ~57 MB),
+    # NO se distribuye libc10.so por separado. Por eso NO declaramos un
+    # target c10 aparte: linkeamos solo pytorch_jni_lite + fbjni.
+    add_library(pytorch_jni_lite SHARED IMPORTED)
+    set_target_properties(pytorch_jni_lite PROPERTIES
+        IMPORTED_LOCATION "${PYTORCH_JNI_SO}"
+    )
+
+    # libfbjni — Facebook JNI helpers (dependencia transitiva)
+    add_library(fbjni SHARED IMPORTED)
+    set_target_properties(fbjni PROPERTIES
+        IMPORTED_LOCATION
+            "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libfbjni.so"
+    )
+else()
+    message(WARNING "PyTorch Lite: .so NO encontradas en jniLibs/${ANDROID_ABI}/. "
+        "Ejecutar extract_pytorch_libs.bat para descargarlas del AAR. "
+        "El DNN Denoiser dual-channel no compilará hasta resolver esto.")
+    set(HAVE_PYTORCH_LITE OFF)
+endif()
+
 # Librería compartida del DSP pipeline
 add_library(
     hearing_aid_dsp
@@ -67,7 +115,7 @@ add_library(
     latency_loopback_tester.cpp
 )
 
-# Enlazar con Oboe, librerías del sistema Android, y OnnxRuntime
+# Enlazar con Oboe, librerías del sistema Android, OnnxRuntime, y PyTorch Lite
 target_link_libraries(
     hearing_aid_dsp
     android
@@ -76,10 +124,39 @@ target_link_libraries(
     onnxruntime
 )
 
+# Linkear PyTorch Lite solo si las .so están presentes.
+# c10 va fusionado dentro de libpytorch_jni_lite.so (no es un target aparte).
+if(HAVE_PYTORCH_LITE)
+    target_link_libraries(hearing_aid_dsp pytorch_jni_lite fbjni)
+    target_compile_definitions(hearing_aid_dsp PRIVATE HAVE_PYTORCH_LITE=1)
+
+    # FIX linker lld + libpytorch_jni_lite.so prebuilt:
+    # El .so prebuilt de pytorch_android_lite:2.1.0 trae en su tabla de
+    # símbolos entradas legacy (__bss_end__, __end__, __bss_start, _edata,
+    # _end) marcadas como LOCAL pero ubicadas en la parte GLOBAL de la
+    # symtab. El linker lld del NDK 25 las rechaza con:
+    #   "ld: error: found local symbol '__bss_end__' in global part of
+    #    symbol table in file libpytorch_jni_lite.so"
+    # Es un bug conocido del empaquetado de PyTorch Android (pytorch/pytorch
+    # #51020, #129633; ndk-samples #769). El diagnóstico de lld es
+    # degradable: --no-fatal-warnings evita que aborte el link. No afecta el
+    # runtime (el dynamic loader usa .dynsym, no la symtab estática).
+    target_link_options(hearing_aid_dsp PRIVATE "-Wl,--no-fatal-warnings")
+endif()
+
 # Incluir headers del directorio actual + headers de OnnxRuntime locales
+# + headers de PyTorch Lite (Lite Interpreter API) si disponibles
 target_include_directories(
     hearing_aid_dsp
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/dnn_denoiser
 )
+
+if(HAVE_PYTORCH_LITE)
+    target_include_directories(
+        hearing_aid_dsp
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/dnn_denoiser/pytorch_lite
+    )
+endif()

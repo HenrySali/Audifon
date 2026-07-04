@@ -26,6 +26,7 @@ import '../widgets/manual_eq_overlay.dart';
 import '../widgets/safety_warning_widget.dart';
 import '../widgets/stale_preset_list.dart';
 import '../../domain/entities/prescription_mode.dart';
+import '../../data/bridges/audio_bridge.dart';
 import '../../data/bridges/audio_bridge_impl.dart';
 import '../../data/repositories/settings_repository_impl.dart';
 import '../../domain/audiogram_driven_presets/operating_mode.dart';
@@ -1247,8 +1248,9 @@ class _ActiveView extends StatelessWidget {
             },
           ),
           const SizedBox(height: 16),
-          // Beamforming MVDR dual-mic — prioriza voz frontal
-          const _BeamformingToggleCard(),
+          // Selector de motor de realce de voz (Dual-DNN / MVDR / Bypass)
+          // — spec gtcrn-dual-channel, tareas 5.1–5.3
+          const _EnhancementEngineSelectorCard(),
           const SizedBox(height: 20),
           // Selector de modo de prescriptor (Smart-NL2 / Smart-NL3) — Req 5.1–5.5
           PrescriberModeSelector(
@@ -4088,65 +4090,169 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
 }
 
 // =============================================================================
-// BEAMFORMING MVDR 2-MIC — Toggle de habilitación/deshabilitación
+// SELECTOR DE MOTOR DE REALCE — spec gtcrn-dual-channel (tareas 5.1–5.3)
 // =============================================================================
 
-/// Hive key para persistir el estado del beamforming MVDR dual-mic.
-const String _kBeamformingEnabledKey = 'beamformingEnabled';
-
-/// Toggle para habilitar/deshabilitar el beamformer MVDR dual-mic.
+/// Hive key para persistir el motor de realce seleccionado (índice nativo).
 ///
-/// Persiste el estado en Hive (box `settings_box`, key `beamformingEnabled`,
-/// default `false`). Al cambiar, llama a
-/// `AudioBridgeImpl().setBeamformingEnabled(enabled)` para comunicar al
-/// motor nativo. Si el motor esta activo (AmplificationActive), el toggle
-/// tiene efecto inmediato. Si no, el valor se persiste y se aplica en el
-/// proximo `startAudio`.
-class _BeamformingToggleCard extends StatefulWidget {
-  const _BeamformingToggleCard();
+/// Reemplaza a la vieja key binaria `beamformingEnabled`. Guarda el
+/// [EnhancementEngineMode.nativeValue] (0=Bypass, 1=DualChannelDnn,
+/// 2=MvdrBackup).
+const String _kEnhancementEngineModeKey = 'enhancementEngineMode';
+
+/// Hive key para persistir el tamaño de bloque / latencia del DNN (EXTRA).
+const String _kDnnBlockSizeKey = 'dnnBlockSize';
+
+/// Tamaño de bloque DNN por defecto óptimo (muestras por canal @ 16 kHz).
+///
+/// 160 muestras = 10 ms de hop, coherente con el pipeline GTCRN dual
+/// (ver `dnn_denoiser` tarea 2). Es el valor recomendado; el slider
+/// permite explorar el trade-off latencia/estabilidad.
+const int _kDnnBlockSizeDefault = 160;
+const int _kDnnBlockSizeMin = 80;
+const int _kDnnBlockSizeMax = 480;
+
+/// Selector de 3 opciones del motor de realce de voz (Dual-DNN / MVDR /
+/// Bypass) que reemplaza al viejo toggle binario de beamforming.
+///
+/// - **5.1**: `SegmentedButton` de 3 opciones en la pantalla técnico. Al
+///   seleccionar, llama a `AudioBridgeImpl().setEnhancementEngineMode(mode)`
+///   y persiste el índice en Hive. El estado inicial se carga con
+///   `getEnhancementEngineMode()` (con fallback a Hive si el motor está idle).
+/// - **5.3**: indicador visual del estado real, consultando
+///   `getDnnIsActive()` / `getBeamformingActive()` para distinguir "activo"
+///   de "en bypass por fallo".
+/// - **EXTRA**: slider de ajuste fino de latencia / tamaño de bloque, con
+///   default óptimo, cableado a `setDnnBlockSize` (el backend lo implementa
+///   en la tarea 7; hoy es no-op tolerante a MissingPluginException).
+class _EnhancementEngineSelectorCard extends StatefulWidget {
+  const _EnhancementEngineSelectorCard();
 
   @override
-  State<_BeamformingToggleCard> createState() => _BeamformingToggleCardState();
+  State<_EnhancementEngineSelectorCard> createState() =>
+      _EnhancementEngineSelectorCardState();
 }
 
-class _BeamformingToggleCardState extends State<_BeamformingToggleCard> {
-  bool _enabled = false;
+class _EnhancementEngineSelectorCardState
+    extends State<_EnhancementEngineSelectorCard> {
+  EnhancementEngineMode _mode = EnhancementEngineMode.bypass;
   bool _loaded = false;
+
+  /// Estado real reportado por el motor nativo (5.3).
+  bool _dnnActive = false;
+  bool _beamformingActive = false;
+
+  /// Tamaño de bloque actual (EXTRA slider).
+  double _blockSize = _kDnnBlockSizeDefault.toDouble();
+
+  Timer? _statusTimer;
 
   @override
   void initState() {
     super.initState();
-    _loadFromHive();
+    _loadInitialState();
+    // Refresca el indicador de estado real periódicamente mientras la
+    // tarjeta está visible.
+    _statusTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _refreshRealStatus(),
+    );
   }
 
-  Future<void> _loadFromHive() async {
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadInitialState() async {
+    final bridge = AudioBridgeImpl();
+
+    // 1) Motor seleccionado: preferir el estado nativo; si el motor está
+    //    idle (retorna Bypass), caer al valor persistido en Hive.
+    EnhancementEngineMode mode = EnhancementEngineMode.bypass;
+    try {
+      mode = await bridge.getEnhancementEngineMode();
+    } catch (_) {/* fail-safe: bypass */}
+
+    int? persisted;
+    double blockSize = _kDnnBlockSizeDefault.toDouble();
     try {
       final box = await Hive.openBox<dynamic>('settings_box');
-      final value = box.get(_kBeamformingEnabledKey);
-      if (mounted) {
-        setState(() {
-          _enabled = value is bool ? value : false;
-          _loaded = true;
-        });
+      final v = box.get(_kEnhancementEngineModeKey);
+      if (v is int) persisted = v;
+      final bs = box.get(_kDnnBlockSizeKey);
+      if (bs is int) {
+        blockSize = bs.toDouble().clamp(
+              _kDnnBlockSizeMin.toDouble(),
+              _kDnnBlockSizeMax.toDouble(),
+            );
       }
-    } catch (_) {
-      if (mounted) setState(() => _loaded = true);
+    } catch (_) {/* best effort */}
+
+    if (mode == EnhancementEngineMode.bypass && persisted != null) {
+      mode = EnhancementEngineMode.fromNative(persisted);
+    }
+
+    if (mounted) {
+      setState(() {
+        _mode = mode;
+        _blockSize = blockSize;
+        _loaded = true;
+      });
+    }
+    await _refreshRealStatus();
+  }
+
+  Future<void> _refreshRealStatus() async {
+    final bridge = AudioBridgeImpl();
+    bool dnn = false;
+    bool bf = false;
+    try {
+      dnn = await bridge.getDnnIsActive();
+    } catch (_) {/* tolera handler ausente */}
+    try {
+      bf = await bridge.getBeamformingActive();
+    } catch (_) {/* tolera handler ausente */}
+    if (mounted) {
+      setState(() {
+        _dnnActive = dnn;
+        _beamformingActive = bf;
+      });
     }
   }
 
-  Future<void> _onChanged(bool enabled) async {
-    setState(() => _enabled = enabled);
+  Future<void> _onModeSelected(EnhancementEngineMode mode) async {
+    setState(() => _mode = mode);
 
-    // Persistir en Hive
+    // Persistir el índice nativo en Hive.
     try {
       final box = await Hive.openBox<dynamic>('settings_box');
-      await box.put(_kBeamformingEnabledKey, enabled);
+      await box.put(_kEnhancementEngineModeKey, mode.nativeValue);
     } catch (_) {/* best effort */}
 
-    // Comunicar al motor nativo
+    // Comunicar al motor nativo.
     try {
-      await AudioBridgeImpl().setBeamformingEnabled(enabled);
-    } catch (_) {/* tolera MissingPluginException si el motor no esta activo */}
+      await AudioBridgeImpl().setEnhancementEngineMode(mode);
+    } catch (_) {/* tolera MissingPluginException si el motor no está activo */}
+
+    // Refrescar el indicador de estado real tras el cambio.
+    await _refreshRealStatus();
+  }
+
+  Future<void> _onBlockSizeChanged(double value) async {
+    setState(() => _blockSize = value);
+  }
+
+  Future<void> _onBlockSizeCommitted(double value) async {
+    final blockSize = value.round();
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      await box.put(_kDnnBlockSizeKey, blockSize);
+    } catch (_) {/* best effort */}
+    try {
+      await AudioBridgeImpl().setDnnBlockSize(blockSize);
+    } catch (_) {/* backend lo implementa en tarea 7 (no-op por ahora) */}
   }
 
   @override
@@ -4155,33 +4261,216 @@ class _BeamformingToggleCardState extends State<_BeamformingToggleCard> {
 
     return Card(
       color: const Color(0xFF16213e),
-      child: SwitchListTile(
-        secondary: Icon(
-          Icons.spatial_audio,
-          color: _enabled ? Colors.cyanAccent : Colors.white60,
-          size: 24,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Encabezado
+            Row(
+              children: [
+                Icon(
+                  Icons.spatial_audio,
+                  color: _mode == EnhancementEngineMode.bypass
+                      ? Colors.white60
+                      : Colors.cyanAccent,
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Motor de realce de voz',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Elegí el algoritmo que procesa la voz frente al ruido',
+              style: TextStyle(color: Colors.white60, fontSize: 11),
+            ),
+            const SizedBox(height: 12),
+
+            // 5.1 — Selector de 3 opciones
+            _buildModeSelector(),
+            const SizedBox(height: 12),
+
+            // 5.3 — Indicador de estado real
+            _buildRealStatusIndicator(),
+            const SizedBox(height: 16),
+
+            // EXTRA — Slider de ajuste fino de latencia / tamaño de bloque
+            _buildBlockSizeSlider(),
+          ],
         ),
-        title: const Text(
-          'Beamforming 2-Mic',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        subtitle: const Text(
-          'MVDR: prioriza voz frontal, atenúa ruido lateral',
-          style: TextStyle(
-            color: Colors.white60,
-            fontSize: 11,
-          ),
-        ),
-        value: _enabled,
-        onChanged: _onChanged,
-        activeColor: Colors.cyanAccent,
-        inactiveThumbColor: Colors.white60,
-        inactiveTrackColor: Colors.white12,
       ),
+    );
+  }
+
+  Widget _buildModeSelector() {
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<EnhancementEngineMode>(
+        segments: const <ButtonSegment<EnhancementEngineMode>>[
+          ButtonSegment<EnhancementEngineMode>(
+            value: EnhancementEngineMode.dualChannelDnn,
+            label: Text('Dual-DNN', style: TextStyle(fontSize: 11)),
+            icon: Icon(Icons.auto_awesome, size: 16),
+            tooltip: 'Realce DNN dual-channel (recomendado)',
+          ),
+          ButtonSegment<EnhancementEngineMode>(
+            value: EnhancementEngineMode.mvdrBackup,
+            label: Text('MVDR', style: TextStyle(fontSize: 11)),
+            icon: Icon(Icons.hearing, size: 16),
+            tooltip: 'Beamformer MVDR clásico (respaldo)',
+          ),
+          ButtonSegment<EnhancementEngineMode>(
+            value: EnhancementEngineMode.bypass,
+            label: Text('Bypass', style: TextStyle(fontSize: 11)),
+            icon: Icon(Icons.block, size: 16),
+            tooltip: 'Sin realce',
+          ),
+        ],
+        selected: <EnhancementEngineMode>{_mode},
+        onSelectionChanged: (selection) {
+          if (selection.isNotEmpty) _onModeSelected(selection.first);
+        },
+        showSelectedIcon: false,
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          foregroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+            if (states.contains(MaterialState.selected)) {
+              return const Color(0xFF16213e);
+            }
+            return Colors.white70;
+          }),
+          backgroundColor: MaterialStateProperty.resolveWith<Color>((states) {
+            if (states.contains(MaterialState.selected)) {
+              return Colors.cyanAccent;
+            }
+            return Colors.transparent;
+          }),
+        ),
+      ),
+    );
+  }
+
+  /// Etiqueta descriptiva del modo seleccionado + estado real (5.3).
+  Widget _buildRealStatusIndicator() {
+    // Determina si el motor seleccionado está realmente activo en nativo
+    // o si cayó a bypass por fallo (p. ej. `.pt` inválido).
+    final bool degraded;
+    final String statusText;
+    final Color statusColor;
+    final IconData statusIcon;
+
+    switch (_mode) {
+      case EnhancementEngineMode.dualChannelDnn:
+        degraded = !_dnnActive;
+        if (_dnnActive) {
+          statusText = 'Dual-DNN activo y procesando';
+          statusColor = Colors.greenAccent;
+          statusIcon = Icons.check_circle;
+        } else {
+          statusText = 'Seleccionado Dual-DNN, pero en bypass '
+              '(motor inactivo o modelo no cargado)';
+          statusColor = Colors.orangeAccent;
+          statusIcon = Icons.warning_amber_rounded;
+        }
+        break;
+      case EnhancementEngineMode.mvdrBackup:
+        degraded = !_beamformingActive;
+        if (_beamformingActive) {
+          statusText = 'MVDR activo (captura estéreo 2-mic)';
+          statusColor = Colors.greenAccent;
+          statusIcon = Icons.check_circle;
+        } else {
+          statusText = 'Seleccionado MVDR, pero en bypass '
+              '(motor inactivo o sin captura estéreo)';
+          statusColor = Colors.orangeAccent;
+          statusIcon = Icons.warning_amber_rounded;
+        }
+        break;
+      case EnhancementEngineMode.bypass:
+        degraded = false;
+        statusText = 'Sin realce (passthrough)';
+        statusColor = Colors.white60;
+        statusIcon = Icons.info_outline;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: degraded
+            ? Colors.orange.withOpacity(0.12)
+            : Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(statusIcon, color: statusColor, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              statusText,
+              style: TextStyle(color: statusColor, fontSize: 11),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBlockSizeSlider() {
+    final int blockSamples = _blockSize.round();
+    // 16 kHz → ms = muestras / 16
+    final double latencyMs = blockSamples / 16.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.tune, color: Colors.white60, size: 16),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Ajuste fino de latencia (tamaño de bloque)',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              '$blockSamples muestras · ${latencyMs.toStringAsFixed(1)} ms',
+              style: const TextStyle(color: Colors.cyanAccent, fontSize: 11),
+            ),
+          ],
+        ),
+        Slider(
+          value: _blockSize,
+          min: _kDnnBlockSizeMin.toDouble(),
+          max: _kDnnBlockSizeMax.toDouble(),
+          divisions: (_kDnnBlockSizeMax - _kDnnBlockSizeMin) ~/ 10,
+          label: '$blockSamples',
+          activeColor: Colors.cyanAccent,
+          inactiveColor: Colors.white24,
+          onChanged: _onBlockSizeChanged,
+          onChangeEnd: _onBlockSizeCommitted,
+        ),
+        const Text(
+          'Default óptimo: 160 muestras (10 ms). El backend aplicará este '
+          'ajuste en la tarea 7; por ahora se persiste localmente.',
+          style: TextStyle(color: Colors.white38, fontSize: 10),
+        ),
+      ],
     );
   }
 }

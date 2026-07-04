@@ -437,6 +437,73 @@ class AudioBridgeImpl implements AudioBridge {
     }
   }
 
+  // ─── Selector de motor de realce (spec gtcrn-dual-channel) ─────────────
+
+  @override
+  Future<void> setEnhancementEngineMode(EnhancementEngineMode mode) async {
+    await _safeInvokeVoid(
+      'setEnhancementEngineMode',
+      <String, dynamic>{'mode': mode.nativeValue},
+    );
+  }
+
+  @override
+  Future<EnhancementEngineMode> getEnhancementEngineMode() async {
+    try {
+      final result =
+          await _methodChannel.invokeMethod<int>('getEnhancementEngineMode');
+      return EnhancementEngineMode.fromNative(result ?? 0);
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'getEnhancementEngineMode: handler nativo no implementado: '
+        '${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return EnhancementEngineMode.bypass;
+    } on PlatformException catch (e) {
+      developer.log(
+        'getEnhancementEngineMode PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return EnhancementEngineMode.bypass;
+    }
+  }
+
+  @override
+  Future<bool> getDnnIsActive() async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>('getDnnIsActive');
+      return result ?? false;
+    } on MissingPluginException catch (e) {
+      developer.log(
+        'getDnnIsActive: handler nativo no implementado: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return false;
+    } on PlatformException catch (e) {
+      developer.log(
+        'getDnnIsActive PlatformException: ${e.message}',
+        name: _logName,
+        level: 900,
+      );
+      return false;
+    }
+  }
+
+  @override
+  Future<void> setDnnBlockSize(int blockSize) async {
+    // NOTA: el setter nativo `setDnnBlockSize` se implementará en la
+    // tarea 7 (backend). Hasta entonces esta llamada es un no-op tolerante
+    // a MissingPluginException (ver `_safeInvokeVoid`).
+    await _safeInvokeVoid(
+      'setDnnBlockSize',
+      <String, dynamic>{'blockSize': blockSize},
+    );
+  }
+
   /// Identificador de logger usado en los métodos del bridge que toleran
   /// fallos nativos sin propagar excepción (MHL Prescripción, Modo Música,
   /// Diagnostic Recording).

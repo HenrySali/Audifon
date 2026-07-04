@@ -86,6 +86,24 @@ struct LatencyMetrics {
     int32_t schemaVersion = 1;       ///< versión del esquema
 };
 
+/// Selector del motor de realce de voz (spec gtcrn-dual-channel, tarea 3.1).
+///
+/// Reemplaza el par de flags históricos `beamformingEnabled` + `dnnEnabled`
+/// por un selector explícito de 3 estados mutuamente excluyentes. El default
+/// de arranque es `kBypass` (R8.3). Cablea vía JNI → Kotlin → UI (tarea 4/5).
+///
+///   kBypass         → ch0 passthrough, sin realce (default arranque).
+///   kDualChannelDnn → 2 mics → GTCRN dual (LibTorch) → mono realzado.
+///   kMvdrBackup     → 2 mics → MVDR beamformer → mono realzado.
+///
+/// Los valores enteros (0/1/2) son parte del contrato JNI/Kotlin/Dart y no
+/// deben reordenarse sin bumpear el mapeo del puente.
+enum class EnhancementEngineMode {
+    kBypass = 0,
+    kDualChannelDnn = 1,
+    kMvdrBackup = 2
+};
+
 /// Motor de audio de baja latencia con procesamiento DSP integrado.
 /// Usa Oboe FullDuplexStream para I/O sincronizado en un callback.
 class AudioEngine : public oboe::FullDuplexStream,
@@ -177,9 +195,25 @@ public:
 
     // ─── MVDR Beamformer (dual-mic) ─────────────────────────────────────
     /// Habilita/deshabilita el beamformer MVDR en runtime (thread-safe).
+    /// COMPAT: mapea al selector `EnhancementEngineMode` — ver
+    /// `setEnhancementEngineMode` y la doc de mapeo en el .cpp.
+    ///   setBeamformingEnabled(true)  → setEnhancementEngineMode(kMvdrBackup)
+    ///   setBeamformingEnabled(false) → setEnhancementEngineMode(kBypass)
     void setBeamformingEnabled(bool enabled);
     /// @return true si el beamformer MVDR esta activo y procesando.
     bool isBeamformingActive() const;
+
+    // ─── Enhancement Engine selector (spec gtcrn-dual-channel, tarea 3) ──
+    /// Selecciona el motor de realce en runtime (thread-safe, lock-free).
+    /// No reinicia los streams salvo que el modo requiera cambiar la
+    /// geometría de captura mono↔estéreo (Fix #3 reutilizado). Los modos
+    /// kDualChannelDnn y kMvdrBackup requieren captura estéreo; kBypass
+    /// corre sobre ch0 (o el mono capturado) sin reabrir el stream. La
+    /// transición entre motores aplica un crossfade lineal corto anti-clic
+    /// dentro del callback (R2.5).
+    void setEnhancementEngineMode(EnhancementEngineMode mode);
+    /// @return el modo de realce seleccionado actualmente (lock-free).
+    EnhancementEngineMode getEnhancementEngineMode() const;
 
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
@@ -282,6 +316,20 @@ private:
     /// Attempts to reopen both streams after error.
     void attemptReconnection();
 
+    /// Renderiza un chunk (≤ kMaxBeamBlockSize) del motor `mode` sobre `dst`.
+    /// Llamado SOLO desde el audio thread (onBothStreamsReady). No alloc/lock.
+    ///   kBypass         → dst = ch0 (copia).
+    ///   kMvdrBackup     → mvdrBeamformer_.process(ch0, ch1, dst, chunk, vad).
+    ///   kDualChannelDnn → dnnDenoiserDual_.processStereo(ch0, ch1, dst, chunk).
+    /// @param ch0 canal 0 deinterleaveado (mic inferior), chunk samples.
+    /// @param ch1 canal 1 deinterleaveado (mic superior), chunk samples.
+    /// @param dst destino mono, chunk samples (puede aliasar ch0).
+    /// @param chunk número de samples del chunk.
+    /// @param vadActive flag VAD del SceneAnalyzer para el MVDR.
+    void renderEngineChunk(EnhancementEngineMode mode,
+                           const float* ch0, const float* ch1,
+                           float* dst, int chunk, bool vadActive);
+
     // ─── Pipeline DSP ───────────────────────────────────────────────────
     DspPipeline pipeline_;
 
@@ -302,6 +350,28 @@ private:
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
 
+    // ─── DNN Denoiser dual-channel (GTCRN dual, LibTorch) ────────────────
+    /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.
+    ///
+    /// DECISIÓN (spec gtcrn-dual-channel, tarea 3): se usan DOS instancias
+    /// separadas de DnnDenoiser en lugar de una sola. El motivo es que en el
+    /// wrapper `initialize()` (mono, ONNXRuntime) e `initializeDual()` (dual,
+    /// LibTorch) son mutuamente excluyentes: ambos setean `active_` y
+    /// `inputChannelsMode_`, y cada uno arma su worker thread para UN runtime.
+    /// Para tener AMBAS rutas disponibles a la vez (mono legacy como stage del
+    /// chain post-realce, y dual como motor de realce seleccionable) hacen
+    /// falta dos objetos independientes con sus propios worker/ring/resampler.
+    ///
+    ///   dnnDenoiser_     → mono legacy (ONNX). Stage `process()` del chain,
+    ///                      controlado por setDnnEnabled() (sin cambios).
+    ///   dnnDenoiserDual_ → dual (LibTorch). Motor de realce invocado por
+    ///                      `processStereo()` solo en modo kDualChannelDnn.
+    ///
+    /// Ambas se inicializan en `initDnnDenoiser()` con el mismo AAssetManager.
+    /// Costo: un worker thread extra en idle (sin inferencias si el modo no es
+    /// dual). Beneficio: cero acoplamiento entre runtimes y coexistencia limpia.
+    dnn_denoiser::DnnDenoiser dnnDenoiserDual_;
+
     // ─── MVDR Beamformer (dual-mic, pre-DNN) ─────────────────────────────
     /// Beamformer MVDR de 2 microfonos. Procesa antes de la DNN.
     MvdrBeamformer mvdrBeamformer_;
@@ -317,6 +387,37 @@ private:
     /// Flag indicando si el stream de input es realmente estereo.
     /// Se setea en openInputStream() cuando se logra abrir con 2 canales.
     bool stereoInputAvailable_ = false;
+
+    // ─── Enhancement Engine selector — estado (tarea 3.2/3.5) ────────────
+    /// Modo de realce seleccionado (lado control → callback). Lock-free.
+    /// Default kBypass (R8.3). Lo escribe setEnhancementEngineMode() y lo
+    /// lee onBothStreamsReady() con acquire.
+    std::atomic<EnhancementEngineMode> engineMode_{EnhancementEngineMode::kBypass};
+
+    /// Motor que el callback está renderizando actualmente como "entrante".
+    /// SÓLO tocado desde el audio thread (no atómico). Se sincroniza con
+    /// `engineMode_` al inicio de cada callback; si difieren, arranca un
+    /// crossfade entre `prevEngine_` (saliente) y `activeEngine_` (entrante).
+    EnhancementEngineMode activeEngine_ = EnhancementEngineMode::kBypass;
+    /// Motor saliente durante un crossfade entre motores. Audio-thread-only.
+    EnhancementEngineMode prevEngine_ = EnhancementEngineMode::kBypass;
+    /// Muestras restantes del crossfade entre motores (0 = sin crossfade).
+    /// Audio-thread-only. Se recarga a `engineXfadeSamples_` al cambiar modo.
+    int engineXfadeRemaining_ = 0;
+    /// Duración del crossfade entre motores en samples (≈20 ms a la rate
+    /// nativa). Se calcula en start() con el sampleRate efectivo. El
+    /// DnnDenoiser tiene su propio crossfade dry/wet interno; ESTE es el
+    /// crossfade ENTRE motores distintos (R2.5).
+    int engineXfadeSamples_ = 960;
+    /// false hasta el primer start() exitoso. En el PRIMER start() el motor
+    /// arranca forzado en kBypass (R8.3); los re-open posteriores por cambio
+    /// de geometría (Fix #3) preservan el modo seleccionado.
+    bool firstStartDone_ = false;
+    /// Buffer temporal para renderizar el motor SALIENTE durante el
+    /// crossfade (se mezcla contra outPtr con ganancia rampeada). Miembro
+    /// (no stack) para no allocar en el hot path. Se procesa por chunks de
+    /// hasta kMaxBeamBlockSize, así que este tamaño alcanza.
+    float engineXfadeBuf_[kMaxBeamBlockSize] = {};
 
     // ─── Pre-DNN Level + Headroom Stage (DSP chain optimization) ────────
     /// Nivel pre-DNN del último bloque (dB SPL). Medido en onBothStreamsReady

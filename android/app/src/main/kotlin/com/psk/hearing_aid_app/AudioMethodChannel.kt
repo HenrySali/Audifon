@@ -353,6 +353,20 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetBeamformingActive()
                     result.success(active)
                 }
+                // ─── Enhancement Engine selector (spec gtcrn-dual-channel) ─
+                // Selector de 3 estados: 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup.
+                // El lado nativo valida el rango [0,2], actualiza la geometría
+                // de captura estéreo solicitada (flag que consume nativeStart)
+                // y hace el re-open en caliente si el motor ya corre.
+                "setEnhancementEngineMode" -> {
+                    val mode = call.argument<Int>("mode") ?: 0
+                    nativeBridge.nativeSetEnhancementEngineMode(mode)
+                    result.success(null)
+                }
+                "getEnhancementEngineMode" -> {
+                    val mode = nativeBridge.nativeGetEnhancementEngineMode()
+                    result.success(mode)
+                }
                 // ─── MHL Prescripción / Modo Música ─────────────────────
                 // Espejo bit-a-bit de AudioMethodChannelPatient.kt
                 // (tecnico-paciente-feature-parity, Requirements 1.1 y 1.2).

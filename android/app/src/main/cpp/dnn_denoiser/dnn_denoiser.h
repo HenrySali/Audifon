@@ -93,6 +93,12 @@ struct AAssetManager;
 
 namespace dnn_denoiser {
 
+/// Número de canales de entrada del modelo activo.
+///   kMono = 1 → ruta legacy GTCRN mono (OnnxRuntime, STFT en C++).
+///   kDual = 2 → ruta GTCRN dual-channel (LibTorch, STFT/WPE/IVA dentro del .pt).
+/// Spec: gtcrn-dual-channel (tarea 2.1).
+enum class InputChannels { kMono = 1, kDual = 2 };
+
 /// Sample rate nativo del modelo GTCRN.
 static constexpr int kDnnSampleRate = 16000;
 
@@ -106,6 +112,16 @@ static constexpr int kDnnSampleRate = 16000;
 /// GTCRN simple corre en ~1.5 ms en arm64, así que 250 inferencias × 1.5 ms = 375 ms/s
 /// = ~37% de un core, con margen suficiente.
 static constexpr int kDnnHopSize = 128;
+
+/// Tamaño de bloque (samples a 16 kHz por canal) que el worker alimenta al
+/// modelo dual-channel en cada `forward`. Contrato: entrada `[1, 2, T]`,
+/// salida `[1, T]` (T = kDnnDualBlock). Se fija igual a `kDnnHopSize` para que
+/// la relación 1:1 input↔output preserve la alineación dry/wet ya usada por
+/// la ruta mono (cada bloque de T samples de entrada produce T de salida).
+/// Spec: gtcrn-dual-channel (tarea 2.5). A diferencia de la ruta mono, la
+/// STFT/iSTFT + WPE/IVA corren DENTRO del `.pt` TorchScript; el wrapper solo
+/// empuja PCM crudo y extrae PCM mono.
+static constexpr int kDnnDualBlock = kDnnHopSize;
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
@@ -169,6 +185,36 @@ public:
     /// NOTE: Llamar UNA SOLA VEZ. Idempotente: llamadas siguientes no-op.
     bool initialize(AAssetManager* assetMgr, const char* assetPath);
 
+    /// Carga el modelo TorchScript dual-channel (`.pt`, LibTorch) desde assets
+    /// y lanza el worker thread en modo dual.
+    ///
+    /// Contrato del modelo (ver design.md): entrada float32 `[1, 2, T]`
+    /// (ch0 = mic inferior, ch1 = mic superior) a 16 kHz, salida `[1, T]` mono.
+    /// La STFT/iSTFT + WPE/IVA corren DENTRO del `.pt`; el wrapper solo alimenta
+    /// PCM crudo y extrae PCM mono.
+    ///
+    /// Validación (Bypass_Seguro): carga con `torch::jit::load()`, corre un
+    /// `forward` dummy `[1, 2, 160]` y verifica que la salida sea `[1, 160]`.
+    /// Si el `.pt` no carga, el shape no coincide, o LibTorch lanza cualquier
+    /// excepción → `active_ = false` y la clase queda en bypass permanente
+    /// (`processStereo` copia ch0 a output).
+    ///
+    /// @param assetMgr  Asset manager Android (nullptr → falla limpia).
+    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn_dual_mobile.pt".
+    /// @return true si el modelo cargó y el shape es el esperado.
+    /// NOTE: Llamar UNA SOLA VEZ, en lugar de initialize() (no ambos).
+    /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
+    bool initializeDual(AAssetManager* assetMgr, const char* assetPath);
+
+    /// @return canales de entrada del modelo cargado (kMono legacy o kDual).
+    /// Antes de initialize/initializeDual devuelve kMono por defecto.
+    /// Spec: gtcrn-dual-channel (tarea 2.1).
+    InputChannels inputChannels() const {
+        return inputChannelsMode_.load(std::memory_order_acquire) == 2
+                   ? InputChannels::kDual
+                   : InputChannels::kMono;
+    }
+
     /// Configura el sample rate nativo del audio que va a entrar a process().
     /// El modelo GTCRN trabaja siempre a 16 kHz; este wrapper inserta un
     /// resampler interno (downsample antes del worker, upsample después)
@@ -196,6 +242,27 @@ public:
     /// @param buffer Float audio in-place [-1,+1] (será modificado).
     /// @param blockSize Número de samples (típicamente 64 a 16 kHz).
     void process(float* buffer, int blockSize);
+
+    /// Procesa un bloque ESTÉREO hacia salida mono. Llamar SOLO desde audio
+    /// thread (NO bloquea: la inferencia LibTorch corre en el worker thread).
+    ///
+    /// Empuja ch0 y ch1 a dos ring buffers SPSC paralelos (tras remuestrear a
+    /// 16 kHz). El worker arma un tensor `[1, 2, T]`, ejecuta
+    /// `module.forward({tensor})`, extrae la salida `[1, T]` y la deja en el
+    /// output ring. Este método tira la salida disponible, la upsamplea a la
+    /// rate nativa, y la mezcla con ch0 (señal "dry") aplicando intensity,
+    /// crossfade anti-clic y el cap de VAD (misma máquina que `process()`).
+    ///
+    /// Bypass (Bypass_Seguro): si el modelo no es dual, no está activo, o hay
+    /// underrun del worker, la salida es ch0 passthrough. Nunca corta el audio.
+    ///
+    /// @param ch0 Canal 0 (mic inferior), blockSize samples @ inputSampleRate.
+    /// @param ch1 Canal 1 (mic superior), blockSize samples @ inputSampleRate.
+    /// @param output Salida mono, blockSize samples (puede aliasar ch0).
+    /// @param blockSize Número de samples por canal.
+    /// Spec: gtcrn-dual-channel (tareas 2.5, 2.6).
+    void processStereo(const float* ch0, const float* ch1,
+                       float* output, int blockSize);
 
     /// Toggle ON/OFF. Inicia crossfade anti-clic de 50 ms (800 samples a 16 kHz;
     /// MEJORA #1 Tier 3 #12, antes 30 ms).
@@ -291,6 +358,12 @@ private:
     // Estado expuesto vía atomics (lectura desde getters, escritura desde setters/worker).
     std::atomic<bool>     enabled_{false};
     std::atomic<bool>     active_{false};
+
+    /// Canales de entrada del modelo cargado (1 = mono legacy, 2 = dual).
+    /// Lo setea initialize()/initializeDual() y lo lee inputChannels() +
+    /// processStereo() (para bypass si el modelo no es dual).
+    /// Spec: gtcrn-dual-channel (tarea 2.1).
+    std::atomic<int>      inputChannelsMode_{1};
     std::atomic<float>    intensity_{1.0f};
     std::atomic<uint64_t> processedFrames_{0};
     std::atomic<uint64_t> droppedFrames_{0};

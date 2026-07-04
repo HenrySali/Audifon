@@ -34,6 +34,26 @@
 
 #include "onnxruntime/onnxruntime_cxx_api.h"
 
+// LibTorch (PyTorch Mobile C++) — runtime del modelo GTCRN dual-channel (.ptl).
+// Solo disponible cuando el CMake detecta las .so de pytorch_android_lite y
+// define HAVE_PYTORCH_LITE (ver CMakeLists.txt). El GTCRN mono sigue con ONNX.
+//
+// IMPORTANTE: usamos la API MOBILE (lite interpreter), NO la API full.
+// libpytorch_jni_lite.so NO exporta torch::jit::load() (API full) → link error
+// "undefined symbol". Sí exporta torch::jit::_load_for_mobile() (API mobile).
+// Por eso incluimos los headers de mobile y cargamos un modelo .ptl.
+#if HAVE_PYTORCH_LITE
+// torch/script.h aporta la API de tensores (torch::from_blob, at::Tensor,
+// torch::InferenceMode) vía ATen + torch/csrc/api. Solo DECLARA torch::jit::load
+// (no linkea mientras no se la invoque), así que es seguro conservarlo: el error
+// de link surge únicamente al *llamar* a un símbolo no exportado por la lite .so.
+#include <torch/script.h>
+// API MOBILE (lite interpreter) — provee mobile::Module y _load_for_mobile,
+// que SÍ están exportados por libpytorch_jni_lite.so.
+#include <torch/csrc/jit/mobile/module.h>   // torch::jit::mobile::Module
+#include <torch/csrc/jit/mobile/import.h>   // torch::jit::_load_for_mobile
+#endif
+
 #include <android/asset_manager.h>
 #include <android/log.h>
 
@@ -44,6 +64,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -555,6 +576,25 @@ struct DnnDenoiser::Impl {
     /// Modelo cargado y listo para inferencia.
     bool modelReady = false;
 
+    // ─── LibTorch (modelo GTCRN dual-channel) ──────────────────────────
+    /// Canales de entrada del modelo activo (1 = mono ONNX, 2 = dual LibTorch).
+    /// Lo lee el worker para elegir la ruta de inferencia.
+    std::atomic<int> channels{1};
+
+#if HAVE_PYTORCH_LITE
+    /// Módulo TorchScript (lite interpreter) cargado con
+    /// torch::jit::_load_for_mobile() (solo dual). mobile::Module no tiene
+    /// constructor por defecto, por eso lo tenemos como unique_ptr: nullptr
+    /// hasta el load exitoso.
+    std::unique_ptr<torch::jit::mobile::Module> torchModule;
+#endif
+    /// true cuando torchModule cargó y pasó la validación de shape.
+    bool torchLoaded = false;
+
+    /// Buffer contiguo staging del tensor de entrada dual: layout [1,2,T] =
+    /// [ch0[0..T-1], ch1[0..T-1]]. Reusado por el worker en cada forward.
+    std::vector<float> dualTensorData;
+
     // ─── STFT state (worker thread only) ───────────────────────────────
     /// Ventana Hann de análisis y síntesis (root-Hann simétrica → COLA con hop=N/2).
     std::vector<float> hannWin;            // [kDnnFftSize]
@@ -587,7 +627,8 @@ struct DnnDenoiser::Impl {
     std::vector<int>                  cacheOutputIdx;  // posiciones en outputNames
 
     // ─── Ring buffers (audio ↔ worker) ─────────────────────────────────
-    SpscRing inputRing;     ///< audio_thread → worker     (samples @ 16 kHz)
+    SpscRing inputRing;     ///< audio_thread → worker     (ch0 @ 16 kHz)
+    SpscRing inputRingCh1;  ///< audio_thread → worker     (ch1 @ 16 kHz, solo dual)
     SpscRing outputRing;    ///< worker → audio_thread     (samples @ 16 kHz, enhanced)
     SpscRing dryDelayRing;  ///< audio_thread → audio_thread (dry alineada @ inputSr)
 
@@ -598,12 +639,18 @@ struct DnnDenoiser::Impl {
     /// LPF prototipo precomputado. MEJORA #3 (ruido-profundo.md): 72 taps Kaiser β=8.5,
     /// fc=7.5 kHz (antes 96 taps β=8). Compartido entre downsampler y upsampler.
     std::vector<float> protoLpf;
-    /// Down: inputSr → 16 kHz (audio thread input → inputRing).
+    /// Down: inputSr → 16 kHz (audio thread input ch0 → inputRing).
     Resampler down;
+    /// Down ch1: inputSr → 16 kHz (audio thread input ch1 → inputRingCh1).
+    /// Idéntico a `down` pero con estado propio (delay-line independiente).
+    /// Spec: gtcrn-dual-channel (tarea 2.3).
+    Resampler downCh1;
     /// Up:   16 kHz → inputSr (outputRing → wet buffer en rate nativa).
     Resampler up;
-    /// Buffer staging para los samples a 16 kHz tras downsample.
+    /// Buffer staging para los samples de ch0 a 16 kHz tras downsample.
     std::vector<float> downStaging;
+    /// Buffer staging para los samples de ch1 a 16 kHz tras downsample (dual).
+    std::vector<float> downStagingCh1;
     /// Buffer staging para los samples enhanced @ 16 kHz tirados del outputRing.
     std::vector<float> wet16k;
     /// Buffer staging para wet upsampleado a inputSr (mismo blockSize que input).
@@ -647,6 +694,7 @@ struct DnnDenoiser::Impl {
         }
 
         inputRing.init(kDnnRingCapacity);
+        inputRingCh1.init(kDnnRingCapacity);
         outputRing.init(kDnnRingCapacity);
         dryDelayRing.init(kDnnRingCapacity);
 
@@ -659,13 +707,16 @@ struct DnnDenoiser::Impl {
         protoLpf.assign(kProtoTaps, 0.0f);
         designResamplerProtoLpf(protoLpf.data(), kProtoTaps);
         down.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
+        downCh1.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
         up.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
         // Staging buffers: dimensionar generoso para blockSize típico de Oboe.
         // Oboe suele dar burst de 96-192 frames @ 48 kHz; con M=3 → ~64 a 16 kHz.
         // Reservamos 1024 para absorber bursts más grandes sin reasignar.
         downStaging.assign(1024, 0.0f);
+        downStagingCh1.assign(1024, 0.0f);
         wet16k.assign(1024, 0.0f);
         wetNativeRate.assign(2048, 0.0f);
+        dualTensorData.assign(2 * kDnnDualBlock, 0.0f);
     }
 
     ~Impl() {
@@ -699,6 +750,136 @@ struct DnnDenoiser::Impl {
             data.clear();
         }
         return data;
+    }
+
+    /// Carga el modelo TorchScript dual-channel (.pt) desde assets y valida su
+    /// contrato de shape corriendo un forward dummy [1,2,160] → esperado [1,160].
+    /// Retorna true si cargó y el shape coincide. Cualquier excepción de LibTorch
+    /// (carga o forward) → false (el wrapper pasa a Bypass_Seguro).
+    /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
+    bool loadTorchModule(AAssetManager* mgr, const char* assetPath) {
+#if HAVE_PYTORCH_LITE
+        std::vector<uint8_t> bytes = readAsset(mgr, assetPath);
+        if (bytes.empty()) {
+            DNN_LOGE("loadTorchModule: failed to read .ptl from assets");
+            return false;
+        }
+        DNN_LOGI("loadTorchModule: model loaded (%zu bytes)", bytes.size());
+
+        // ── Cargar el TorchScript (lite interpreter) desde el buffer en RAM ──
+        // API MOBILE: _load_for_mobile(std::istream&) → mobile::Module.
+        // El modelo .ptl ya viene en modo eval (no existe .eval() en mobile).
+        try {
+            std::string strbuf(reinterpret_cast<const char*>(bytes.data()),
+                               bytes.size());
+            std::istringstream iss(strbuf, std::ios::binary);
+            torchModule = std::make_unique<torch::jit::mobile::Module>(
+                torch::jit::_load_for_mobile(iss));
+        } catch (const std::exception& e) {
+            DNN_LOGE("loadTorchModule: _load_for_mobile failed: %s", e.what());
+            torchModule.reset();
+            return false;
+        } catch (...) {
+            DNN_LOGE("loadTorchModule: _load_for_mobile failed (unknown)");
+            torchModule.reset();
+            return false;
+        }
+
+        // ── Forward dummy [1,2,160] → verificar salida [1,160] ────────
+        try {
+            torch::InferenceMode guard;
+            std::vector<float> dummy(2 * 160, 0.0f);
+            at::Tensor in = torch::from_blob(
+                dummy.data(), {1, 2, 160}, torch::kFloat32);
+            std::vector<c10::IValue> inputs{in};
+            at::Tensor out = torchModule->forward(inputs).toTensor();
+            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != 160) {
+                DNN_LOGE("loadTorchModule: dummy forward shape mismatch "
+                         "(got dim=%ld, expected [1,160])",
+                         static_cast<long>(out.dim()));
+                return false;
+            }
+        } catch (const std::exception& e) {
+            DNN_LOGE("loadTorchModule: dummy forward exception: %s", e.what());
+            return false;
+        } catch (...) {
+            DNN_LOGE("loadTorchModule: dummy forward exception (unknown)");
+            return false;
+        }
+
+        torchLoaded = true;
+        DNN_LOGI("loadTorchModule: OK, dual-channel model ready ([1,2,T]→[1,T])");
+        return true;
+#else
+        (void)mgr;
+        (void)assetPath;
+        DNN_LOGE("loadTorchModule: HAVE_PYTORCH_LITE not defined — dual model "
+                 "unavailable, staying in bypass");
+        return false;
+#endif
+    }
+
+    /// Ejecuta una inferencia dual-channel sobre kDnnDualBlock samples de cada
+    /// canal (ch0/ch1 @ 16 kHz). Arma tensor [1,2,T], corre module.forward(),
+    /// extrae la salida mono [1,T] y la empuja al outputRing.
+    /// Devuelve true si el frame se procesó OK; false → falla (el worker pasa a
+    /// bypass permanente hasta reset). Nunca lanza (captura toda excepción).
+    /// Spec: gtcrn-dual-channel (tareas 2.5, 4.3).
+    bool processStereoFrame(const float* ch0, const float* ch1) {
+#if HAVE_PYTORCH_LITE
+        if (!torchLoaded) return false;
+
+        constexpr int T = kDnnDualBlock;
+        if (static_cast<int>(dualTensorData.size()) < 2 * T) {
+            dualTensorData.assign(2 * T, 0.0f);
+        }
+        // Layout [1,2,T]: fila 0 = ch0, fila 1 = ch1 (contiguo).
+        std::memcpy(dualTensorData.data(),     ch0, T * sizeof(float));
+        std::memcpy(dualTensorData.data() + T, ch1, T * sizeof(float));
+
+        const auto t0 = std::chrono::steady_clock::now();
+        try {
+            torch::InferenceMode guard;
+            at::Tensor input = torch::from_blob(
+                dualTensorData.data(), {1, 2, T}, torch::kFloat32);
+            std::vector<c10::IValue> inputs{input};
+            at::Tensor out = torchModule->forward(inputs).toTensor();
+
+            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != T) {
+                DNN_LOGE("processStereoFrame: unexpected output shape");
+                return false;
+            }
+            at::Tensor outc = out.contiguous();
+            const float* outData = outc.data_ptr<float>();
+
+            const auto t1 = std::chrono::steady_clock::now();
+            lastInferenceUsLocal.store(
+                static_cast<uint32_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        t1 - t0).count()),
+                std::memory_order_relaxed);
+
+            // Push atómico del frame completo: si no entra entero, drop (evita
+            // desalinear el 1:1 con el dryDelayRing → clicks periódicos).
+            if (outputRing.freeSpace() < T) {
+                droppedFramesLocal.fetch_add(1, std::memory_order_relaxed);
+                return true;
+            }
+            outputRing.push(outData, T);
+            return true;
+        } catch (const std::exception& e) {
+            DNN_LOGE("processStereoFrame: LibTorch forward exception: %s",
+                     e.what());
+            return false;
+        } catch (...) {
+            DNN_LOGE("processStereoFrame: LibTorch forward exception (unknown)");
+            return false;
+        }
+#else
+        (void)ch0;
+        (void)ch1;
+        return false;
+#endif
     }
 
     /// Inspecciona la sesión ONNX para descubrir nombres y shapes de I/O.
@@ -1038,20 +1219,32 @@ struct DnnDenoiser::Impl {
     }
 
     /// Loop principal del worker.
+    ///
+    /// Dos rutas según `channels`:
+    ///   - mono (1): drena kDnnHopSize de inputRing → STFT+ONNX (processOneFrame).
+    ///   - dual (2): drena kDnnDualBlock de inputRing y inputRingCh1 → arma
+    ///               tensor [1,2,T] y corre LibTorch (processStereoFrame).
+    /// La inferencia (mono u dual) SIEMPRE corre acá, nunca en el audio thread.
     void workerLoop() {
         DNN_LOGI("Worker thread started");
         std::vector<float> hopBuf(kDnnHopSize, 0.0f);
+        std::vector<float> hopCh0(kDnnDualBlock, 0.0f);
+        std::vector<float> hopCh1(kDnnDualBlock, 0.0f);
 
         while (workerRun.load(std::memory_order_acquire)) {
             // Reset si fue solicitado.
             if (resetRequested.exchange(false, std::memory_order_acq_rel)) {
                 resetWorkerState();
                 inputRing.clear();
+                inputRingCh1.clear();
                 outputRing.clear();
                 // dryDelayRing lo limpia el audio thread (nosotros no podemos).
             }
 
-            // Esperar hasta tener kDnnHopSize samples disponibles.
+            const bool dual = (channels.load(std::memory_order_acquire) == 2);
+            const int  need = dual ? kDnnDualBlock : kDnnHopSize;
+
+            // Esperar hasta tener `need` samples disponibles (ambos canales si dual).
             //
             // MEJORA #4 (ruido-profundo.md): wait_for bajado de 50 ms → 5 ms.
             // Con kDnnHopSize=128 (8 ms a 16 kHz) y `notify_one()` desde el audio
@@ -1062,28 +1255,51 @@ struct DnnDenoiser::Impl {
             // reducido a 1024 (~64 ms vs 256 ms), los drops bajo carga real bajan.
             {
                 std::unique_lock<std::mutex> lk(workerMtx);
-                workerCv.wait_for(lk, std::chrono::milliseconds(5), [this] {
-                    return !workerRun.load(std::memory_order_acquire) ||
-                           inputRing.available() >= kDnnHopSize ||
-                           resetRequested.load(std::memory_order_acquire);
+                workerCv.wait_for(lk, std::chrono::milliseconds(5),
+                                  [this, dual, need] {
+                    if (!workerRun.load(std::memory_order_acquire)) return true;
+                    if (resetRequested.load(std::memory_order_acquire)) return true;
+                    if (dual) {
+                        return inputRing.available() >= need &&
+                               inputRingCh1.available() >= need;
+                    }
+                    return inputRing.available() >= need;
                 });
             }
             if (!workerRun.load(std::memory_order_acquire)) break;
-            if (inputRing.available() < kDnnHopSize) continue;
-
-            // Drain un hop.
-            const int popped = inputRing.pop(hopBuf.data(), kDnnHopSize);
-            if (popped < kDnnHopSize) continue;  // race extraño, reintentar.
-
-            // Procesar.
             if (!modelReady) continue;
-            const bool ok = processOneFrame(hopBuf.data());
-            if (!ok) {
-                DNN_LOGW("processOneFrame failed → flagging inactive");
-                modelReady = false;  // bypass permanente hasta reset.
-                continue;
+
+            if (dual) {
+                // ── Ruta dual: LibTorch ────────────────────────────────
+                if (inputRing.available() < kDnnDualBlock ||
+                    inputRingCh1.available() < kDnnDualBlock) {
+                    continue;
+                }
+                const int p0 = inputRing.pop(hopCh0.data(), kDnnDualBlock);
+                const int p1 = inputRingCh1.pop(hopCh1.data(), kDnnDualBlock);
+                if (p0 < kDnnDualBlock || p1 < kDnnDualBlock) continue;  // race raro.
+
+                const bool ok = processStereoFrame(hopCh0.data(), hopCh1.data());
+                if (!ok) {
+                    DNN_LOGW("processStereoFrame failed → flagging inactive");
+                    modelReady = false;  // bypass permanente hasta reset.
+                    continue;
+                }
+                processedFramesLocal.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                // ── Ruta mono legacy: STFT + ONNX ──────────────────────
+                if (inputRing.available() < kDnnHopSize) continue;
+                const int popped = inputRing.pop(hopBuf.data(), kDnnHopSize);
+                if (popped < kDnnHopSize) continue;  // race extraño, reintentar.
+
+                const bool ok = processOneFrame(hopBuf.data());
+                if (!ok) {
+                    DNN_LOGW("processOneFrame failed → flagging inactive");
+                    modelReady = false;  // bypass permanente hasta reset.
+                    continue;
+                }
+                processedFramesLocal.fetch_add(1, std::memory_order_relaxed);
             }
-            processedFramesLocal.fetch_add(1, std::memory_order_relaxed);
         }
         DNN_LOGI("Worker thread exited");
     }
@@ -1113,6 +1329,7 @@ struct DnnDenoiser::Impl {
         if (sr == kDnnSampleRate) {
             // 16 kHz: bypass del resampler.
             down.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
+            downCh1.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
             up.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
             DNN_LOGI("Resampler: 16 kHz native — bypass (latency = 0 ms)");
         } else if (sr == 48000) {
@@ -1122,6 +1339,10 @@ struct DnnDenoiser::Impl {
             down.configure(Resampler::Mode::kPolyDown48to16,
                            protoLpf.data(),
                            static_cast<int>(protoLpf.size()), 0.0f);
+            // ch1 usa un resampler idéntico con estado propio (tarea 2.3).
+            downCh1.configure(Resampler::Mode::kPolyDown48to16,
+                              protoLpf.data(),
+                              static_cast<int>(protoLpf.size()), 0.0f);
             up.configure(Resampler::Mode::kPolyUp16to48,
                          protoLpf.data(),
                          static_cast<int>(protoLpf.size()), 0.0f);
@@ -1137,6 +1358,7 @@ struct DnnDenoiser::Impl {
             const float downRatio = static_cast<float>(sr) / static_cast<float>(kDnnSampleRate);
             const float upRatio   = static_cast<float>(kDnnSampleRate) / static_cast<float>(sr);
             down.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, downRatio);
+            downCh1.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, downRatio);
             up.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, upRatio);
             DNN_LOGW("Resampler: %d Hz → linear interpolation (downRatio=%.4f, "
                      "upRatio=%.4f). Quality OK for denoiser, suboptimal for "
@@ -1144,6 +1366,7 @@ struct DnnDenoiser::Impl {
         }
         // Limpiar rings: las dimensiones lógicas cambian al cambiar la rate.
         inputRing.clear();
+        inputRingCh1.clear();
         outputRing.clear();
         dryDelayRing.clear();
         // Reset estado interno worker para evitar mezclar buffers de la rate vieja.
@@ -1213,10 +1436,40 @@ bool DnnDenoiser::initialize(AAssetManager* assetMgr, const char* assetPath) {
         return false;
     }
 
+    impl_->channels.store(1, std::memory_order_release);
+    inputChannelsMode_.store(1, std::memory_order_release);
     impl_->modelReady = true;
     active_.store(true, std::memory_order_release);
     impl_->startWorker();
-    DNN_LOGI("initialize: OK, worker thread running");
+    DNN_LOGI("initialize: OK, worker thread running (mono)");
+    return true;
+}
+
+bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath) {
+    if (impl_->modelReady) {
+        DNN_LOGW("initializeDual: already initialized, no-op");
+        return impl_->channels.load(std::memory_order_acquire) == 2;
+    }
+
+    DNN_LOGI("initializeDual: loading %s (LibTorch dual-channel)",
+             assetPath ? assetPath : "(null)");
+
+    // Cargar el .pt y validar el contrato de shape [1,2,160] → [1,160].
+    // Cualquier fallo (asset, load, shape, excepción) → Bypass_Seguro.
+    if (!impl_->loadTorchModule(assetMgr, assetPath)) {
+        DNN_LOGE("initializeDual: model load/validation failed → bypass");
+        impl_->channels.store(1, std::memory_order_release);
+        inputChannelsMode_.store(1, std::memory_order_release);
+        active_.store(false, std::memory_order_release);
+        return false;
+    }
+
+    impl_->channels.store(2, std::memory_order_release);
+    inputChannelsMode_.store(2, std::memory_order_release);
+    impl_->modelReady = true;
+    active_.store(true, std::memory_order_release);
+    impl_->startWorker();
+    DNN_LOGI("initializeDual: OK, worker thread running (dual-channel)");
     return true;
 }
 
@@ -1405,6 +1658,183 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
                             std::memory_order_relaxed);
 }
 
+void DnnDenoiser::processStereo(const float* ch0, const float* ch1,
+                                float* output, int blockSize) {
+    if (ch0 == nullptr || ch1 == nullptr || output == nullptr || blockSize <= 0) {
+        return;
+    }
+
+    // Bypass = ch0 passthrough (respeta el aliasing output==ch0 sin memcpy UB).
+    auto passthroughCh0 = [&]() {
+        if (output != ch0) {
+            std::memcpy(output, ch0, static_cast<size_t>(blockSize) * sizeof(float));
+        }
+    };
+
+    const bool en   = enabled_.load(std::memory_order_acquire);
+    const bool act  = active_.load(std::memory_order_acquire);
+    const bool dual = (inputChannelsMode_.load(std::memory_order_acquire) == 2);
+
+    // Fast path bypass: sin enable (y crossfade ya en 0), o modelo no dual.
+    // El modo mono no puede procesar estéreo → ch0 passthrough (R4.5).
+    if (!dual || (!en && crossfadeGain_ <= 0.0f)) {
+        passthroughCh0();
+        return;
+    }
+
+    // Modelo dual pero no activo (falla de carga/inferencia): bypass con
+    // crossfade out si veníamos en wet, luego ch0 passthrough (R4.3, R4.4).
+    if (!act) {
+        crossfadeTarget_ = 0.0f;
+        if (crossfadeGain_ > 0.0f) {
+            for (int i = 0; i < blockSize; ++i) {
+                crossfadeGain_ = std::max(0.0f, crossfadeGain_ - kCrossfadeStep);
+            }
+        }
+        passthroughCh0();
+        return;
+    }
+
+    crossfadeTarget_ = en ? 1.0f : 0.0f;
+
+    // ── Etapa 1: dry = ch0 → dryDelayRing (samples a rate nativa) ───────
+    // ch0 es la señal "dry" de la mezcla dry/wet y del crossfade (tarea 2.6).
+    impl_->dryDelayRing.push(ch0, blockSize);
+
+    // ── Etapa 2: DOWNSAMPLE ch0→inputRing y ch1→inputRingCh1 (a 16 kHz) ─
+    if (static_cast<int>(impl_->downStaging.size()) < blockSize) {
+        impl_->downStaging.assign(blockSize, 0.0f);
+    }
+    if (static_cast<int>(impl_->downStagingCh1.size()) < blockSize) {
+        impl_->downStagingCh1.assign(blockSize, 0.0f);
+    }
+    const int d0 = impl_->down.process(ch0, blockSize,
+                                       impl_->downStaging.data(),
+                                       static_cast<int>(impl_->downStaging.size()));
+    const int d1 = impl_->downCh1.process(ch1, blockSize,
+                                          impl_->downStagingCh1.data(),
+                                          static_cast<int>(impl_->downStagingCh1.size()));
+    if (d0 > 0) {
+        const int pushed0 = impl_->inputRing.push(impl_->downStaging.data(), d0);
+        if (pushed0 < d0) droppedFrames_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (d1 > 0) {
+        const int pushed1 = impl_->inputRingCh1.push(impl_->downStagingCh1.data(), d1);
+        if (pushed1 < d1) droppedFrames_.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Notificar al worker solo cuando ambos canales tienen un bloque completo.
+    if (impl_->inputRing.available() >= kDnnDualBlock &&
+        impl_->inputRingCh1.available() >= kDnnDualBlock) {
+        impl_->workerCv.notify_one();
+    }
+
+    // ── Etapa 3: tirar wet @16 kHz del outputRing y UPSAMPLE a inputSr ──
+    if (static_cast<int>(impl_->wetNativeRate.size()) < blockSize) {
+        impl_->wetNativeRate.assign(blockSize, 0.0f);
+    }
+    int wetWritten = 0;
+    bool underrun  = false;
+    while (wetWritten < blockSize) {
+        float in16k;
+        const int got = impl_->outputRing.pop(&in16k, 1);
+        if (got < 1) {
+            underrun = true;
+            break;
+        }
+        const int produced = impl_->up.process(
+            &in16k, 1,
+            impl_->wetNativeRate.data() + wetWritten,
+            blockSize - wetWritten);
+        wetWritten += produced;
+        if (produced == 0) {
+            continue;
+        }
+    }
+
+    // ── Etapa 4: pop dry (=ch0 realineado) @ rate nativa ────────────────
+    std::vector<float> dry(blockSize, 0.0f);
+    const int gotDry = impl_->dryDelayRing.pop(dry.data(), blockSize);
+
+    if (underrun) {
+        // El worker no alcanzó la tasa: salida = ch0 (Bypass_Seguro), avanzar
+        // el crossfade y descartar wet parcial.
+        for (int i = 0; i < blockSize; ++i) {
+            if (crossfadeGain_ < crossfadeTarget_) {
+                crossfadeGain_ = std::min(crossfadeTarget_,
+                                          crossfadeGain_ + kCrossfadeStep);
+            } else if (crossfadeGain_ > crossfadeTarget_) {
+                crossfadeGain_ = std::max(crossfadeTarget_,
+                                          crossfadeGain_ - kCrossfadeStep);
+            }
+        }
+        if (wetWritten > 0) {
+            droppedFrames_.fetch_add(1, std::memory_order_relaxed);
+        }
+        passthroughCh0();
+        return;
+    }
+
+    // ── Etapa 5: mezcla dry(ch0) ↔ wet con intensity, crossfade y VAD cap ─
+    // Misma máquina que process() (spec dnn-voice-level-recovery), con ch0
+    // como señal dry (tarea 2.6). NO amplifica: bajar el amount pesa más ch0.
+    const float userIntensity = intensity_.load(std::memory_order_acquire);
+    const bool  vadActive     = voiceActive_.load(std::memory_order_acquire);
+    const float voiceCap      = voiceCap_.load(std::memory_order_acquire);
+    const float target        = vadActive ? std::min(userIntensity, voiceCap)
+                                          : userIntensity;
+    const float stepAttack  = stepAttackPerSample_;
+    const float stepRelease = stepReleasePerSample_;
+
+    for (int i = 0; i < blockSize; ++i) {
+        // Avanzar crossfade un sample.
+        if (crossfadeGain_ < crossfadeTarget_) {
+            crossfadeGain_ = std::min(crossfadeTarget_,
+                                      crossfadeGain_ + kCrossfadeStep);
+        } else if (crossfadeGain_ > crossfadeTarget_) {
+            crossfadeGain_ = std::max(crossfadeTarget_,
+                                      crossfadeGain_ - kCrossfadeStep);
+        }
+
+        // Rampa asimétrica del effectiveIntensity_ hacia target.
+        if (effectiveIntensity_ > target) {
+            if (stepAttack <= 0.0f) {
+                effectiveIntensity_ = target;
+            } else {
+                effectiveIntensity_ -= stepAttack;
+                if (effectiveIntensity_ < target) effectiveIntensity_ = target;
+            }
+        } else if (effectiveIntensity_ < target) {
+            if (stepRelease <= 0.0f) {
+                effectiveIntensity_ = target;
+            } else {
+                effectiveIntensity_ += stepRelease;
+                if (effectiveIntensity_ > target) effectiveIntensity_ = target;
+            }
+        }
+
+        const float dnnAmount = crossfadeGain_ * effectiveIntensity_;
+        const float drySample = (gotDry > i) ? dry[i] : ch0[i];
+        const float mixed     = drySample * (1.0f - dnnAmount)
+                              + impl_->wetNativeRate[i] * dnnAmount;
+
+        // Clamp ±1.0 por seguridad.
+        output[i] = std::max(-1.0f, std::min(1.0f, mixed));
+    }
+
+    // Espejar el effective al atomic para getEffectiveIntensity().
+    effectiveIntensityAtomic_.store(effectiveIntensity_,
+                                    std::memory_order_release);
+
+    // Espejar contadores al wrapper público.
+    processedFrames_.store(impl_->processedFramesLocal.load(std::memory_order_relaxed),
+                            std::memory_order_relaxed);
+    droppedFrames_.store(impl_->droppedFramesLocal.load(std::memory_order_relaxed) +
+                            droppedFrames_.load(std::memory_order_relaxed),
+                            std::memory_order_relaxed);
+    lastInferenceUs_.store(impl_->lastInferenceUsLocal.load(std::memory_order_relaxed),
+                            std::memory_order_relaxed);
+}
+
 void DnnDenoiser::setEnabled(bool enabled) {
     enabled_.store(enabled, std::memory_order_release);
     DNN_LOGI("setEnabled: %d (active=%d)", enabled ? 1 : 0,
@@ -1439,6 +1869,7 @@ void DnnDenoiser::reset() {
         // (de antes del reset) con los nuevos en el siguiente bloque.
         impl_->dryDelayRing.clear();
         impl_->down.reset();
+        impl_->downCh1.reset();
         impl_->up.reset();
     }
     crossfadeGain_   = 0.0f;
