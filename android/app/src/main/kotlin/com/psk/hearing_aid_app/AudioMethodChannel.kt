@@ -339,15 +339,7 @@ class AudioMethodChannel(
                 // ─── MVDR Dual-Mic Beamforming ──────────────────────────
                 "setBeamformingEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false
-                    // Togglea el beamformer del motor ya corriendo (runtime).
-                    nativeBridge.nativeSetBeamformingEnabled(enabled)
-                    // ADEMÁS: setea el flag "requested" para que el PRÓXIMO
-                    // start() abra el stream en estéreo. Sin esto, aunque el
-                    // beamformer quede enabled, nativeStart abriría mono y el
-                    // beamformer nunca recibiría ch0/ch1. Spec:
-                    // dual-mic-mvdr-beamforming.
-                    nativeBridge.nativeSetBeamformingRequested(enabled)
-                    result.success(null)
+                    handleSetBeamformingMode(enabled, result)
                 }
                 "getBeamformingActive" -> {
                     val active = nativeBridge.nativeGetBeamformingActive()
@@ -511,6 +503,10 @@ class AudioMethodChannel(
         // CRÍTICO: setear el flag de Modo Conversación ANTES de start() para
         // que el motor abra los streams con Usage::VoiceCommunication (SCO).
         nativeBridge.nativeSetConversationMode(conversationMode)
+        // CRÍTICO: setear el flag de beamforming ANTES de start() para que
+        // el motor abra el input stream con 2 canales (estéreo).
+        val beamformingEnabled = call.argument<Boolean>("beamformingEnabled") ?: false
+        nativeBridge.nativeSetBeamformingMode(beamformingEnabled)
         nativeBridge.start(
             sampleRate = sampleRate,
             bufferSize = bufferSize,
@@ -749,6 +745,74 @@ class AudioMethodChannel(
         }
 
         result.success(scoStatus)
+    }
+
+    /**
+     * Habilita/deshabilita el beamforming MVDR dual-mic.
+     *
+     * Requiere reiniciar el engine porque el cambio de channelCount
+     * (mono ↔ estéreo) exige re-abrir el input stream Oboe.
+     * Sigue el mismo patrón que handleSetConversationMode.
+     */
+    private fun handleSetBeamformingMode(
+        enabled: Boolean,
+        result: MethodChannel.Result
+    ) {
+        val engineRunning = nativeBridge.getOutputDeviceId() >= 0
+        if (!engineRunning) {
+            // Engine no corre: guardar flag para el próximo start.
+            nativeBridge.nativeSetBeamformingMode(enabled)
+            Log.i(TAG, "setBeamformingMode($enabled) — engine idle, flag stored")
+            result.success(null)
+            return
+        }
+
+        // Engine corriendo → reiniciar con nuevo channelCount.
+        noiseSuppressor?.release()
+        noiseSuppressor = null
+
+        nativeBridge.stop()
+
+        // Setear flag ANTES de re-start.
+        nativeBridge.nativeSetBeamformingMode(enabled)
+        nativeBridge.nativeSetConversationMode(conversationMode)
+
+        val sampleRate = if (conversationMode) 16_000 else 48_000
+        val bufferSize = if (conversationMode) 64 else 256
+
+        nativeBridge.start(
+            sampleRate = sampleRate,
+            bufferSize = bufferSize,
+            eqGains = lastEqGains,
+            volumeDb = lastVolumeDb,
+            expansionKnee = lastExpKnee,
+            expansionRatio = lastExpRatio,
+            compressionKnee = lastCompKnee,
+            compressionRatio = lastCompRatio,
+            attackMs = lastAttackMs,
+            releaseMs = lastReleaseMs,
+            nrLevel = 0,
+            mpoThresholdDbSpl = lastMpoDbSpl,
+            splOffset = 120f
+        )
+
+        // Re-init DNN denoiser en el nuevo engine.
+        try {
+            nativeBridge.nativeInitDnnDenoiser(context.assets)
+            nativeBridge.nativeSetDnnEnabled(lastDnnEnabled)
+            nativeBridge.nativeSetDnnIntensity(lastDnnIntensity)
+            Log.i(TAG, "setBeamformingMode: DNN re-enabled=$lastDnnEnabled")
+        } catch (t: Throwable) {
+            Log.w(TAG, "setBeamformingMode: re-initDnnDenoiser failed: ${t.message}")
+        }
+
+        // Activar el beamformer en el engine recién creado (si enabled).
+        if (enabled) {
+            nativeBridge.nativeSetBeamformingEnabled(true)
+        }
+
+        Log.i(TAG, "setBeamformingMode($enabled) — engine restarted")
+        result.success(null)
     }
 
     /**

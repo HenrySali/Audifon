@@ -43,6 +43,10 @@ class AudioConfig extends Equatable {
   /// Threshold del limitador MPO en dB SPL (default: 100).
   final double mpoThresholdDbSpl;
 
+  /// Habilitar captura estéreo + MVDR beamformer dual-mic.
+  /// Default: false (retrocompatible, captura mono).
+  final bool beamformingEnabled;
+
   const AudioConfig({
     this.sampleRate = 48000,
     this.bufferSize = 256,
@@ -53,6 +57,7 @@ class AudioConfig extends Equatable {
     required this.wdrcParams,
     required this.nrLevel,
     this.mpoThresholdDbSpl = 100.0,
+    this.beamformingEnabled = false,
   });
 
   @override
@@ -66,5 +71,6 @@ class AudioConfig extends Equatable {
         wdrcParams,
         nrLevel,
         mpoThresholdDbSpl,
+        beamformingEnabled,
       ];
 }
