@@ -2,7 +2,7 @@
   "id": "FEAT-004",
   "type": "feat",
   "description": "UI toggle for enabling/disabling MVDR dual-mic beamformer in main_screen.dart. SwitchListTile with Icons.spatial_audio, persisted in Hive settings_box with key beamformingEnabled (default false). Calls AudioBridgeImpl().setBeamformingEnabled(enabled) on toggle change.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "1. Add a _BeamformingToggleCard StatefulWidget to main_screen.dart following the pattern of existing toggles (DNN, Conversation Mode, Smart Scene).",
     "2. In initState, read the beamformingEnabled value from Hive settings_box (default false) and set initial switch state.",
@@ -22,5 +22,5 @@
     "Verify the toggle follows existing patterns in the file"
   ],
   "blocked_reason": null,
-  "findings": null
+  "findings": "Toggle implemented following the _DnnNoiseCleanerCard pattern. Uses Card + SwitchListTile for consistent Material look. Placed after DNN card in _ActiveView. No dart analyzer available in sandbox, but structural checks (brace/paren/bracket balance) all pass. AudioBridgeImpl import was already present in the file."
 }
