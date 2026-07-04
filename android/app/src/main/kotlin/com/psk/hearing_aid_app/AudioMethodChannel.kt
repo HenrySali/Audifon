@@ -339,7 +339,14 @@ class AudioMethodChannel(
                 // ─── MVDR Dual-Mic Beamforming ──────────────────────────
                 "setBeamformingEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false
+                    // Togglea el beamformer del motor ya corriendo (runtime).
                     nativeBridge.nativeSetBeamformingEnabled(enabled)
+                    // ADEMÁS: setea el flag "requested" para que el PRÓXIMO
+                    // start() abra el stream en estéreo. Sin esto, aunque el
+                    // beamformer quede enabled, nativeStart abriría mono y el
+                    // beamformer nunca recibiría ch0/ch1. Spec:
+                    // dual-mic-mvdr-beamforming.
+                    nativeBridge.nativeSetBeamformingRequested(enabled)
                     result.success(null)
                 }
                 "getBeamformingActive" -> {

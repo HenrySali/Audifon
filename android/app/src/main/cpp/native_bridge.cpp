@@ -59,6 +59,15 @@ std::atomic<bool> g_running{false};
 /// modo-conversacion-sco.
 std::atomic<bool> g_conversationMode{false};
 
+/// Flag del MVDR dual-mic beamforming solicitado por la UI. Lo setea
+/// `nativeSetBeamformingRequested` ANTES de `nativeStart`, y `nativeStart`
+/// lo copia a `AudioEngineConfig.beamformingEnabled` para que los streams
+/// Oboe se abran en estéreo (2 canales) y el beamformer pueda procesar.
+/// Sin esto, `nativeStart` siempre abría mono y el beamformer nunca recibía
+/// datos estéreo aunque `setEnabled(true)` estuviera activo. Spec:
+/// dual-mic-mvdr-beamforming.
+std::atomic<bool> g_beamformingEnabled{false};
+
 } // namespace anónimo
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -285,6 +294,10 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     // Modo Conversación: leído del flag global que setea
     // nativeSetConversationMode() antes de este start.
     engineConfig.conversationMode = g_conversationMode.load(std::memory_order_acquire);
+    // MVDR beamforming: leído del flag global que setea
+    // nativeSetBeamformingRequested() antes de este start. Habilita la
+    // captura estéreo (2 canales) para que el beamformer reciba ch0/ch1.
+    engineConfig.beamformingEnabled = g_beamformingEnabled.load(std::memory_order_acquire);
 
     // Iniciar el AudioEngine (crea Oboe streams + hilo de audio)
     if (!g_engine->start(engineConfig)) {
@@ -1198,6 +1211,26 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetBeamformingEnabled(
         return;
     }
     g_engine->setBeamformingEnabled(enabled == JNI_TRUE);
+}
+
+/// Setea el flag de "beamforming solicitado" que consume `nativeStart`.
+///
+/// IMPORTANTE: debe llamarse ANTES de `nativeStart` (o antes de un
+/// stop→start) para que el motor abra el stream de entrada en estéreo
+/// (2 canales) y el MVDR beamformer reciba ambos micrófonos. A diferencia
+/// de `nativeSetBeamformingEnabled` (que solo togglea el flag del beamformer
+/// ya corriendo), este flag decide la geometría de captura en el próximo
+/// start. Thread-safe (std::atomic). Spec: dual-mic-mvdr-beamforming.
+///
+/// @param enabled true → próximo start abre estéreo + beamforming.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetBeamformingRequested(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    g_beamformingEnabled.store(enabled == JNI_TRUE, std::memory_order_release);
+    LOGI("nativeSetBeamformingRequested: %s", (enabled == JNI_TRUE) ? "ON" : "OFF");
 }
 
 /// Consulta si el MVDR beamformer esta activo (enabled + procesando).

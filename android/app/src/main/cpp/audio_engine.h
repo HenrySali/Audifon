@@ -305,8 +305,13 @@ private:
     // ─── MVDR Beamformer (dual-mic, pre-DNN) ─────────────────────────────
     /// Beamformer MVDR de 2 microfonos. Procesa antes de la DNN.
     MvdrBeamformer mvdrBeamformer_;
-    /// Buffers temporales para deinterleave de estereo (max 1024 frames).
-    static constexpr int kMaxBeamBlockSize = 1024;
+    /// Buffers temporales para deinterleave de estereo.
+    /// Tamaño = MvdrBeamformer::kFftSize (256): el beamformer procesa en
+    /// frames de kFftSize y su outputBuf_ interno solo garantiza kFftSize*2
+    /// muestras. Procesar chunks > kFftSize provocaba overread de outputBuf_
+    /// en MvdrBeamformer::process (Fix #2/#7 auditoría MVDR). El callback
+    /// trocea numFrames en chunks de este tamaño.
+    static constexpr int kMaxBeamBlockSize = MvdrBeamformer::kFftSize;
     float beamCh0_[kMaxBeamBlockSize] = {};
     float beamCh1_[kMaxBeamBlockSize] = {};
     /// Flag indicando si el stream de input es realmente estereo.

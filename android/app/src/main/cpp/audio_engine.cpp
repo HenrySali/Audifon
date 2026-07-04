@@ -496,6 +496,22 @@ void AudioEngine::setDnnIntensity(float intensity) {
 
 void AudioEngine::setBeamformingEnabled(bool enabled) {
     mvdrBeamformer_.setEnabled(enabled);
+
+    // Fix #3 (auditoría MVDR): habilitar/deshabilitar en runtime requiere
+    // reabrir los streams porque la geometría de captura (mono vs estéreo)
+    // se decide en openInputStream() según config_.beamformingEnabled. Si el
+    // motor corre en mono y se pide beamforming, hay que reiniciar en estéreo
+    // (y viceversa). Si ya estamos en el modo correcto, solo togglea el flag
+    // del beamformer (arriba) sin tocar los streams.
+    if (enabled && running_.load(std::memory_order_acquire) && !stereoInputAvailable_) {
+        config_.beamformingEnabled = true;
+        stop();
+        start(config_);
+    } else if (!enabled && running_.load(std::memory_order_acquire) && stereoInputAvailable_) {
+        config_.beamformingEnabled = false;
+        stop();
+        start(config_);
+    }
 }
 
 bool AudioEngine::isBeamformingActive() const {
@@ -785,14 +801,14 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb,
                            vadFromLastBlock);
 
-    // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
-    // En modo estereo, alimentar con el canal de referencia (ch0, mono);
-    // en modo mono legacy, usar inPtr directamente.
-    if (config_.beamformingEnabled && stereoInputAvailable_) {
-        sceneAnalyzer_.process(beamCh0_, numFrames);
-    } else {
-        sceneAnalyzer_.process(inPtr, numFrames);
-    }
+    // ─── Smart Scene Engine analysis (Fase 1, read-only) ────────────────
+    // Fix #5 (auditoría MVDR): alimentar el SceneAnalyzer con `outPtr`, que
+    // ya es la señal mono resultante (beamformed en estéreo, o memcpy de ch0
+    // en mono legacy). Antes se le pasaba `beamCh0_`, que en modo chunked
+    // solo contenía el ÚLTIMO chunk deinterleaveado (datos stale para
+    // numFrames > kMaxBeamBlockSize) y además ignoraba el beamforming. Usar
+    // `outPtr` da al VAD la señal coherente con la que sale del beamformer.
+    sceneAnalyzer_.process(outPtr, numFrames);
 
     // ─── Cablear voice_active al DNN denoiser para el cap del Paso 1 ────
     // Spec dnn-voice-level-recovery R1.1, R1.2, R5.2:

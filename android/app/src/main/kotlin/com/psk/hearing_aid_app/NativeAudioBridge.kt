@@ -523,6 +523,18 @@ class NativeAudioBridge {
     external fun nativeSetBeamformingEnabled(enabled: Boolean)
 
     /**
+     * Setea el flag de "beamforming solicitado" que consume [nativeStart].
+     *
+     * Debe llamarse ANTES de [start] (o antes de un stop→start) para que el
+     * motor abra el stream de entrada en estéreo (2 canales) y el MVDR
+     * beamformer reciba ambos micrófonos. A diferencia de
+     * [nativeSetBeamformingEnabled] (que togglea el beamformer ya corriendo),
+     * este flag decide la geometría de captura del próximo start.
+     * Thread-safe (std::atomic). Spec: dual-mic-mvdr-beamforming.
+     */
+    external fun nativeSetBeamformingRequested(enabled: Boolean)
+
+    /**
      * Consulta si el MVDR beamformer está activo (enabled + procesando).
      * Thread-safe (lee std::atomic<bool> interno).
      *

@@ -59,16 +59,25 @@ public:
         inputBufPos_ = 0;
         outputBufPos_ = 0;
 
-        // Inicializar Rnn como identidad (diagonal loading)
+        // Inicializar Rnn a ceros. Fix #8 (auditoria MVDR): NO precargar la
+        // diagonal con kReg aqui, porque computeMvdrWeights() ya suma kReg a
+        // la diagonal justo antes de invertir. Inicializarla aca provocaba
+        // doble diagonal loading (2*kReg efectivo) hasta que updateRnn()
+        // sobrescribiera la estimacion. Con ceros, mientras rnnInitialized_
+        // es false se usa delay-and-sum; una vez que hay ruido estimado, el
+        // unico loading es el de computeMvdrWeights.
         for (int k = 0; k < kNumBins; ++k) {
-            rnn_[k][0][0] = Complex(kReg, 0.0f);
+            rnn_[k][0][0] = Complex(0.0f, 0.0f);
             rnn_[k][0][1] = Complex(0.0f, 0.0f);
             rnn_[k][1][0] = Complex(0.0f, 0.0f);
-            rnn_[k][1][1] = Complex(kReg, 0.0f);
+            rnn_[k][1][1] = Complex(0.0f, 0.0f);
         }
 
-        // Calcular steering vector para fuente frontal (0 grados)
-        computeSteeringVector(0.0f);
+        // Calcular steering vector para el angulo configurado (default 0
+        // grados = broadside frontal). Ver setSteeringAngle() y Fix #6:
+        // 0 grados da poca discriminacion (~3.78 dB en la sim Octave); se
+        // deja como default pero es ajustable segun orientacion del telefono.
+        computeSteeringVector(steeringAngleDeg_);
 
         // Calcular ventana de Hann
         for (int n = 0; n < kFftSize; ++n) {
@@ -89,6 +98,32 @@ public:
     bool isEnabled() const {
         return enabled_.load(std::memory_order_acquire);
     }
+
+    /// Ajusta el angulo de steering del beamformer (en grados) y recalcula
+    /// el steering vector.
+    ///
+    /// Fix #6 (auditoria MVDR): con la fuente en broadside (0 grados, default)
+    /// y esta geometria de mics (kMicSpacing=0.14 m), la simulacion Octave
+    /// mostro una mejora de solo ~3.78 dB — la discriminacion espacial en
+    /// broadside es intrinsecamente pobre porque el retardo inter-mic es ~0.
+    /// Este setter permite experimentar con otros angulos segun la orientacion
+    /// real del telefono respecto a la fuente de voz (p. ej. el usuario
+    /// sostiene el telefono con el eje de mics apuntando al interlocutor).
+    /// El default se mantiene en 0 grados para no cambiar el comportamiento
+    /// actual; ajustar segun caracterizacion del hardware/uso.
+    ///
+    /// NOTA: no es thread-safe respecto al callback de audio (reescribe
+    /// steeringVec_). Llamar solo con el beamformer detenido o aceptando un
+    /// glitch transitorio de 1 frame.
+    ///
+    /// @param deg Angulo de arribo de la fuente objetivo, en grados.
+    void setSteeringAngle(float deg) {
+        steeringAngleDeg_ = deg;
+        computeSteeringVector(deg);
+    }
+
+    /// @return Angulo de steering actual (grados).
+    float getSteeringAngle() const { return steeringAngleDeg_; }
 
     /// Procesa un bloque de audio estereo y produce salida mono beamformed.
     /// Usa overlap-add internamente para manejar bloques de cualquier tamano.
@@ -142,8 +177,11 @@ public:
             // First frame just processed. For this transitional block,
             // passthrough ch0 to avoid partial/glitchy output.
             std::memcpy(output, ch0, numFrames * sizeof(float));
-            // Reset output buffer state for clean start on next call
-            std::memset(outputBuf_, 0, sizeof(outputBuf_));
+            // Fix #4 (auditoría MVDR): NO borrar outputBuf_ con memset. El
+            // frame recién sintetizado en processFrame() ya quedó acumulado
+            // (overlap-add) y debe consumirse en el próximo callback, no
+            // descartarse — descartarlo producía un dropout en la transición
+            // passthrough→beamformed. Solo reseteamos el índice de lectura.
             outputBufPos_ = 0;
             return;
         }
@@ -447,6 +485,9 @@ private:
 
     // Steering vector por bin [kNumBins][2]
     Complex steeringVec_[kNumBins][2] = {};
+
+    // Angulo de steering (grados). Default 0 = broadside frontal (ver Fix #6).
+    float steeringAngleDeg_ = 0.0f;
 
     // Matriz de correlacion del ruido [kNumBins][2][2]
     Complex rnn_[kNumBins][2][2] = {};
