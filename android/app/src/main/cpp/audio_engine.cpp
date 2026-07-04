@@ -64,7 +64,12 @@ oboe::Result AudioEngine::openInputStream() {
         builder.setDeviceId(config_.builtInMicDeviceId);
     }
     builder.setSampleRate(config_.sampleRate);
-    builder.setChannelCount(1);
+    // Beamforming requiere 2 canales (estereo); legacy usa 1 (mono)
+    int requestedChannels = 1;
+    if (config_.beamformingEnabled) {
+        requestedChannels = 2;
+    }
+    builder.setChannelCount(requestedChannels);
     builder.setFormat(oboe::AudioFormat::Float);
     builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
     // Use Shared mode for input — more compatible across devices.
@@ -108,6 +113,30 @@ oboe::Result AudioEngine::openInputStream() {
     }
 
     oboe::Result result = builder.openStream(inputStream_);
+
+    // Fallback: si se pidieron 2 canales y fallo, reintentar con 1 canal
+    if (result != oboe::Result::OK && requestedChannels == 2) {
+        LOGW("Stereo input failed (%s), falling back to mono",
+             oboe::convertToText(result));
+        builder.setChannelCount(1);
+        result = builder.openStream(inputStream_);
+        if (result == oboe::Result::OK) {
+            stereoInputAvailable_ = false;
+            LOGI("Input stream opened in MONO fallback mode");
+        }
+    } else if (result == oboe::Result::OK && requestedChannels == 2) {
+        // Verificar que Oboe realmente abrio en estereo
+        if (inputStream_->getChannelCount() == 2) {
+            stereoInputAvailable_ = true;
+            LOGI("Input stream opened in STEREO mode (beamforming ready)");
+        } else {
+            stereoInputAvailable_ = false;
+            LOGW("Requested stereo but got %d channels — beamforming unavailable",
+                 inputStream_->getChannelCount());
+        }
+    } else if (result == oboe::Result::OK) {
+        stereoInputAvailable_ = false;
+    }
 
     if (result == oboe::Result::OK) {
         LOGI("Input stream opened — API: %s, sampleRate: %d, format: %s, "
@@ -274,6 +303,12 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
 
     // ─── Step 5b: Initialize Smart Scene Engine analyzer (Fase 1) ────────
     sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);
+
+    // ─── Step 5c: Initialize MVDR Beamformer ─────────────────────────────
+    mvdrBeamformer_.init(effectiveSampleRate);
+    if (config_.beamformingEnabled && stereoInputAvailable_) {
+        mvdrBeamformer_.setEnabled(true);
+    }
 
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
     setInputStream(inputStream_.get());
@@ -456,6 +491,18 @@ void AudioEngine::setDnnIntensity(float intensity) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MVDR Beamformer — wrappers thin sobre mvdrBeamformer_
+// ─────────────────────────────────────────────────────────────────────────────
+
+void AudioEngine::setBeamformingEnabled(bool enabled) {
+    mvdrBeamformer_.setEnabled(enabled);
+}
+
+bool AudioEngine::isBeamformingActive() const {
+    return mvdrBeamformer_.isEnabled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Oboe FullDuplexStream Callback
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -546,7 +593,33 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // ─── Copy input to output buffer for in-place processing ─────────────
     const float* inPtr = static_cast<const float*>(inputData);
     float* outPtr = static_cast<float*>(outputData);
-    std::memcpy(outPtr, inPtr, numFrames * sizeof(float));
+
+    // ─── MVDR Beamforming: deinterleave stereo + process ─────────────────
+    if (config_.beamformingEnabled && stereoInputAvailable_ && mvdrBeamformer_.isEnabled()) {
+        // inputData es interleaved stereo: [L0, R0, L1, R1, ...]
+        // Deinterleave a 2 buffers mono temporales
+        int framesToProcess = std::min(numFrames, kMaxBeamBlockSize);
+        for (int i = 0; i < framesToProcess; ++i) {
+            beamCh0_[i] = inPtr[i * 2];      // Canal 0 (mic inferior)
+            beamCh1_[i] = inPtr[i * 2 + 1];  // Canal 1 (mic superior)
+        }
+
+        // VAD del SceneAnalyzer (ultima lectura disponible)
+        bool vadActive = sceneAnalyzer_.getVad().isVoiceActive();
+
+        // Procesar MVDR -> salida mono en outPtr
+        mvdrBeamformer_.process(beamCh0_, beamCh1_,
+                                outPtr, framesToProcess, vadActive);
+    } else if (config_.beamformingEnabled && stereoInputAvailable_) {
+        // Beamformer deshabilitado pero captura estereo activa -> usar solo ch0
+        int framesToProcess = std::min(numFrames, kMaxBeamBlockSize);
+        for (int i = 0; i < framesToProcess; ++i) {
+            outPtr[i] = inPtr[i * 2];  // Solo mic inferior (canal 0)
+        }
+    } else {
+        // Legacy: mono directo
+        std::memcpy(outPtr, inPtr, numFrames * sizeof(float));
+    }
 
     // ─── Diagnostic: check if input has actual audio data ────────────────
     // Log once every ~2 seconds to avoid floodear logcat.
@@ -562,8 +635,9 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     if (++diagCounter >= callbacksPerLevelReport_ * 20) {
         diagCounter = 0;
         float maxSample = 0.0f;
+        // Usar outPtr (ya es mono post-beamforming o post-memcpy)
         for (int i = 0; i < numFrames; ++i) {
-            float absVal = std::fabs(inPtr[i]);
+            float absVal = std::fabs(outPtr[i]);
             if (absVal > maxSample) maxSample = absVal;
         }
         const float userIntensity      = dnnDenoiser_.getIntensity();
@@ -699,7 +773,13 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
                            vadFromLastBlock);
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
-    sceneAnalyzer_.process(inPtr, numFrames);
+    // En modo estereo, alimentar con el canal de referencia (ch0, mono);
+    // en modo mono legacy, usar inPtr directamente.
+    if (config_.beamformingEnabled && stereoInputAvailable_) {
+        sceneAnalyzer_.process(beamCh0_, numFrames);
+    } else {
+        sceneAnalyzer_.process(inPtr, numFrames);
+    }
 
     // ─── Cablear voice_active al DNN denoiser para el cap del Paso 1 ────
     // Spec dnn-voice-level-recovery R1.1, R1.2, R5.2:
@@ -718,7 +798,12 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
 
     // ─── Calibration Spectrum Validator (Fase 2, read-only on input) ─────
     // Sólo procesa si el técnico activó una secuencia de validación.
-    toneAnalyzer_.process(inPtr, numFrames);
+    // En modo estereo, alimentar con el canal de referencia (ch0, mono).
+    if (config_.beamformingEnabled && stereoInputAvailable_) {
+        toneAnalyzer_.process(beamCh0_, numFrames);
+    } else {
+        toneAnalyzer_.process(inPtr, numFrames);
+    }
 
     // ─── Zero any remaining output frames beyond what we processed ───────
     if (numOutputFrames > numFrames) {
@@ -726,7 +811,12 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     // ─── Diagnostic Recorder: feed pre/post DSP ─────────────────────────
-    diagnosticRecorder_.feedPreDsp(inPtr, numFrames);
+    // En modo estereo, el pre-DSP es el canal de referencia (ch0, mono).
+    if (config_.beamformingEnabled && stereoInputAvailable_) {
+        diagnosticRecorder_.feedPreDsp(beamCh0_, numFrames);
+    } else {
+        diagnosticRecorder_.feedPreDsp(inPtr, numFrames);
+    }
     diagnosticRecorder_.feedPostDsp(outPtr, numFrames);
 
     // ─── Level accumulation and callback emission (~100ms) ───────────────

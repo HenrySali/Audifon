@@ -16,6 +16,7 @@
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
 #include "latency_loopback_tester.h"
+#include "mvdr_beamformer.h"
 
 // Forward decl from <android/asset_manager.h>
 struct AAssetManager;
@@ -37,6 +38,7 @@ struct AudioEngineConfig {
     /// el enlace BT (son perfiles mutuamente excluyentes). Spec:
     /// modo-conversacion-sco.
     bool conversationMode = false;
+    bool beamformingEnabled = false;     ///< Habilitar captura estereo + MVDR beamformer
 };
 
 /// Snapshot de métricas de latencia del motor de audio.
@@ -173,6 +175,12 @@ public:
     /// @return true si el flag de configuración enabled está en true.
     bool getDnnIsEnabled() const { return dnnDenoiser_.isEnabled(); }
 
+    // ─── MVDR Beamformer (dual-mic) ─────────────────────────────────────
+    /// Habilita/deshabilita el beamformer MVDR en runtime (thread-safe).
+    void setBeamformingEnabled(bool enabled);
+    /// @return true si el beamformer MVDR esta activo y procesando.
+    bool isBeamformingActive() const;
+
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
     void stopSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(false); }
@@ -293,6 +301,17 @@ private:
     /// del DspPipeline. Por default desactivado para arrancar igual que hoy.
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
+
+    // ─── MVDR Beamformer (dual-mic, pre-DNN) ─────────────────────────────
+    /// Beamformer MVDR de 2 microfonos. Procesa antes de la DNN.
+    MvdrBeamformer mvdrBeamformer_;
+    /// Buffers temporales para deinterleave de estereo (max 1024 frames).
+    static constexpr int kMaxBeamBlockSize = 1024;
+    float beamCh0_[kMaxBeamBlockSize] = {};
+    float beamCh1_[kMaxBeamBlockSize] = {};
+    /// Flag indicando si el stream de input es realmente estereo.
+    /// Se setea en openInputStream() cuando se logra abrir con 2 canales.
+    bool stereoInputAvailable_ = false;
 
     // ─── Pre-DNN Level + Headroom Stage (DSP chain optimization) ────────
     /// Nivel pre-DNN del último bloque (dB SPL). Medido en onBothStreamsReady
