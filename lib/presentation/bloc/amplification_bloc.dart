@@ -261,6 +261,11 @@ class AmplificationBloc
   /// Requisitos: modo-conversacion-sco
   bool _conversationMode = false;
 
+  /// Mirror lógico del flag `beamformingEnabled` persistido en Hive.
+  /// Indica si el beamforming MVDR dual-mic está activo.
+  /// Se carga en Phase 1 del boot y se pasa en AudioConfig.
+  bool _beamformingEnabled = false;
+
   /// Prescriptor NL3-inspired (instanciado una sola vez).
   late final GainPrescriberNL3 _nl3Prescriber;
 
@@ -647,6 +652,7 @@ class AmplificationBloc
             compressionRatio: _currentProfile!.compressionRatio,
           ),
           nrLevel: _currentProfile!.nrLevel,
+          beamformingEnabled: _beamformingEnabled,
         );
 
         // 9. lastEqPreset persistido — Phase 4 setter 1 lo pasa por
@@ -694,6 +700,15 @@ class AmplificationBloc
           _conversationMode = raw is bool ? raw : false;
         } catch (_) {
           _conversationMode = false;
+        }
+
+        // 12. Flag beamformingEnabled desde Hive. Default: false.
+        try {
+          final box = await _openSettingsBox();
+          final raw = box?.get('beamformingEnabled');
+          _beamformingEnabled = raw is bool ? raw : false;
+        } catch (_) {
+          _beamformingEnabled = false;
         }
       }).timeout(const Duration(milliseconds: 2000));
     } on TimeoutException catch (e, st) {
