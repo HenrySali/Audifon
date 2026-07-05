@@ -113,15 +113,22 @@ static constexpr int kDnnSampleRate = 16000;
 /// = ~37% de un core, con margen suficiente.
 static constexpr int kDnnHopSize = 128;
 
-/// Tamaño de bloque (samples a 16 kHz por canal) que el worker alimenta al
+/// Tamano de bloque (samples a 16 kHz por canal) que el worker alimenta al
 /// modelo dual-channel en cada `forward`. Contrato: entrada `[1, 2, T]`,
-/// salida `[1, T]` (T = kDnnDualBlock). Se fija igual a `kDnnHopSize` para que
-/// la relación 1:1 input↔output preserve la alineación dry/wet ya usada por
-/// la ruta mono (cada bloque de T samples de entrada produce T de salida).
-/// Spec: gtcrn-dual-channel (tarea 2.5). A diferencia de la ruta mono, la
-/// STFT/iSTFT + WPE/IVA corren DENTRO del `.pt` TorchScript; el wrapper solo
-/// empuja PCM crudo y extrae PCM mono.
-static constexpr int kDnnDualBlock = kDnnHopSize;
+/// salida `[1, T]` (T = kDnnDualBlock).
+///
+/// IMPORTANTE: el modelo fue trazado con torch.jit.trace(model, torch.randn(1, 2, 48000)),
+/// por lo que el full JIT interpreter requiere T=48000 para el forward. Esto
+/// introduce una latencia algoritmica de 48000/16000 = 3 segundos, que es alta
+/// pero necesaria hasta que el modelo se re-exporte con torch.jit.script (que
+/// permite shapes dinamicas y por tanto valores de T arbitrarios).
+///
+/// MITIGACION FUTURA: re-trazar el modelo con torch.jit.script en vez de trace
+/// para soportar shapes dinamicas, lo que permitiria reducir T a kDnnHopSize (128)
+/// y eliminar la latencia de 3 segundos.
+///
+/// Spec: gtcrn-dual-channel (tarea 2.5).
+static constexpr int kDnnDualBlock = 48000;
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
@@ -136,12 +143,16 @@ static constexpr int kDnnCrossfadeSamples = 800;
 
 /// Capacidad de cada ring buffer (input/output) en samples.
 ///
-/// MEJORA #4 (ruido-profundo.md): bajado de 4096 → 1024 (potencia de 2).
-/// 4096 = ~256 ms de buffer; demasiado para tiempo real, escondía drops bajo GC pauses.
-/// 1024 = ~64 ms a 16 kHz: peor caso de buffering 64 ms en vez de 256 ms.
-/// Combinado con `wait_for(5 ms)` del worker (antes 50 ms), la respuesta a backpressure
-/// es 10× más rápida y los drops bajo carga real se reducen.
-static constexpr int kDnnRingCapacity = 1024;
+/// Con kDnnDualBlock = 48000, los buffers deben poder contener al menos un
+/// bloque completo mas margen para el handoff asincronico entre audio thread
+/// y worker thread. Usamos 65536 (potencia de 2 mas cercana por encima de
+/// 48000 + margen). Esto permite acumular los 48000 samples (3 segundos a
+/// 16 kHz) necesarios para cada forward dual-channel sin drops.
+///
+/// Para la ruta mono (kDnnHopSize = 128), 65536 samples es mas que suficiente
+/// (~4 segundos de buffer), pero el costo en RAM es aceptable (~256 KB por
+/// ring buffer de floats).
+static constexpr int kDnnRingCapacity = 65536;
 
 /// Cap por defecto aplicado a `intensity` cuando el VAD detecta voz activa.
 /// Valor en [0,1]. 0.7 = mezcla 30% dry + 70% wet con voz, recuperando
@@ -185,23 +196,24 @@ public:
     /// NOTE: Llamar UNA SOLA VEZ. Idempotente: llamadas siguientes no-op.
     bool initialize(AAssetManager* assetMgr, const char* assetPath);
 
-    /// Carga el modelo TorchScript dual-channel (`.pt`, LibTorch) desde assets
+    /// Carga el modelo TorchScript dual-channel (`.ptl`, LibTorch) desde assets
     /// y lanza el worker thread en modo dual.
     ///
     /// Contrato del modelo (ver design.md): entrada float32 `[1, 2, T]`
     /// (ch0 = mic inferior, ch1 = mic superior) a 16 kHz, salida `[1, T]` mono.
-    /// La STFT/iSTFT + WPE/IVA corren DENTRO del `.pt`; el wrapper solo alimenta
+    /// La STFT/iSTFT + WPE/IVA corren DENTRO del `.ptl`; el wrapper solo alimenta
     /// PCM crudo y extrae PCM mono.
     ///
-    /// Validación (Bypass_Seguro): carga con `torch::jit::load()`, corre un
-    /// `forward` dummy `[1, 2, 160]` y verifica que la salida sea `[1, 160]`.
-    /// Si el `.pt` no carga, el shape no coincide, o LibTorch lanza cualquier
-    /// excepción → `active_ = false` y la clase queda en bypass permanente
-    /// (`processStereo` copia ch0 a output).
+    /// Validacion (Bypass_Seguro): carga con `torch::jit::load()`, corre un
+    /// `forward` dummy `[1, 2, 48000]` y verifica que la salida sea `[1, 48000]`.
+    /// Esto valida que el full JIT runtime puede ejecutar el modelo con el T=48000
+    /// usado durante el trace original. Si el `.ptl` no carga, el shape no coincide,
+    /// o LibTorch lanza cualquier excepcion -> `active_ = false` y la clase queda
+    /// en bypass permanente (`processStereo` copia ch0 a output).
     ///
-    /// @param assetMgr  Asset manager Android (nullptr → falla limpia).
-    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn_dual_mobile.pt".
-    /// @return true si el modelo cargó y el shape es el esperado.
+    /// @param assetMgr  Asset manager Android (nullptr -> falla limpia).
+    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn_dual_mobile.ptl".
+    /// @return true si el modelo cargo y el shape es el esperado.
     /// NOTE: Llamar UNA SOLA VEZ, en lugar de initialize() (no ambos).
     /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
     bool initializeDual(AAssetManager* assetMgr, const char* assetPath);

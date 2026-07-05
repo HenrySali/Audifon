@@ -8,7 +8,7 @@
 /// `dnn_denoiser.cpp` incluye, de forma no opcional:
 ///   - onnxruntime/onnxruntime_cxx_api.h  (runtime GTCRN mono)
 ///   - android/asset_manager.h, android/log.h  (solo existen en el NDK)
-///   - torch/script.h  (solo con HAVE_PYTORCH_LITE=1, LibTorch arm64)
+///   - torch/script.h  (solo con HAVE_PYTORCH=1, LibTorch arm64)
 /// y el constructor de `DnnDenoiser::Impl` instancia `Ort::Env`, con lo cual
 /// NO se puede construir un `DnnDenoiser` real en un host x86 sin toda la
 /// cadena ONNX + LibTorch + Android. Por eso NO se puede correr el objeto

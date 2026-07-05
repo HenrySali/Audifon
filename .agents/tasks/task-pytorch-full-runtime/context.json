@@ -1,0 +1,25 @@
+{
+  "project_type": "Flutter 3.19.6 Android app with native C++ DSP pipeline via Oboe + OnnxRuntime + PyTorch Lite",
+  "language": "C++ (DSP), Kotlin (Android), Dart (Flutter)",
+  "build_system": "Gradle 8.x + CMake 3.22.1 (externalNativeBuild), NDK 25.2.9519653 (r25c)",
+  "test_framework": "No automated unit tests for native code in CI; manual device tests in test_dnn_denoiser_dual.cpp",
+  "build_command": "cd /projects/sandbox/Audifon/android && ./gradlew assembleDebug (requires Android SDK which may not be present)",
+  "test_command": "Static validation: verify CMake targets, includes, and code compiles logically",
+  "verification_instructions": "1. Verify build.gradle has pytorch_android:2.1.0 (not lite). 2. Verify CMakeLists.txt references libpytorch_jni.so and HAVE_PYTORCH define. 3. Verify dnn_denoiser.cpp uses torch::jit::load() and torch::jit::Module (not mobile::). 4. Verify audio_engine.cpp still loads the model correctly. 5. Verify packagingOptions use correct .so name.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "No Android SDK/NDK available in sandbox for full build. Changes are source-level refactoring validated by code review.",
+  "environment_constraints": "Internet available (can download AAR for reference). No Android SDK/NDK installed in sandbox, so gradle build will not complete. Validation is AST-level: verify code correctness, header includes, link targets, and consistency across files.",
+  "contribution_requirements": "Maintain existing coding style (extensive Spanish comments, LabVIEW SubVI doc pattern). Preserve the Bypass_Seguro contract. Keep ONNX mono path untouched.",
+  "key_patterns": "HAVE_PYTORCH_LITE conditional compile flag, PIMPL pattern in DnnDenoiser, mobile::Module loaded via _load_for_mobile(), dummy forward [1,2,160] for shape validation, .ptl model file in assets, libpytorch_jni_lite.so in jniLibs/arm64-v8a/",
+  "relevant_files": [
+    "android/app/build.gradle",
+    "android/app/src/main/cpp/CMakeLists.txt",
+    "android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp",
+    "android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.h",
+    "android/app/src/main/cpp/audio_engine.cpp",
+    "android/app/src/main/cpp/dnn_denoiser/pytorch_lite/README.md",
+    "android/app/src/main/cpp/dnn_denoiser/pytorch_lite/torch/csrc/jit/serialization/import.h",
+    "android/app/src/main/cpp/dnn_denoiser/pytorch_lite/torch/csrc/jit/api/module.h"
+  ],
+  "directory_structure": "android/app/build.gradle (Gradle deps), android/app/src/main/cpp/ (DSP C++ sources + CMakeLists.txt), android/app/src/main/cpp/dnn_denoiser/ (GTCRN wrapper + headers), android/app/src/main/cpp/dnn_denoiser/pytorch_lite/ (PyTorch headers extracted from AAR), android/app/src/main/jniLibs/arm64-v8a/ (prebuilt .so), android/app/src/main/assets/dnn_denoiser/ (model files .onnx, .ptl)"
+}

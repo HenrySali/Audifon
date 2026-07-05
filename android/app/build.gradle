@@ -117,13 +117,13 @@ android {
     // un APK que no incluye liboboe.so → UnsatisfiedLinkError al arrancar.
     // El build release del CI también se beneficia de esta regla.
     //
-    // pickFirsts: el AAR pytorch_android_lite trae .so en jni/ y nosotros
-    // también las ponemos en jniLibs/ (para CMake IMPORTED). pickFirst
+    // pickFirsts: el AAR pytorch_android trae .so en jni/ y nosotros
+    // tambien las ponemos en jniLibs/ (para CMake IMPORTED). pickFirst
     // evita el error "more than one file found" durante el merge.
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
-            pickFirsts += ['**/libpytorch_jni_lite.so',
+            pickFirsts += ['**/libpytorch_jni.so',
                            '**/libc10.so',
                            '**/libfbjni.so']
         }
@@ -140,14 +140,20 @@ dependencies {
     implementation 'com.google.oboe:oboe:1.9.0'
 
     // ─────────────────────────────────────────────────────────────────────
-    // PyTorch Android Lite — runtime para modelo GTCRN dual-channel (.ptl)
+    // PyTorch Android (Full JIT Runtime) — modelo GTCRN dual-channel (.ptl)
     // ─────────────────────────────────────────────────────────────────────
-    // El AAR empaqueta libpytorch_jni_lite.so + libc10.so + libfbjni.so
-    // para arm64-v8a. El código C++ nativo (DnnDenoiser) linkea contra
-    // estas .so vía IMPORTED targets en CMakeLists.txt.
-    // Versión 2.1.0 compatible con el trace exportado por torch 2.x.
+    // El AAR empaqueta libpytorch_jni.so + libc10.so + libfbjni.so
+    // para arm64-v8a. El codigo C++ nativo (DnnDenoiser) linkea contra
+    // estas .so via IMPORTED targets en CMakeLists.txt.
+    // Version 2.1.0 compatible con el trace exportado por torch 2.x.
     // Coexiste con ONNXRuntime (el GTCRN mono sigue usando ORT).
-    implementation 'org.pytorch:pytorch_android_lite:2.1.0'
+    //
+    // NOTA: migracion de pytorch_android_lite a pytorch_android (full runtime)
+    // requerida porque el modelo fue trazado con torch.jit.trace(model,
+    // torch.randn(1,2,48000)) y el lite interpreter crashea con SIGSEGV
+    // al pasar T != 48000 (shapes estaticas baked en el trace). El full
+    // JIT interpreter maneja correctamente los shapes del modelo.
+    implementation 'org.pytorch:pytorch_android:2.1.0'
 }
 
 // Force androidx.core and androidx.core-ktx to a version compatible with

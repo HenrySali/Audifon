@@ -34,24 +34,18 @@
 
 #include "onnxruntime/onnxruntime_cxx_api.h"
 
-// LibTorch (PyTorch Mobile C++) — runtime del modelo GTCRN dual-channel (.ptl).
-// Solo disponible cuando el CMake detecta las .so de pytorch_android_lite y
-// define HAVE_PYTORCH_LITE (ver CMakeLists.txt). El GTCRN mono sigue con ONNX.
+// LibTorch (PyTorch Full JIT Runtime) — runtime del modelo GTCRN dual-channel (.ptl).
+// Solo disponible cuando el CMake detecta las .so de pytorch_android y
+// define HAVE_PYTORCH (ver CMakeLists.txt). El GTCRN mono sigue con ONNX.
 //
-// IMPORTANTE: usamos la API MOBILE (lite interpreter), NO la API full.
-// libpytorch_jni_lite.so NO exporta torch::jit::load() (API full) → link error
-// "undefined symbol". Sí exporta torch::jit::_load_for_mobile() (API mobile).
-// Por eso incluimos los headers de mobile y cargamos un modelo .ptl.
-#if HAVE_PYTORCH_LITE
+// Usamos la API FULL JIT (torch::jit::load / torch::jit::Module) que esta
+// exportada por libpytorch_jni.so. Esto resuelve el crash SIGSEGV del lite
+// interpreter causado por shapes estaticas baked en el trace (T=48000).
+#if HAVE_PYTORCH
 // torch/script.h aporta la API de tensores (torch::from_blob, at::Tensor,
-// torch::InferenceMode) vía ATen + torch/csrc/api. Solo DECLARA torch::jit::load
-// (no linkea mientras no se la invoque), así que es seguro conservarlo: el error
-// de link surge únicamente al *llamar* a un símbolo no exportado por la lite .so.
+// torch::InferenceMode) via ATen + torch/csrc/api, y tambien declara
+// torch::jit::load() y torch::jit::Module (full JIT).
 #include <torch/script.h>
-// API MOBILE (lite interpreter) — provee mobile::Module y _load_for_mobile,
-// que SÍ están exportados por libpytorch_jni_lite.so.
-#include <torch/csrc/jit/mobile/module.h>   // torch::jit::mobile::Module
-#include <torch/csrc/jit/mobile/import.h>   // torch::jit::_load_for_mobile
 #endif
 
 #include <android/asset_manager.h>
@@ -581,12 +575,11 @@ struct DnnDenoiser::Impl {
     /// Lo lee el worker para elegir la ruta de inferencia.
     std::atomic<int> channels{1};
 
-#if HAVE_PYTORCH_LITE
-    /// Módulo TorchScript (lite interpreter) cargado con
-    /// torch::jit::_load_for_mobile() (solo dual). mobile::Module no tiene
-    /// constructor por defecto, por eso lo tenemos como unique_ptr: nullptr
-    /// hasta el load exitoso.
-    std::unique_ptr<torch::jit::mobile::Module> torchModule;
+#if HAVE_PYTORCH
+    /// Modulo TorchScript (full JIT interpreter) cargado con
+    /// torch::jit::load() (solo dual). El full JIT runtime resuelve el
+    /// crash SIGSEGV del lite interpreter con shapes estaticas (T=48000).
+    std::unique_ptr<torch::jit::Module> torchModule;
 #endif
     /// true cuando torchModule cargó y pasó la validación de shape.
     bool torchLoaded = false;
@@ -752,13 +745,18 @@ struct DnnDenoiser::Impl {
         return data;
     }
 
-    /// Carga el modelo TorchScript dual-channel (.pt) desde assets y valida su
-    /// contrato de shape corriendo un forward dummy [1,2,160] → esperado [1,160].
-    /// Retorna true si cargó y el shape coincide. Cualquier excepción de LibTorch
-    /// (carga o forward) → false (el wrapper pasa a Bypass_Seguro).
+    /// Carga el modelo TorchScript dual-channel (.ptl) desde assets y valida su
+    /// contrato de shape corriendo un forward dummy [1,2,48000] -> esperado [1,48000].
+    /// Retorna true si cargo y el shape coincide. Cualquier excepcion de LibTorch
+    /// (carga o forward) -> false (el wrapper pasa a Bypass_Seguro).
+    ///
+    /// NOTA: el modelo fue trazado con torch.jit.trace(model, torch.randn(1,2,48000)),
+    /// por lo que el dummy forward DEBE usar T=48000 para validar correctamente.
+    /// El full JIT runtime (torch::jit::load) puede manejar el modelo sin SIGSEGV.
+    ///
     /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
     bool loadTorchModule(AAssetManager* mgr, const char* assetPath) {
-#if HAVE_PYTORCH_LITE
+#if HAVE_PYTORCH
         std::vector<uint8_t> bytes = readAsset(mgr, assetPath);
         if (bytes.empty()) {
             DNN_LOGE("loadTorchModule: failed to read .ptl from assets");
@@ -766,37 +764,44 @@ struct DnnDenoiser::Impl {
         }
         DNN_LOGI("loadTorchModule: model loaded (%zu bytes)", bytes.size());
 
-        // ── Cargar el TorchScript (lite interpreter) desde el buffer en RAM ──
-        // API MOBILE: _load_for_mobile(std::istream&) → mobile::Module.
-        // El modelo .ptl ya viene en modo eval (no existe .eval() en mobile).
+        // ── Cargar el TorchScript (full JIT interpreter) desde el buffer en RAM ──
+        // API FULL: torch::jit::load(std::istream&) -> torch::jit::Module.
+        // El full runtime puede cargar tanto .pt como .ptl formats.
         try {
             std::string strbuf(reinterpret_cast<const char*>(bytes.data()),
                                bytes.size());
             std::istringstream iss(strbuf, std::ios::binary);
-            torchModule = std::make_unique<torch::jit::mobile::Module>(
-                torch::jit::_load_for_mobile(iss));
+            torchModule = std::make_unique<torch::jit::Module>(
+                torch::jit::load(iss));
+            torchModule->eval();
         } catch (const std::exception& e) {
-            DNN_LOGE("loadTorchModule: _load_for_mobile failed: %s", e.what());
+            DNN_LOGE("loadTorchModule: torch::jit::load failed: %s", e.what());
             torchModule.reset();
             return false;
         } catch (...) {
-            DNN_LOGE("loadTorchModule: _load_for_mobile failed (unknown)");
+            DNN_LOGE("loadTorchModule: torch::jit::load failed (unknown)");
             torchModule.reset();
             return false;
         }
 
-        // ── Forward dummy [1,2,160] → verificar salida [1,160] ────────
+        // ── Forward dummy [1,2,48000] -> verificar salida [1,48000] ────────
+        // T=48000 es el valor usado durante torch.jit.trace; el full JIT
+        // interpreter ejecuta correctamente con este shape (a diferencia del
+        // lite interpreter que crasheaba con SIGSEGV).
+        constexpr int kDummyT = 48000;
         try {
             torch::InferenceMode guard;
-            std::vector<float> dummy(2 * 160, 0.0f);
+            std::vector<float> dummy(2 * kDummyT, 0.0f);
             at::Tensor in = torch::from_blob(
-                dummy.data(), {1, 2, 160}, torch::kFloat32);
+                dummy.data(), {1, 2, kDummyT}, torch::kFloat32);
             std::vector<c10::IValue> inputs{in};
             at::Tensor out = torchModule->forward(inputs).toTensor();
-            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != 160) {
+            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != kDummyT) {
                 DNN_LOGE("loadTorchModule: dummy forward shape mismatch "
-                         "(got dim=%ld, expected [1,160])",
-                         static_cast<long>(out.dim()));
+                         "(got [%ld,%ld], expected [1,%d])",
+                         static_cast<long>(out.size(0)),
+                         static_cast<long>(out.dim() >= 2 ? out.size(1) : -1),
+                         kDummyT);
                 return false;
             }
         } catch (const std::exception& e) {
@@ -808,12 +813,13 @@ struct DnnDenoiser::Impl {
         }
 
         torchLoaded = true;
-        DNN_LOGI("loadTorchModule: OK, dual-channel model ready ([1,2,T]→[1,T])");
+        DNN_LOGI("loadTorchModule: OK, dual-channel model ready "
+                 "([1,2,%d]->[1,%d], full JIT runtime)", kDummyT, kDummyT);
         return true;
 #else
         (void)mgr;
         (void)assetPath;
-        DNN_LOGE("loadTorchModule: HAVE_PYTORCH_LITE not defined — dual model "
+        DNN_LOGE("loadTorchModule: HAVE_PYTORCH not defined — dual model "
                  "unavailable, staying in bypass");
         return false;
 #endif
@@ -822,11 +828,11 @@ struct DnnDenoiser::Impl {
     /// Ejecuta una inferencia dual-channel sobre kDnnDualBlock samples de cada
     /// canal (ch0/ch1 @ 16 kHz). Arma tensor [1,2,T], corre module.forward(),
     /// extrae la salida mono [1,T] y la empuja al outputRing.
-    /// Devuelve true si el frame se procesó OK; false → falla (el worker pasa a
-    /// bypass permanente hasta reset). Nunca lanza (captura toda excepción).
+    /// Devuelve true si el frame se proceso OK; false -> falla (el worker pasa a
+    /// bypass permanente hasta reset). Nunca lanza (captura toda excepcion).
     /// Spec: gtcrn-dual-channel (tareas 2.5, 4.3).
     bool processStereoFrame(const float* ch0, const float* ch1) {
-#if HAVE_PYTORCH_LITE
+#if HAVE_PYTORCH
         if (!torchLoaded) return false;
 
         constexpr int T = kDnnDualBlock;
@@ -859,8 +865,8 @@ struct DnnDenoiser::Impl {
                         t1 - t0).count()),
                 std::memory_order_relaxed);
 
-            // Push atómico del frame completo: si no entra entero, drop (evita
-            // desalinear el 1:1 con el dryDelayRing → clicks periódicos).
+            // Push atomico del frame completo: si no entra entero, drop (evita
+            // desalinear el 1:1 con el dryDelayRing -> clicks periodicos).
             if (outputRing.freeSpace() < T) {
                 droppedFramesLocal.fetch_add(1, std::memory_order_relaxed);
                 return true;
@@ -1451,11 +1457,11 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
         return impl_->channels.load(std::memory_order_acquire) == 2;
     }
 
-    DNN_LOGI("initializeDual: loading %s (LibTorch dual-channel)",
+    DNN_LOGI("initializeDual: loading %s (LibTorch full JIT dual-channel)",
              assetPath ? assetPath : "(null)");
 
-    // Cargar el .pt y validar el contrato de shape [1,2,160] → [1,160].
-    // Cualquier fallo (asset, load, shape, excepción) → Bypass_Seguro.
+    // Cargar el .ptl y validar el contrato de shape [1,2,48000] -> [1,48000].
+    // Cualquier fallo (asset, load, shape, excepcion) -> Bypass_Seguro.
     if (!impl_->loadTorchModule(assetMgr, assetPath)) {
         DNN_LOGE("initializeDual: model load/validation failed → bypass");
         impl_->channels.store(1, std::memory_order_release);
