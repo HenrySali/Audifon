@@ -1,0 +1,7 @@
+{
+  "task_id": "task-gtcrn-dual-option-d",
+  "task_description": "Implement Option D for GTCRN dual-channel: separate the neural network (encoder/decoder) from STFT/WPE/IVA, export only the neural core to ONNX, implement WPE beamforming in C++, and remove LibTorch dependency. Target: ~13-18 dB SNR improvement with 8ms latency on Moto G32, APK reduced from 63MB to ~6MB.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}

@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-003",
+  "type": "chore",
+  "description": "Remove LibTorch dependency from CMakeLists.txt and clean up related files, reducing APK size from ~63MB to ~6MB. Update audio_engine.cpp to work with the new ONNX-based dual-channel path.",
+  "status": "pending",
+  "steps": [
+    "In android/app/src/main/cpp/CMakeLists.txt: (a) Remove the entire PyTorch Full JIT Runtime section (the conditional block checking for PYTORCH_JNI_SO, the add_library for pytorch_jni and fbjni, and the if(HAVE_PYTORCH) blocks for target_link_libraries, target_compile_definitions, target_link_options, and target_include_directories). (b) Remove the comment block about PyTorch. The OnnxRuntime section stays unchanged.",
+    "In android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp: (a) Remove #if HAVE_PYTORCH / #include <torch/script.h> and all related includes. (b) Remove the torchModule/torchLoaded members from Impl. (c) Remove loadTorchModule() method entirely. (d) Remove processStereoFrame() that uses LibTorch (now replaced by processDualFrame using ONNX in FEAT-002). (e) Remove any remaining #if HAVE_PYTORCH guards.",
+    "In android/app/src/main/cpp/audio_engine.cpp: Update initDnnDenoiser() to call dnnDenoiserDual_.initializeDual(mgr, \"dnn_denoiser/gtcrn_dual_core.onnx\") instead of the .pt file. The rest of the audio_engine integration (EnhancementEngineMode, renderEngineChunk, processStereo calls) stays the same since the DnnDenoiser API (processStereo, setEnabled, isActive) is unchanged.",
+    "Delete or note for deletion: the pytorch_lite/ headers directory is no longer needed (android/app/src/main/cpp/dnn_denoiser/pytorch_lite/). Add a note in a README that these can be removed. Also note that libpytorch_jni.so and libfbjni.so can be removed from jniLibs/arm64-v8a/ (but do NOT delete them in this task since the user may want to keep them for fallback testing).",
+    "Update dnn_denoiser.h: remove InputChannels enum and inputChannelsMode_ atomic (no longer needed since both mono and dual use ONNX with the same interface). The dual path is distinguished by the second DnnDenoiser instance (dnnDenoiserDual_) which loads a different .onnx file but uses the same processing architecture."
+  ],
+  "acceptance_criteria": [
+    "CMakeLists.txt no longer references pytorch_jni, fbjni, HAVE_PYTORCH, or pytorch_lite",
+    "dnn_denoiser.cpp has zero #if HAVE_PYTORCH blocks and no #include <torch/script.h>",
+    "audio_engine.cpp references gtcrn_dual_core.onnx instead of gtcrn_dual_mobile.pt",
+    "The EnhancementEngineMode enum and its integration in audio_engine.cpp remain unchanged (kBypass=0, kDualChannelDnn=1, kMvdrBackup=2)",
+    "All files are syntactically valid C++ (verifiable with basic compilation checks)"
+  ],
+  "verification": [
+    "grep -r 'HAVE_PYTORCH\\|pytorch_jni\\|torch/script\\|libpytorch\\|torchModule' android/app/src/main/cpp/ returns no matches",
+    "grep 'gtcrn_dual_core.onnx' android/app/src/main/cpp/audio_engine.cpp confirms the new model path",
+    "CMakeLists.txt parses correctly (cmake -P with a print statement, or just visual inspection of balanced if/endif)"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
