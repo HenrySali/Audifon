@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-export_gtcrn_script.py — Re-exportar GTCRN_IVA con torch.jit.script
+export_gtcrn_script.py -- Re-exportar GTCRN_IVA con torch.jit.script
 ====================================================================
 
-PROBLEMA: torch.jit.trace bakes shapes estáticas. El modelo trazado con
+PROBLEMA: torch.jit.trace bakes shapes estaticas. El modelo trazado con
 T=48000 crashea en Android con cualquier T diferente (SIGABRT en TORCH_CHECK).
 
-SOLUCION: torch.jit.script compila el forward respetando la lógica de control
-(if/for/while) y permite shapes dinámicas en el eje temporal.
+SOLUCION: torch.jit.script compila el forward respetando la logica de control
+(if/for/while) y permite shapes dinamicas en el eje temporal.
 
 USO:
-    cd C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro2\H-GTCRN
-    python ..\Audifon\tools\export_gtcrn_script.py
+    cd H-GTCRN
+    python ..\\Audifon\\tools\\export_gtcrn_script.py
 
 REQUISITOS:
     - Python 3.8+
@@ -20,12 +20,12 @@ REQUISITOS:
     - El checkpoint best_model_0121.tar en el directorio actual
 
 SALIDA:
-    gtcrn_dual_scripted.pt  — modelo con shapes dinámicas, compatible con
+    gtcrn_dual_scripted.pt  -- modelo con shapes dinamicas, compatible con
                               torch::jit::load() en Android (full JIT runtime)
 
 DESPUES:
     Copiar gtcrn_dual_scripted.pt a:
-    Audifon\android\app\src\main\assets\dnn_denoiser\gtcrn_dual_mobile.pt
+    Audifon\\android\\app\\src\\main\\assets\\dnn_denoiser\\gtcrn_dual_mobile.pt
 """
 
 import sys
@@ -42,8 +42,7 @@ try:
     from gtcrn_iva import GTCRN_IVA
 except ImportError:
     print("\nERROR: No se encuentra gtcrn_iva.py en el directorio actual.")
-    print("Ejecutar este script desde la carpeta H-GTCRN:")
-    print("  cd C:\\Users\\Elsa y Henry\\Desktop\\Amplificador\\Repo Oir Pro2\\H-GTCRN")
+    print("Ejecutar este script desde la carpeta H-GTCRN")
     sys.exit(1)
 
 # ─── Cargar checkpoint ───────────────────────────────────────────────────────
@@ -120,11 +119,7 @@ SIGUIENTE PASO:
 
 Copiar el modelo exportado a assets del proyecto:
 
-  copy {OUTPUT_FILE} "C:\\Users\\Elsa y Henry\\Desktop\\Amplificador\\Repo Oir Pro2\\Audifon\\android\\app\\src\\main\\assets\\dnn_denoiser\\gtcrn_dual_mobile.pt"
-
-Y en audio_engine.cpp cambiar la extensión de .ptl a .pt:
-
-  dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.pt");
+  copy {OUTPUT_FILE} ..\\Audifon\\android\\app\\src\\main\\assets\\dnn_denoiser\\gtcrn_dual_mobile.pt
 
 Luego rebuild:
   flutter build apk --release
