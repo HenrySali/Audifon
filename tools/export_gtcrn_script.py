@@ -37,12 +37,15 @@ import torch
 print(f"PyTorch version: {torch.__version__}")
 print(f"Working directory: {os.getcwd()}")
 
+# Agregar directorio actual al path (necesario en Windows con espacios en ruta)
+sys.path.insert(0, os.getcwd())
+
 # Importar el modelo (debe estar en el directorio actual)
 try:
     from gtcrn_iva import GTCRN_IVA
-except ImportError:
-    print("\nERROR: No se encuentra gtcrn_iva.py en el directorio actual.")
-    print("Ejecutar este script desde la carpeta H-GTCRN")
+except ImportError as e:
+    print(f"\nERROR: No se puede importar GTCRN_IVA: {e}")
+    print("Verificar que gtcrn_iva.py esta en el directorio actual.")
     sys.exit(1)
 
 # ─── Cargar checkpoint ───────────────────────────────────────────────────────
