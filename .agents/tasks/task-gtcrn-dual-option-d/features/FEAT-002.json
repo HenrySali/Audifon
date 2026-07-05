@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Implement WPE (Weighted Prediction Error) beamformer in C++ as a header-only module, and create a new dual-channel DNN processing path (processDualFrame) that does STFT(2ch)->WPE->GTCRN_core(ONNX)->iSTFT, replacing the LibTorch-based processStereoFrame entirely.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create android/app/src/main/cpp/wpe_beamformer.h as a header-only class WpeBeamformer following the pattern of mvdr_beamformer.h. WPE for 2 mics involves: (a) computing the 2x2 spatial correlation matrix of the observation in frequency domain, (b) estimating the prediction filter coefficients via matrix inversion (2x2 complex, same analytic formula as MVDR), (c) applying the prediction filter to dereverberate/enhance the target signal. The core operation is: for each freq bin k, compute w[k] = R_xx^{-1} * r_xd (Wiener-like filter), then y[k] = w^H * X[k]. Use the same FFT infrastructure (kFftSize=512, kHopSize=128/256, Hann window) as dnn_denoiser.cpp.",
     "The WPE beamformer should: (a) accept 2 channels of complex spectra (after STFT), (b) maintain a correlation matrix per frequency bin updated with exponential smoothing (like MVDR's Rnn), (c) produce a single-channel enhanced spectrum, (d) use the existing VAD flag to switch between noise estimation and signal pass-through. For 2x2 matrix inversion use the analytic closed-form: inv(A) = adj(A)/det(A) with regularization (same as computeMvdrWeights in mvdr_beamformer.h).",
@@ -27,5 +27,5 @@
     "Verify dnn_denoiser.h no longer has duplicate kDnnRingCapacity definition"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "WPE beamformer created at android/app/src/main/cpp/wpe_beamformer.h. Passes g++ -std=c++17 -fsyntax-only. processDualFrame() added to dnn_denoiser.cpp following the same STFT->ONNX->iSTFT pattern as processOneFrame(). All LibTorch code removed from dual path. kDnnDualBlock removed, kDnnRingCapacity fixed (single definition, reduced to 4096). Worker loop now uses kDnnHopSize=128 for both mono and dual paths. CMakeLists.txt still references HAVE_PYTORCH but the define simply won't be set if .so is absent - harmless. Cannot verify full Android build (no NDK in sandbox)."
 }
