@@ -117,12 +117,12 @@ static constexpr int kDnnHopSize = 128;
 /// modelo dual-channel en cada `forward`. Contrato: entrada `[1, 2, T]`,
 /// salida `[1, T]` (T = kDnnDualBlock).
 ///
-/// Con el modelo re-exportado via torch.jit.script, T puede ser cualquier
-/// valor (shapes dinamicas). Usamos kDnnHopSize (128 = 8ms) para latencia
-/// minima, igual que la ruta mono.
+/// El modelo fue trazado con torch.jit.trace(model, torch.randn(1,2,48000))
+/// y requiere exactamente T=48000. Esto da 3 segundos de latencia a 16 kHz.
+/// El worker acumula samples hasta completar un bloque antes de correr forward.
 ///
 /// Spec: gtcrn-dual-channel (tarea 2.5).
-static constexpr int kDnnDualBlock = kDnnHopSize;
+static constexpr int kDnnDualBlock = 48000;
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
@@ -137,10 +137,9 @@ static constexpr int kDnnCrossfadeSamples = 800;
 
 /// Capacidad de cada ring buffer (input/output) en samples.
 ///
-/// Con kDnnDualBlock = 128 (modelo scripted con shapes dinamicas), 1024
-/// samples es suficiente (~64 ms a 16 kHz). Potencia de 2 requerida por
-/// el ring buffer SPSC.
-static constexpr int kDnnRingCapacity = 1024;
+/// Con kDnnDualBlock = 48000, necesitamos al menos 48000 + margen para el
+/// handoff asincrono. Usamos 65536 (potencia de 2 mas cercana por encima).
+static constexpr int kDnnRingCapacity = 65536;
 /// 48000 + margen). Esto permite acumular los 48000 samples (3 segundos a
 /// 16 kHz) necesarios para cada forward dual-channel sin drops.
 ///

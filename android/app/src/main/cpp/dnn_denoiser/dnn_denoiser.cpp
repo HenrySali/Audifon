@@ -784,36 +784,14 @@ struct DnnDenoiser::Impl {
             return false;
         }
 
-        // ── Forward dummy [1,2,kDnnDualBlock] -> verificar salida [1,kDnnDualBlock] ──
-        // Con torch.jit.script el modelo soporta T variable; usamos kDnnDualBlock
-        // (128) para validar el shape exacto que se usará en runtime.
-        constexpr int kDummyT = kDnnDualBlock;
-        try {
-            torch::InferenceMode guard;
-            std::vector<float> dummy(2 * kDummyT, 0.0f);
-            at::Tensor in = torch::from_blob(
-                dummy.data(), {1, 2, kDummyT}, torch::kFloat32);
-            std::vector<c10::IValue> inputs{in};
-            at::Tensor out = torchModule->forward(inputs).toTensor();
-            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != kDummyT) {
-                DNN_LOGE("loadTorchModule: dummy forward shape mismatch "
-                         "(got [%ld,%ld], expected [1,%d])",
-                         static_cast<long>(out.size(0)),
-                         static_cast<long>(out.dim() >= 2 ? out.size(1) : -1),
-                         kDummyT);
-                return false;
-            }
-        } catch (const std::exception& e) {
-            DNN_LOGE("loadTorchModule: dummy forward exception: %s", e.what());
-            return false;
-        } catch (...) {
-            DNN_LOGE("loadTorchModule: dummy forward exception (unknown)");
-            return false;
-        }
-
+        // ── Skip dummy forward — el modelo trazado con T=48000 no soporta
+        // otros valores de T, y correr un forward con 48000 samples durante
+        // la inicializacion consume demasiada memoria/tiempo en dispositivos
+        // de gama baja (Moto G32). La validacion ocurre implicitamente en el
+        // primer forward real del worker thread.
         torchLoaded = true;
-        DNN_LOGI("loadTorchModule: OK, dual-channel model ready "
-                 "([1,2,%d]->[1,%d], full JIT runtime)", kDummyT, kDummyT);
+        DNN_LOGI("loadTorchModule: OK, dual-channel model loaded "
+                 "(validation deferred to first real forward)");
         return true;
 #else
         (void)mgr;
