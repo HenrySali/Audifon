@@ -109,7 +109,7 @@ static constexpr int kDnnHopSize = 128;
 
 /// NOTE: kDnnDualBlock has been removed. The dual-channel path now operates
 /// frame-by-frame at kDnnHopSize (128 samples = 8 ms), same as the mono path.
-/// The WPE beamformer + ONNX GTCRN core replaces the LibTorch 3-second block.
+/// The WPE beamformer + ONNX GTCRN core replaces the previous 3-second block.
 /// Spec: gtcrn-dual-channel (Option D: WPE in C++ + ONNX core).
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
@@ -189,7 +189,7 @@ public:
     ///   3. ONNX GTCRN core: processes the beamformed spectrum frame-by-frame
     ///   4. iSTFT/OLA: reconstructs time-domain output
     ///
-    /// This replaces the LibTorch-based approach that ran STFT/WPE/IVA inside
+    /// This replaces the previous approach that ran STFT/WPE/IVA inside
     /// the .ptl model with 3-second blocks. Now operates frame-by-frame at
     /// kDnnHopSize=128 (8ms latency), same as the mono path.
     ///

@@ -92,9 +92,9 @@ struct LatencyMetrics {
 /// por un selector explícito de 3 estados mutuamente excluyentes. El default
 /// de arranque es `kBypass` (R8.3). Cablea vía JNI → Kotlin → UI (tarea 4/5).
 ///
-///   kBypass         → ch0 passthrough, sin realce (default arranque).
-///   kDualChannelDnn → 2 mics → GTCRN dual (LibTorch) → mono realzado.
-///   kMvdrBackup     → 2 mics → MVDR beamformer → mono realzado.
+///   kBypass         -> ch0 passthrough, sin realce (default arranque).
+///   kDualChannelDnn -> 2 mics -> WPE + GTCRN dual (ONNX) -> mono realzado.
+///   kMvdrBackup     -> 2 mics -> MVDR beamformer -> mono realzado.
 ///
 /// Los valores enteros (0/1/2) son parte del contrato JNI/Kotlin/Dart y no
 /// deben reordenarse sin bumpear el mapeo del puente.

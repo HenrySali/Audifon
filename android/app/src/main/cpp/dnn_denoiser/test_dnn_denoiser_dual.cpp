@@ -6,12 +6,12 @@
 /// POR QUÉ ESTE TEST ES "STANDALONE" Y NO LINKEA CONTRA dnn_denoiser.cpp
 /// ─────────────────────────────────────────────────────────────────────────
 /// `dnn_denoiser.cpp` incluye, de forma no opcional:
-///   - onnxruntime/onnxruntime_cxx_api.h  (runtime GTCRN mono)
+///   - onnxruntime/onnxruntime_cxx_api.h  (runtime GTCRN mono y dual)
 ///   - android/asset_manager.h, android/log.h  (solo existen en el NDK)
-///   - torch/script.h  (solo con HAVE_PYTORCH=1, LibTorch arm64)
+///   - wpe_beamformer.h  (dual-channel spatial filtering)
 /// y el constructor de `DnnDenoiser::Impl` instancia `Ort::Env`, con lo cual
 /// NO se puede construir un `DnnDenoiser` real en un host x86 sin toda la
-/// cadena ONNX + LibTorch + Android. Por eso NO se puede correr el objeto
+/// cadena ONNX + Android. Por eso NO se puede correr el objeto
 /// real en un unit test de host.
 ///
 /// Estrategia (honesta):
@@ -94,8 +94,8 @@ int g_failures = 0;
 // ─────────────────────────────────────────────────────────────────────────
 // Transcripción 1:1 de las ramas de bypass de `processStereo`
 // (dnn_denoiser.cpp, a partir de la línea de `void DnnDenoiser::processStereo`).
-// Solo se modela la lógica de bypass (la única verificable sin ONNX/Torch).
-// La rama "dual && activo" delega en el worker LibTorch y NO se modela acá.
+// Solo se modela la logica de bypass (la unica verificable sin ONNX runtime).
+// La rama "dual && activo" delega en el worker ONNX y NO se modela aca.
 //
 // Constante real del wrapper (dnn_denoiser.h):
 constexpr int   kDnnCrossfadeSamples = 800;
@@ -152,7 +152,7 @@ struct BypassMirror {
             return true;
         }
 
-        // dual && active => ruta DNN (worker LibTorch). No modelada en host.
+        // dual && active => ruta DNN (worker ONNX). No modelada en host.
         return false;
     }
 };
@@ -318,7 +318,7 @@ void test_P7_length_preserved() {
 
 // ─────────────────────────────────────────────────────────────────────────
 // P3 (dry/wet) y P6 (no amplifica ruido): REQUIEREN el modelo activo.
-// No verificables sin cargar el `.pt` (LibTorch) + worker thread.
+// No verificables sin cargar el .onnx (OnnxRuntime) + worker thread.
 // Se documentan como SKIPPED y se delega a:
 //   - P3: Simulation_Harness (tarea 6) + prueba dry/wet en dispositivo.
 //   - P6: sim_harness.py mide RMS enhanced vs ch0 en tramos noise-only

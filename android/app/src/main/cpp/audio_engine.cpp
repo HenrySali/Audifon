@@ -572,10 +572,10 @@ bool AudioEngine::isBeamformingActive() const {
 //   setDnnEnabled(true/false)     → SIN CAMBIOS. Controla la instancia MONO
 //     legacy (dnnDenoiser_) que corre como stage `process()` del chain DSP,
 //     independiente del selector de motor. El motor dual (dnnDenoiserDual_)
-//     se selecciona SÓLO vía setEnhancementEngineMode(kDualChannelDnn).
-//     Rationale: el diseño exige coexistencia mono(ONNX)+dual(LibTorch); el
+//     se selecciona SOLO via setEnhancementEngineMode(kDualChannelDnn).
+//     Rationale: el diseno exige coexistencia mono(ONNX)+dual(ONNX+WPE); el
 //     mono legacy es una etapa distinta del pipeline y no debe verse forzado
-//     por el selector. Así, los callers de setDnnEnabled siguen funcionando.
+//     por el selector. Asi, los callers de setDnnEnabled siguen funcionando.
 
 void AudioEngine::setEnhancementEngineMode(EnhancementEngineMode mode) {
     const EnhancementEngineMode prev =
