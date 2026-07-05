@@ -51,9 +51,14 @@ except ImportError as e:
 # ─── Cargar checkpoint ───────────────────────────────────────────────────────
 
 CHECKPOINT = "best_model_0121.tar"
+# Buscar en el directorio actual y en checkpoints/
 if not os.path.exists(CHECKPOINT):
-    print(f"\nERROR: No se encuentra {CHECKPOINT}")
-    sys.exit(1)
+    alt = os.path.join("checkpoints", CHECKPOINT)
+    if os.path.exists(alt):
+        CHECKPOINT = alt
+    else:
+        print(f"\nERROR: No se encuentra {CHECKPOINT}")
+        sys.exit(1)
 
 print(f"Cargando checkpoint: {CHECKPOINT}")
 checkpoint = torch.load(CHECKPOINT, map_location="cpu")
