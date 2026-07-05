@@ -117,15 +117,21 @@ static constexpr int kDnnHopSize = 128;
 /// modelo dual-channel en cada `forward`. Contrato: entrada `[1, 2, T]`,
 /// salida `[1, T]` (T = kDnnDualBlock).
 ///
-/// IMPORTANTE: el modelo GTCRN usa STFT interno con n_fft=512, hop=256 y
-/// reflection_pad1d (padding=256 por lado). Para que reflection_pad funcione,
-/// T debe ser >= n_fft (512). Usamos 1024 (= 4 hops STFT = 64 ms) para dar
-/// margen al overlap de istft y WPE. 64 ms de bloque aporta ~64 ms de
-/// latencia algorítmica (aceptable para audífono en exteriores).
+/// IMPORTANTE: el modelo GTCRN fue trazado (torch.jit.trace) con este T exacto.
+/// Las dimensiones internas del STFT/WPE/IVA dentro del .ptl quedan fijas al T
+/// del trace. Alimentar un T diferente causa crash por shape mismatch
+/// (`at::infer_size_dimvector`). SIEMPRE alimentar exactamente kDnnDualBlock.
+///
+/// T=4800 = 300 ms @ 16 kHz. Produce T_frames=19 en la STFT interna
+/// (n_fft=512, hop=256, center=True). 300 ms de latencia es aceptable para
+/// procesamiento de ruido en exteriores (no se usa en conversación cercana).
+///
+/// El modelo se re-exportó con export_dual_fixed_block.py (T=4800) para
+/// resolver el crash que ocurría con el trace original de T=48000.
 ///
 /// Spec: gtcrn-dual-channel (tarea 2.5). La STFT/iSTFT + WPE/IVA corren
 /// DENTRO del .ptl TorchScript; el wrapper solo empuja PCM crudo.
-static constexpr int kDnnDualBlock = 1024;
+static constexpr int kDnnDualBlock = 4800;
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
@@ -140,12 +146,14 @@ static constexpr int kDnnCrossfadeSamples = 800;
 
 /// Capacidad de cada ring buffer (input/output) en samples.
 ///
-/// MEJORA #4 (ruido-profundo.md): bajado de 4096 → 1024 (potencia de 2).
-/// 4096 = ~256 ms de buffer; demasiado para tiempo real, escondía drops bajo GC pauses.
-/// 1024 = ~64 ms a 16 kHz: peor caso de buffering 64 ms en vez de 256 ms.
-/// Combinado con `wait_for(5 ms)` del worker (antes 50 ms), la respuesta a backpressure
-/// es 10× más rápida y los drops bajo carga real se reducen.
-static constexpr int kDnnRingCapacity = 1024;
+/// Debe ser potencia de 2 y >= kDnnDualBlock para que el worker pueda
+/// acumular un bloque completo antes de hacer forward. Con kDnnDualBlock=4800,
+/// la potencia de 2 inmediata superior es 8192.
+///
+/// 8192 samples @ 16 kHz = 512 ms de buffer. Es más grande que el bloque
+/// (300 ms) + margen para jitter del audio callback. Permite que el audio
+/// thread empuje ~1.7 bloques antes de que el worker drene.
+static constexpr int kDnnRingCapacity = 8192;
 
 /// Cap por defecto aplicado a `intensity` cuando el VAD detecta voz activa.
 /// Valor en [0,1]. 0.7 = mezcla 30% dry + 70% wet con voz, recuperando
@@ -197,9 +205,10 @@ public:
     /// La STFT/iSTFT + WPE/IVA corren DENTRO del `.pt`; el wrapper solo alimenta
     /// PCM crudo y extrae PCM mono.
     ///
-    /// Validación (Bypass_Seguro): carga con `torch::jit::load()`, corre un
-    /// `forward` dummy `[1, 2, 160]` y verifica que la salida sea `[1, 160]`.
-    /// Si el `.pt` no carga, el shape no coincide, o LibTorch lanza cualquier
+    /// Validación (Bypass_Seguro): carga con `_load_for_mobile()`, corre un
+    /// `forward` dummy `[1, 2, kDnnDualBlock]` (4800 samples = 300 ms) y
+    /// verifica que la salida sea `[1, kDnnDualBlock]`.
+    /// Si el `.ptl` no carga, el shape no coincide, o LibTorch lanza cualquier
     /// excepción → `active_ = false` y la clase queda en bypass permanente
     /// (`processStereo` copia ch0 a output).
     ///

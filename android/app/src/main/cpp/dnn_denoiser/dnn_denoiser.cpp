@@ -752,8 +752,9 @@ struct DnnDenoiser::Impl {
         return data;
     }
 
-    /// Carga el modelo TorchScript dual-channel (.pt) desde assets y valida su
-    /// contrato de shape corriendo un forward dummy [1,2,160] → esperado [1,160].
+    /// Carga el modelo TorchScript dual-channel (.ptl) desde assets y valida su
+    /// contrato de shape corriendo un forward dummy [1,2,kDnnDualBlock] →
+    /// esperado [1,kDnnDualBlock] (actualmente 4800 = 300 ms @ 16 kHz).
     /// Retorna true si cargó y el shape coincide. Cualquier excepción de LibTorch
     /// (carga o forward) → false (el wrapper pasa a Bypass_Seguro).
     /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
@@ -786,8 +787,8 @@ struct DnnDenoiser::Impl {
         }
 
         // ── Forward dummy [1,2,kDnnDualBlock] → verificar salida [1,kDnnDualBlock] ──
-        // NOTA: el modelo usa STFT(n_fft=512) + reflection_pad1d(pad=256).
-        // El input DEBE ser >= 512 muestras; usamos kDnnDualBlock (1024).
+        // NOTA: el modelo fue trazado con T=kDnnDualBlock (4800). El trace fija
+        // las shapes internas de STFT/WPE/IVA. El dummy DEBE usar ese mismo T.
         try {
             torch::InferenceMode guard;
             constexpr int DT = kDnnDualBlock;
@@ -1250,13 +1251,10 @@ struct DnnDenoiser::Impl {
 
             // Esperar hasta tener `need` samples disponibles (ambos canales si dual).
             //
-            // MEJORA #4 (ruido-profundo.md): wait_for bajado de 50 ms → 5 ms.
-            // Con kDnnHopSize=128 (8 ms a 16 kHz) y `notify_one()` desde el audio
-            // thread cada vez que cruza el umbral, el wait_for casi nunca dispara
-            // por timeout en operación normal. Pero cuando hay backpressure (GC
-            // pause, scheduling jitter), 5 ms de poll deja al worker reaccionar
-            // 10× más rápido que los 50 ms anteriores. Combinado con el ring
-            // reducido a 1024 (~64 ms vs 256 ms), los drops bajo carga real bajan.
+            // wait_for de 5 ms: con kDnnHopSize=128 (8 ms) para mono o
+            // kDnnDualBlock=4800 (300 ms) para dual, el CV despierta al worker
+            // cuando el audio thread cruza el umbral. El 5 ms es fallback por
+            // si se pierde un notify (scheduling jitter, GC pause).
             {
                 std::unique_lock<std::mutex> lk(workerMtx);
                 workerCv.wait_for(lk, std::chrono::milliseconds(5),
