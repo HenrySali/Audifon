@@ -784,11 +784,10 @@ struct DnnDenoiser::Impl {
             return false;
         }
 
-        // ── Forward dummy [1,2,48000] -> verificar salida [1,48000] ────────
-        // T=48000 es el valor usado durante torch.jit.trace; el full JIT
-        // interpreter ejecuta correctamente con este shape (a diferencia del
-        // lite interpreter que crasheaba con SIGSEGV).
-        constexpr int kDummyT = 48000;
+        // ── Forward dummy [1,2,kDnnDualBlock] -> verificar salida [1,kDnnDualBlock] ──
+        // Con torch.jit.script el modelo soporta T variable; usamos kDnnDualBlock
+        // (128) para validar el shape exacto que se usará en runtime.
+        constexpr int kDummyT = kDnnDualBlock;
         try {
             torch::InferenceMode guard;
             std::vector<float> dummy(2 * kDummyT, 0.0f);

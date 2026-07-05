@@ -510,7 +510,7 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     // queda en bypass seguro (processStereo → ch0 passthrough) y el modo
     // kDualChannelDnn se degrada a passthrough sin cortar el audio (R4.x).
     const bool okDual =
-        dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.ptl");
+        dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.pt");
     if (!okDual) {
         LOGW("initDnnDenoiser[dual]: .pt not loaded — kDualChannelDnn will bypass to ch0");
     } else {
