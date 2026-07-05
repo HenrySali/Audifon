@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "chore",
   "description": "Remove LibTorch dependency from CMakeLists.txt and clean up related files, reducing APK size from ~63MB to ~6MB. Update audio_engine.cpp to work with the new ONNX-based dual-channel path.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "In android/app/src/main/cpp/CMakeLists.txt: (a) Remove the entire PyTorch Full JIT Runtime section (the conditional block checking for PYTORCH_JNI_SO, the add_library for pytorch_jni and fbjni, and the if(HAVE_PYTORCH) blocks for target_link_libraries, target_compile_definitions, target_link_options, and target_include_directories). (b) Remove the comment block about PyTorch. The OnnxRuntime section stays unchanged.",
     "In android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp: (a) Remove #if HAVE_PYTORCH / #include <torch/script.h> and all related includes. (b) Remove the torchModule/torchLoaded members from Impl. (c) Remove loadTorchModule() method entirely. (d) Remove processStereoFrame() that uses LibTorch (now replaced by processDualFrame using ONNX in FEAT-002). (e) Remove any remaining #if HAVE_PYTORCH guards.",
@@ -23,5 +23,5 @@
     "CMakeLists.txt parses correctly (cmake -P with a print statement, or just visual inspection of balanced if/endif)"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All LibTorch references removed from CMakeLists.txt, dnn_denoiser.cpp/.h, audio_engine.cpp/.h. InputChannels enum removed; inputChannels() now returns int from impl_->channels. Model path updated to gtcrn_dual_core.onnx. EnhancementEngineMode enum unchanged. Verified with grep (no matches for HAVE_PYTORCH/pytorch_jni/torch_script/torchModule/InputChannels in active sources) and g++ -fsyntax-only on dnn_denoiser.h. pytorch_lite/ directory README marked as deprecated. Cannot verify full Android build (no NDK in sandbox)."
 }
