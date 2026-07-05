@@ -447,7 +447,7 @@ def create_adaptive_wrapper(model):
 
             return enh, new_conv_cache, new_tra_cache, new_inter_cache
 
-    return AdaptiveGTCRNCore(full_model)
+    return AdaptiveGTCRNCore(model)
 
 
 # ============================================================================
