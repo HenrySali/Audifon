@@ -300,7 +300,7 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     // siga viendo audio a 16 kHz independientemente de lo que negocie Oboe.
     // Idempotente: si el sr no cambió respecto a la última llamada, es no-op.
     dnnDenoiser_.setInputSampleRate(effectiveSampleRate);
-    // Misma rate nativa para la instancia dual-channel (LibTorch). Su
+    // Misma rate nativa para la instancia dual-channel (ONNX). Su
     // resampler interno lleva ambos canales a 16 kHz. Idempotente.
     dnnDenoiserDual_.setInputSampleRate(effectiveSampleRate);
 
@@ -502,17 +502,17 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
         LOGI("initDnnDenoiser[mono]: model ready");
     }
 
-    // ─── Instancia dual-channel (GTCRN dual, LibTorch) ──────────────────
+    // ─── Instancia dual-channel (GTCRN dual, ONNX + WPE beamformer) ────
     // Motor de realce del modo kDualChannelDnn (spec gtcrn-dual-channel).
     // Se inicializa aparte porque initialize()/initializeDual() son
     // mutuamente excluyentes en el wrapper (cada uno arma UN worker para UN
-    // runtime). Si el .pt no carga o el shape no coincide, la instancia
-    // queda en bypass seguro (processStereo → ch0 passthrough) y el modo
+    // runtime). Si el .onnx no carga o el shape no coincide, la instancia
+    // queda en bypass seguro (processStereo -> ch0 passthrough) y el modo
     // kDualChannelDnn se degrada a passthrough sin cortar el audio (R4.x).
     const bool okDual =
-        dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.pt");
+        dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_core.onnx");
     if (!okDual) {
-        LOGW("initDnnDenoiser[dual]: .pt not loaded — kDualChannelDnn will bypass to ch0");
+        LOGW("initDnnDenoiser[dual]: .onnx not loaded — kDualChannelDnn will bypass to ch0");
     } else {
         LOGI("initDnnDenoiser[dual]: model ready (inputChannels=%d)",
              static_cast<int>(dnnDenoiserDual_.inputChannels()));
@@ -633,8 +633,9 @@ void AudioEngine::renderEngineChunk(EnhancementEngineMode mode,
                                     float* dst, int chunk, bool vadActive) {
     switch (mode) {
         case EnhancementEngineMode::kDualChannelDnn:
-            // 2 mics → GTCRN dual (LibTorch). Bypass seguro interno si el
-            // modelo no cargó o hay underrun (processStereo copia ch0 a dst).
+            // 2 mics -> GTCRN dual (ONNX + WPE beamformer). Bypass seguro
+            // interno si el modelo no cargo o hay underrun (processStereo
+            // copia ch0 a dst).
             dnnDenoiserDual_.processStereo(ch0, ch1, dst, chunk);
             break;
         case EnhancementEngineMode::kMvdrBackup:

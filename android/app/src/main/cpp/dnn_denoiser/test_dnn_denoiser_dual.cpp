@@ -361,8 +361,8 @@ void device_P4(AAssetManager* mgr) {
 // intensity=1 => 100% wet. Requiere .pt válido y drenar el worker.
 void device_P3(AAssetManager* mgr) {
     DnnDenoiser d;
-    assert(d.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.pt"));
-    assert(d.inputChannels() == dnn_denoiser::InputChannels::kDual);
+    assert(d.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_core.onnx"));
+    assert(d.inputChannels() == 2);
     d.setEnabled(true);
     d.setIntensity(0.0f);   // dry
     /* ... procesar N bloques, comparar contra ch0 realineado ... */
@@ -373,7 +373,7 @@ void device_P3(AAssetManager* mgr) {
 // P6 real: en tramos noise-only, RMS(out) <= RMS(ch0) (DNN solo atenúa).
 void device_P6(AAssetManager* mgr) {
     DnnDenoiser d;
-    assert(d.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_mobile.pt"));
+    assert(d.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_core.onnx"));
     d.setEnabled(true);
     d.setIntensity(1.0f);
     /* ... alimentar ruido sin voz, medir RMS ch0 y out, assert rmsOut<=rmsCh0 ... */

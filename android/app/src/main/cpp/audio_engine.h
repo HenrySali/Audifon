@@ -350,26 +350,27 @@ private:
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
 
-    // ─── DNN Denoiser dual-channel (GTCRN dual, LibTorch) ────────────────
+    // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.
     ///
-    /// DECISIÓN (spec gtcrn-dual-channel, tarea 3): se usan DOS instancias
+    /// DECISION (spec gtcrn-dual-channel, tarea 3): se usan DOS instancias
     /// separadas de DnnDenoiser en lugar de una sola. El motivo es que en el
-    /// wrapper `initialize()` (mono, ONNXRuntime) e `initializeDual()` (dual,
-    /// LibTorch) son mutuamente excluyentes: ambos setean `active_` y
-    /// `inputChannelsMode_`, y cada uno arma su worker thread para UN runtime.
-    /// Para tener AMBAS rutas disponibles a la vez (mono legacy como stage del
-    /// chain post-realce, y dual como motor de realce seleccionable) hacen
-    /// falta dos objetos independientes con sus propios worker/ring/resampler.
+    /// wrapper `initialize()` (mono) e `initializeDual()` (dual) son
+    /// mutuamente excluyentes: ambos setean `active_` y el channel mode,
+    /// y cada uno arma su worker thread. Para tener AMBAS rutas disponibles
+    /// a la vez (mono legacy como stage del chain post-realce, y dual como
+    /// motor de realce seleccionable) hacen falta dos objetos independientes
+    /// con sus propios worker/ring/resampler.
     ///
-    ///   dnnDenoiser_     → mono legacy (ONNX). Stage `process()` del chain,
+    ///   dnnDenoiser_     -> mono legacy (ONNX). Stage `process()` del chain,
     ///                      controlado por setDnnEnabled() (sin cambios).
-    ///   dnnDenoiserDual_ → dual (LibTorch). Motor de realce invocado por
-    ///                      `processStereo()` solo en modo kDualChannelDnn.
+    ///   dnnDenoiserDual_ -> dual (ONNX + WPE beamformer). Motor de realce
+    ///                      invocado por `processStereo()` solo en modo
+    ///                      kDualChannelDnn.
     ///
     /// Ambas se inicializan en `initDnnDenoiser()` con el mismo AAssetManager.
     /// Costo: un worker thread extra en idle (sin inferencias si el modo no es
-    /// dual). Beneficio: cero acoplamiento entre runtimes y coexistencia limpia.
+    /// dual). Beneficio: cero acoplamiento entre modelos y coexistencia limpia.
     dnn_denoiser::DnnDenoiser dnnDenoiserDual_;
 
     // ─── MVDR Beamformer (dual-mic, pre-DNN) ─────────────────────────────

@@ -30,59 +30,6 @@ set_target_properties(onnxruntime PROPERTIES
         "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libonnxruntime.so"
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PyTorch Full JIT Runtime (LibTorch) — runtime para modelo GTCRN dual-channel (.ptl)
-# ─────────────────────────────────────────────────────────────────────────────
-# Las .so se extraen del AAR org.pytorch:pytorch_android:2.1.0 y se
-# colocan en jniLibs/arm64-v8a/ (mismo patron que OnnxRuntime).
-# Libs requeridas: libpytorch_jni.so, libc10.so, libfbjni.so
-#
-# Headers del Full JIT Interpreter se colocan en:
-#   cpp/dnn_denoiser/pytorch_lite/
-# (descargados del release oficial pytorch/pytorch, branch v2.1.0,
-#  directorio torch/csrc/api/include/ + JIT headers)
-#
-# NOTA: migracion de pytorch_android_lite a pytorch_android (full runtime)
-# requerida porque el modelo fue trazado con torch.jit.trace(model,
-# torch.randn(1,2,48000)) y el lite interpreter crasheaba con SIGSEGV
-# al pasar T != 48000. El full JIT interpreter maneja los shapes correctamente.
-#
-# Nota sobre conflictos: tanto ORT como LibTorch usan internamente XNNPACK
-# para cuantizacion; no deberia haber conflicto de simbolos porque cada lib
-# empaqueta su propia copia como dependencia interna (linkeo estatico interno).
-# Si surgiera conflicto, la solucion es recompilar una de las dos con
-# -fvisibility=hidden (ORT ya lo hace por defecto).
-# ─────────────────────────────────────────────────────────────────────────────
-
-set(PYTORCH_JNI_SO "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libpytorch_jni.so")
-
-if(EXISTS "${PYTORCH_JNI_SO}")
-    message(STATUS "PyTorch Full JIT: encontrado en jniLibs/${ANDROID_ABI}/")
-    set(HAVE_PYTORCH ON)
-
-    # Libreria principal del Full JIT Runtime.
-    # NOTA: en pytorch_android:2.1.0 la core tensor library (libc10)
-    # viene FUSIONADA dentro de libpytorch_jni.so (por eso pesa ~60 MB),
-    # NO se distribuye libc10.so por separado. Por eso NO declaramos un
-    # target c10 aparte: linkeamos solo pytorch_jni + fbjni.
-    add_library(pytorch_jni SHARED IMPORTED)
-    set_target_properties(pytorch_jni PROPERTIES
-        IMPORTED_LOCATION "${PYTORCH_JNI_SO}"
-    )
-
-    # libfbjni — Facebook JNI helpers (dependencia transitiva)
-    add_library(fbjni SHARED IMPORTED)
-    set_target_properties(fbjni PROPERTIES
-        IMPORTED_LOCATION
-            "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libfbjni.so"
-    )
-else()
-    message(WARNING "PyTorch Full JIT: .so NO encontradas en jniLibs/${ANDROID_ABI}/. "
-        "Ejecutar extract_pytorch_libs.bat para descargarlas del AAR. "
-        "El DNN Denoiser dual-channel no compilara hasta resolver esto.")
-    set(HAVE_PYTORCH OFF)
-endif()
-
 # Librería compartida del DSP pipeline
 add_library(
     hearing_aid_dsp
@@ -120,7 +67,7 @@ add_library(
     latency_loopback_tester.cpp
 )
 
-# Enlazar con Oboe, librerías del sistema Android, OnnxRuntime, y PyTorch Full JIT
+# Enlazar con Oboe, librerías del sistema Android y OnnxRuntime
 target_link_libraries(
     hearing_aid_dsp
     android
@@ -129,39 +76,10 @@ target_link_libraries(
     onnxruntime
 )
 
-# Linkear PyTorch Full JIT solo si las .so estan presentes.
-# c10 va fusionado dentro de libpytorch_jni.so (no es un target aparte).
-if(HAVE_PYTORCH)
-    target_link_libraries(hearing_aid_dsp pytorch_jni fbjni)
-    target_compile_definitions(hearing_aid_dsp PRIVATE HAVE_PYTORCH=1)
-
-    # FIX linker lld + libpytorch_jni.so prebuilt:
-    # El .so prebuilt de pytorch_android:2.1.0 trae en su tabla de
-    # simbolos entradas legacy (__bss_end__, __end__, __bss_start, _edata,
-    # _end) marcadas como LOCAL pero ubicadas en la parte GLOBAL de la
-    # symtab. El linker lld del NDK 25 las rechaza con:
-    #   "ld: error: found local symbol '__bss_end__' in global part of
-    #    symbol table in file libpytorch_jni.so"
-    # Es un bug conocido del empaquetado de PyTorch Android (pytorch/pytorch
-    # #51020, #129633; ndk-samples #769). El diagnostico de lld es
-    # degradable: --no-fatal-warnings evita que aborte el link. No afecta el
-    # runtime (el dynamic loader usa .dynsym, no la symtab estatica).
-    target_link_options(hearing_aid_dsp PRIVATE "-Wl,--no-fatal-warnings")
-endif()
-
 # Incluir headers del directorio actual + headers de OnnxRuntime locales
-# + headers de PyTorch Full JIT (torch::jit::load API) si disponibles
 target_include_directories(
     hearing_aid_dsp
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/dnn_denoiser
 )
-
-if(HAVE_PYTORCH)
-    target_include_directories(
-        hearing_aid_dsp
-        PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/dnn_denoiser/pytorch_lite
-    )
-endif()

@@ -1,6 +1,13 @@
-# PyTorch Full JIT Runtime Headers -- GTCRN Dual-Channel
+# PyTorch Full JIT Runtime Headers -- LEGACY (NO LONGER USED)
 
-## Proposito
+> **DEPRECATED:** As of the Option D migration (gtcrn-dual-channel), the
+> dual-channel path now uses ONNX Runtime with a WPE beamformer in C++.
+> LibTorch is no longer linked or required at build time. These headers and
+> the corresponding .so files in jniLibs/arm64-v8a/ (libpytorch_jni.so,
+> libfbjni.so) can be safely deleted to reduce repository size. They are
+> kept temporarily for fallback testing only.
+
+## Original Purpose
 
 Este directorio contiene los headers del **PyTorch Full JIT Runtime**
 necesarios para compilar el `DnnDenoiser` con soporte dual-channel (LibTorch).

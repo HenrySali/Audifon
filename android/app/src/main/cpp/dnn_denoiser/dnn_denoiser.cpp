@@ -1448,6 +1448,11 @@ DnnDenoiser::DnnDenoiser() : impl_(std::make_unique<Impl>()) {}
 
 DnnDenoiser::~DnnDenoiser() = default;
 
+int DnnDenoiser::inputChannels() const {
+    if (!impl_) return 1;
+    return impl_->channels.load(std::memory_order_acquire);
+}
+
 void DnnDenoiser::setInputSampleRate(int sampleRateHz) {
     if (!impl_) return;
     impl_->applyInputSampleRate(sampleRateHz);
@@ -1502,7 +1507,6 @@ bool DnnDenoiser::initialize(AAssetManager* assetMgr, const char* assetPath) {
     }
 
     impl_->channels.store(1, std::memory_order_release);
-    inputChannelsMode_.store(1, std::memory_order_release);
     impl_->modelReady = true;
     active_.store(true, std::memory_order_release);
     impl_->startWorker();
@@ -1524,13 +1528,11 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
     if (!impl_->loadDualOnnxModel(assetMgr, assetPath)) {
         DNN_LOGE("initializeDual: model load/validation failed -> bypass");
         impl_->channels.store(1, std::memory_order_release);
-        inputChannelsMode_.store(1, std::memory_order_release);
         active_.store(false, std::memory_order_release);
         return false;
     }
 
     impl_->channels.store(2, std::memory_order_release);
-    inputChannelsMode_.store(2, std::memory_order_release);
     impl_->modelReady = true;
     active_.store(true, std::memory_order_release);
     impl_->startWorker();
@@ -1738,7 +1740,7 @@ void DnnDenoiser::processStereo(const float* ch0, const float* ch1,
 
     const bool en   = enabled_.load(std::memory_order_acquire);
     const bool act  = active_.load(std::memory_order_acquire);
-    const bool dual = (inputChannelsMode_.load(std::memory_order_acquire) == 2);
+    const bool dual = (impl_->channels.load(std::memory_order_acquire) == 2);
 
     // Fast path bypass: sin enable (y crossfade ya en 0), o modelo no dual.
     // El modo mono no puede procesar estéreo → ch0 passthrough (R4.5).
