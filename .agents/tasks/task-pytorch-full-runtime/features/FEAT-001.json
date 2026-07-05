@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "fix",
   "description": "Migrate from PyTorch Lite (mobile interpreter) to PyTorch Full runtime to resolve SIGSEGV crash caused by the lite interpreter's inability to handle dynamic shapes. Changes span build.gradle, CMakeLists.txt, dnn_denoiser.cpp, dnn_denoiser.h, audio_engine.cpp, packagingOptions, and the README.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "1. android/app/build.gradle: Change dependency from 'org.pytorch:pytorch_android_lite:2.1.0' to 'org.pytorch:pytorch_android:2.1.0'. Update the comments to reflect this is the full runtime, not lite.",
     "2. android/app/build.gradle packagingOptions: Change pickFirsts from '**/libpytorch_jni_lite.so' to '**/libpytorch_jni.so'. Keep the libc10 and libfbjni entries.",
@@ -39,5 +39,5 @@
     "grep 'kDnnDualBlock = 48000' android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.h should return 1 result"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All changes implemented successfully. Verification checks confirm: no HAVE_PYTORCH_LITE references remain in source (only in MIGRATION_NOTES.md as documentation), torch::jit::load and torch::jit::Module used throughout, kDnnDualBlock=48000, kDnnRingCapacity=65536, packagingOptions updated, README and MIGRATION_NOTES documented. The test file test_dnn_denoiser_dual.cpp also updated for the HAVE_PYTORCH define name change. No Android SDK in sandbox so build verification is code-level only."
 }
