@@ -59,13 +59,10 @@ std::atomic<bool> g_running{false};
 /// modo-conversacion-sco.
 std::atomic<bool> g_conversationMode{false};
 
-/// Flag del MVDR dual-mic beamforming solicitado por la UI. Lo setea
-/// `nativeSetBeamformingRequested` ANTES de `nativeStart`, y `nativeStart`
-/// lo copia a `AudioEngineConfig.beamformingEnabled` para que los streams
-/// Oboe se abran en estéreo (2 canales) y el beamformer pueda procesar.
-/// Sin esto, `nativeStart` siempre abría mono y el beamformer nunca recibía
-/// datos estéreo aunque `setEnabled(true)` estuviera activo. Spec:
-/// dual-mic-mvdr-beamforming.
+/// Flag de beamforming dual-mic. Lo setea `nativeSetBeamformingMode`
+/// ANTES de `nativeStart`, y `nativeStart` lo copia a
+/// `AudioEngineConfig.beamformingEnabled` para que el input stream se
+/// abra en estéreo (2 canales) y el MVDR beamformer se active.
 std::atomic<bool> g_beamformingEnabled{false};
 
 } // namespace anónimo
@@ -294,9 +291,8 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStart(
     // Modo Conversación: leído del flag global que setea
     // nativeSetConversationMode() antes de este start.
     engineConfig.conversationMode = g_conversationMode.load(std::memory_order_acquire);
-    // MVDR beamforming: leído del flag global que setea
-    // nativeSetBeamformingRequested() antes de este start. Habilita la
-    // captura estéreo (2 canales) para que el beamformer reciba ch0/ch1.
+    // Beamforming: leído del flag global que setea
+    // nativeSetBeamformingMode() antes de este start.
     engineConfig.beamformingEnabled = g_beamformingEnabled.load(std::memory_order_acquire);
 
     // Iniciar el AudioEngine (crea Oboe streams + hilo de audio)
@@ -724,6 +720,27 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetConversationMode(
 
     g_conversationMode.store(enabled == JNI_TRUE, std::memory_order_release);
     LOGI("nativeSetConversationMode: %s", (enabled == JNI_TRUE) ? "ON" : "OFF");
+}
+
+/// Setea el flag de beamforming dual-mic (captura estéreo + MVDR).
+///
+/// IMPORTANTE: debe llamarse ANTES de `nativeStart` (o antes de reiniciar
+/// el motor con stop+start). `nativeStart` copia este flag a
+/// `AudioEngineConfig.beamformingEnabled`, que decide si el input stream
+/// se abre con 2 canales (estéreo) o 1 canal (mono).
+///
+/// Llamarlo con el motor ya corriendo NO cambia el channelCount en caliente:
+/// el caller (handler Kotlin) debe hacer stop → setBeamformingMode → start.
+///
+/// @param enabled true para captura estéreo + MVDR beamformer.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetBeamformingMode(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    g_beamformingEnabled.store(enabled == JNI_TRUE, std::memory_order_release);
+    LOGI("nativeSetBeamformingMode: %s", (enabled == JNI_TRUE) ? "ON" : "OFF");
 }
 
 /// Obtiene la clase de entorno actual detectada por el clasificador automático.

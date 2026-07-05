@@ -368,6 +368,15 @@ class NativeAudioBridge {
      */
     external fun nativeSetConversationMode(enabled: Boolean)
 
+    /**
+     * Setea el flag de beamforming dual-mic (captura estéreo + MVDR).
+     * Debe llamarse ANTES de [start] (o antes de un stop→start) para que
+     * el motor abra el input stream con 2 canales y active el MVDR.
+     *
+     * @param enabled true para captura estéreo + MVDR beamformer.
+     */
+    external fun nativeSetBeamformingMode(enabled: Boolean)
+
     // ─── Spectrum Analyzer (implementados en native_bridge.cpp) ──────────
 
     external fun nativeStartSpectrumAnalysis()

@@ -72,6 +72,7 @@ class AudioBridgeImpl implements AudioBridge {
       'compressionRatio': config.wdrcParams.compressionRatio,
       'attackMs': config.wdrcParams.attackMs,
       'releaseMs': config.wdrcParams.releaseMs,
+      'beamformingEnabled': config.beamformingEnabled,
     });
   }
 
