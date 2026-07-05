@@ -69,6 +69,8 @@ model = GTCRN_IVA()
 # Cargar pesos (intentar ambos formatos comunes)
 if "model_state_dict" in checkpoint:
     model.load_state_dict(checkpoint["model_state_dict"])
+elif "model" in checkpoint:
+    model.load_state_dict(checkpoint["model"])
 elif "state_dict" in checkpoint:
     model.load_state_dict(checkpoint["state_dict"])
 else:
