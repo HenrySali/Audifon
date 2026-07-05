@@ -785,18 +785,22 @@ struct DnnDenoiser::Impl {
             return false;
         }
 
-        // ── Forward dummy [1,2,160] → verificar salida [1,160] ────────
+        // ── Forward dummy [1,2,kDnnDualBlock] → verificar salida [1,kDnnDualBlock] ──
+        // NOTA: el modelo usa STFT(n_fft=512) + reflection_pad1d(pad=256).
+        // El input DEBE ser >= 512 muestras; usamos kDnnDualBlock (1024).
         try {
             torch::InferenceMode guard;
-            std::vector<float> dummy(2 * 160, 0.0f);
+            constexpr int DT = kDnnDualBlock;
+            std::vector<float> dummy(2 * DT, 0.0f);
             at::Tensor in = torch::from_blob(
-                dummy.data(), {1, 2, 160}, torch::kFloat32);
+                dummy.data(), {1, 2, DT}, torch::kFloat32);
             std::vector<c10::IValue> inputs{in};
             at::Tensor out = torchModule->forward(inputs).toTensor();
-            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != 160) {
+            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != DT) {
                 DNN_LOGE("loadTorchModule: dummy forward shape mismatch "
-                         "(got dim=%ld, expected [1,160])",
-                         static_cast<long>(out.dim()));
+                         "(got dim=%ld size1=%ld, expected [1,%d])",
+                         static_cast<long>(out.dim()),
+                         static_cast<long>(out.size(out.dim()-1)), DT);
                 return false;
             }
         } catch (const std::exception& e) {

@@ -115,13 +115,17 @@ static constexpr int kDnnHopSize = 128;
 
 /// Tamaño de bloque (samples a 16 kHz por canal) que el worker alimenta al
 /// modelo dual-channel en cada `forward`. Contrato: entrada `[1, 2, T]`,
-/// salida `[1, T]` (T = kDnnDualBlock). Se fija igual a `kDnnHopSize` para que
-/// la relación 1:1 input↔output preserve la alineación dry/wet ya usada por
-/// la ruta mono (cada bloque de T samples de entrada produce T de salida).
-/// Spec: gtcrn-dual-channel (tarea 2.5). A diferencia de la ruta mono, la
-/// STFT/iSTFT + WPE/IVA corren DENTRO del `.pt` TorchScript; el wrapper solo
-/// empuja PCM crudo y extrae PCM mono.
-static constexpr int kDnnDualBlock = kDnnHopSize;
+/// salida `[1, T]` (T = kDnnDualBlock).
+///
+/// IMPORTANTE: el modelo GTCRN usa STFT interno con n_fft=512, hop=256 y
+/// reflection_pad1d (padding=256 por lado). Para que reflection_pad funcione,
+/// T debe ser >= n_fft (512). Usamos 1024 (= 4 hops STFT = 64 ms) para dar
+/// margen al overlap de istft y WPE. 64 ms de bloque aporta ~64 ms de
+/// latencia algorítmica (aceptable para audífono en exteriores).
+///
+/// Spec: gtcrn-dual-channel (tarea 2.5). La STFT/iSTFT + WPE/IVA corren
+/// DENTRO del .ptl TorchScript; el wrapper solo empuja PCM crudo.
+static constexpr int kDnnDualBlock = 1024;
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
