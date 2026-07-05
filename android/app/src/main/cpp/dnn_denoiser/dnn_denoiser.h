@@ -113,16 +113,10 @@ static constexpr int kDnnSampleRate = 16000;
 /// = ~37% de un core, con margen suficiente.
 static constexpr int kDnnHopSize = 128;
 
-/// Tamano de bloque (samples a 16 kHz por canal) que el worker alimenta al
-/// modelo dual-channel en cada `forward`. Contrato: entrada `[1, 2, T]`,
-/// salida `[1, T]` (T = kDnnDualBlock).
-///
-/// El modelo fue trazado con torch.jit.trace(model, torch.randn(1,2,48000))
-/// y requiere exactamente T=48000. Esto da 3 segundos de latencia a 16 kHz.
-/// El worker acumula samples hasta completar un bloque antes de correr forward.
-///
-/// Spec: gtcrn-dual-channel (tarea 2.5).
-static constexpr int kDnnDualBlock = 48000;
+/// NOTE: kDnnDualBlock has been removed. The dual-channel path now operates
+/// frame-by-frame at kDnnHopSize (128 samples = 8 ms), same as the mono path.
+/// The WPE beamformer + ONNX GTCRN core replaces the LibTorch 3-second block.
+/// Spec: gtcrn-dual-channel (Option D: WPE in C++ + ONNX core).
 
 /// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
 static constexpr int kDnnFftSize = 512;
@@ -137,16 +131,12 @@ static constexpr int kDnnCrossfadeSamples = 800;
 
 /// Capacidad de cada ring buffer (input/output) en samples.
 ///
-/// Con kDnnDualBlock = 48000, necesitamos al menos 48000 + margen para el
-/// handoff asincrono. Usamos 65536 (potencia de 2 mas cercana por encima).
-static constexpr int kDnnRingCapacity = 65536;
-/// 48000 + margen). Esto permite acumular los 48000 samples (3 segundos a
-/// 16 kHz) necesarios para cada forward dual-channel sin drops.
-///
-/// Para la ruta mono (kDnnHopSize = 128), 65536 samples es mas que suficiente
-/// (~4 segundos de buffer), pero el costo en RAM es aceptable (~256 KB por
-/// ring buffer de floats).
-static constexpr int kDnnRingCapacity = 65536;
+/// With frame-by-frame processing at kDnnHopSize=128, we only need enough
+/// buffer to absorb jitter between audio thread and worker thread.
+/// 4096 samples = ~256 ms at 16 kHz, which is more than sufficient for
+/// frame-by-frame operation (each frame is only 8 ms). Power of 2 for
+/// efficient SPSC ring buffer masking.
+static constexpr int kDnnRingCapacity = 4096;
 
 /// Cap por defecto aplicado a `intensity` cuando el VAD detecta voz activa.
 /// Valor en [0,1]. 0.7 = mezcla 30% dry + 70% wet con voz, recuperando
@@ -190,26 +180,30 @@ public:
     /// NOTE: Llamar UNA SOLA VEZ. Idempotente: llamadas siguientes no-op.
     bool initialize(AAssetManager* assetMgr, const char* assetPath);
 
-    /// Carga el modelo TorchScript dual-channel (`.ptl`, LibTorch) desde assets
-    /// y lanza el worker thread en modo dual.
+    /// Carga el modelo ONNX dual-channel (gtcrn_dual_core.onnx) desde assets
+    /// y lanza el worker thread en modo dual (WPE beamformer + ONNX GTCRN core).
     ///
-    /// Contrato del modelo (ver design.md): entrada float32 `[1, 2, T]`
-    /// (ch0 = mic inferior, ch1 = mic superior) a 16 kHz, salida `[1, T]` mono.
-    /// La STFT/iSTFT + WPE/IVA corren DENTRO del `.ptl`; el wrapper solo alimenta
-    /// PCM crudo y extrae PCM mono.
+    /// Contrato del modelo: misma interfaz que el modelo mono GTCRN:
+    ///   inputs[0] = "mix" [1,257,1,2] (real+imag per freq bin, single channel)
+    ///   inputs[1..3] = recurrent caches (conv, tra, inter)
+    ///   outputs[0] = "enh" [1,257,1,2] (enhanced spectrum)
+    ///   outputs[1..3] = updated caches
     ///
-    /// Validacion (Bypass_Seguro): carga con `torch::jit::load()`, corre un
-    /// `forward` dummy `[1, 2, 48000]` y verifica que la salida sea `[1, 48000]`.
-    /// Esto valida que el full JIT runtime puede ejecutar el modelo con el T=48000
-    /// usado durante el trace original. Si el `.ptl` no carga, el shape no coincide,
-    /// o LibTorch lanza cualquier excepcion -> `active_ = false` y la clase queda
-    /// en bypass permanente (`processStereo` copia ch0 a output).
+    /// The dual-channel pipeline (Option D) works as follows:
+    ///   1. STFT of both ch0 and ch1 (done in C++, kDnnFftSize=512)
+    ///   2. WPE beamformer: combines 2ch spectra into 1ch enhanced spectrum
+    ///   3. ONNX GTCRN core: processes the beamformed spectrum frame-by-frame
+    ///   4. iSTFT/OLA: reconstructs time-domain output
+    ///
+    /// This replaces the LibTorch-based approach that ran STFT/WPE/IVA inside
+    /// the .ptl model with 3-second blocks. Now operates frame-by-frame at
+    /// kDnnHopSize=128 (8ms latency), same as the mono path.
     ///
     /// @param assetMgr  Asset manager Android (nullptr -> falla limpia).
-    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn_dual_mobile.ptl".
-    /// @return true si el modelo cargo y el shape es el esperado.
+    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn_dual_core.onnx".
+    /// @return true si el modelo cargo y la sesion esta lista.
     /// NOTE: Llamar UNA SOLA VEZ, en lugar de initialize() (no ambos).
-    /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
+    /// Spec: gtcrn-dual-channel (Option D: WPE C++ + ONNX core).
     bool initializeDual(AAssetManager* assetMgr, const char* assetPath);
 
     /// @return canales de entrada del modelo cargado (kMono legacy o kDual).

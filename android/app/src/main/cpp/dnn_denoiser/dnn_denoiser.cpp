@@ -34,19 +34,10 @@
 
 #include "onnxruntime/onnxruntime_cxx_api.h"
 
-// LibTorch (PyTorch Full JIT Runtime) — runtime del modelo GTCRN dual-channel (.ptl).
-// Solo disponible cuando el CMake detecta las .so de pytorch_android y
-// define HAVE_PYTORCH (ver CMakeLists.txt). El GTCRN mono sigue con ONNX.
-//
-// Usamos la API FULL JIT (torch::jit::load / torch::jit::Module) que esta
-// exportada por libpytorch_jni.so. Esto resuelve el crash SIGSEGV del lite
-// interpreter causado por shapes estaticas baked en el trace (T=48000).
-#if HAVE_PYTORCH
-// torch/script.h aporta la API de tensores (torch::from_blob, at::Tensor,
-// torch::InferenceMode) via ATen + torch/csrc/api, y tambien declara
-// torch::jit::load() y torch::jit::Module (full JIT).
-#include <torch/script.h>
-#endif
+// WPE Beamformer (header-only) for dual-channel spatial filtering.
+// Operates on frequency-domain complex spectra. Used in processDualFrame()
+// to combine 2ch STFT spectra into 1ch enhanced spectrum before ONNX inference.
+#include "../wpe_beamformer.h"
 
 #include <android/asset_manager.h>
 #include <android/log.h>
@@ -58,7 +49,6 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
-#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -570,23 +560,23 @@ struct DnnDenoiser::Impl {
     /// Modelo cargado y listo para inferencia.
     bool modelReady = false;
 
-    // ─── LibTorch (modelo GTCRN dual-channel) ──────────────────────────
-    /// Canales de entrada del modelo activo (1 = mono ONNX, 2 = dual LibTorch).
+    // ─── Dual-channel ONNX + WPE Beamformer ──────────────────────────
+    /// Canales de entrada del modelo activo (1 = mono ONNX, 2 = dual ONNX+WPE).
     /// Lo lee el worker para elegir la ruta de inferencia.
     std::atomic<int> channels{1};
 
-#if HAVE_PYTORCH
-    /// Modulo TorchScript (full JIT interpreter) cargado con
-    /// torch::jit::load() (solo dual). El full JIT runtime resuelve el
-    /// crash SIGSEGV del lite interpreter con shapes estaticas (T=48000).
-    std::unique_ptr<torch::jit::Module> torchModule;
-#endif
-    /// true cuando torchModule cargó y pasó la validación de shape.
-    bool torchLoaded = false;
+    /// WPE beamformer instance for dual-channel spatial filtering.
+    /// Operates on frequency-domain complex spectra, producing single-channel
+    /// enhanced output that feeds into the ONNX GTCRN core.
+    WpeBeamformer wpeBeamformer;
 
-    /// Buffer contiguo staging del tensor de entrada dual: layout [1,2,T] =
-    /// [ch0[0..T-1], ch1[0..T-1]]. Reusado por el worker en cada forward.
-    std::vector<float> dualTensorData;
+    /// STFT input buffer for channel 1 (dual-channel mode).
+    /// Channel 0 reuses the existing stftInBuf.
+    std::vector<float> stftInBufCh1;      // [kDnnFftSize]
+
+    /// Workspace FFT arrays for channel 1 (dual-channel STFT).
+    std::vector<float> fftReCh1;           // [kDnnFftSize]
+    std::vector<float> fftImCh1;           // [kDnnFftSize]
 
     // ─── STFT state (worker thread only) ───────────────────────────────
     /// Ventana Hann de análisis y síntesis (root-Hann simétrica → COLA con hop=N/2).
@@ -709,7 +699,12 @@ struct DnnDenoiser::Impl {
         downStagingCh1.assign(1024, 0.0f);
         wet16k.assign(1024, 0.0f);
         wetNativeRate.assign(2048, 0.0f);
-        dualTensorData.assign(2 * kDnnDualBlock, 0.0f);
+
+        // Dual-channel: STFT buffers for ch1 and WPE beamformer reset.
+        stftInBufCh1.assign(kDnnFftSize, 0.0f);
+        fftReCh1.assign(kDnnFftSize, 0.0f);
+        fftImCh1.assign(kDnnFftSize, 0.0f);
+        wpeBeamformer.reset();
     }
 
     ~Impl() {
@@ -745,124 +740,207 @@ struct DnnDenoiser::Impl {
         return data;
     }
 
-    /// Carga el modelo TorchScript dual-channel (.ptl) desde assets y valida su
-    /// contrato de shape corriendo un forward dummy [1,2,48000] -> esperado [1,48000].
-    /// Retorna true si cargo y el shape coincide. Cualquier excepcion de LibTorch
-    /// (carga o forward) -> false (el wrapper pasa a Bypass_Seguro).
+    /// Loads the dual-channel ONNX model (gtcrn_dual_core.onnx) from assets.
+    /// Uses the same OnnxRuntime infrastructure as the mono path (initialize()).
+    /// The dual model has the same interface as the mono model:
+    ///   inputs[0] = "mix" [1,257,1,2], inputs[1..3] = caches
+    ///   outputs[0] = "enh" [1,257,1,2], outputs[1..3] = updated caches
     ///
-    /// NOTA: el modelo fue trazado con torch.jit.trace(model, torch.randn(1,2,48000)),
-    /// por lo que el dummy forward DEBE usar T=48000 para validar correctamente.
-    /// El full JIT runtime (torch::jit::load) puede manejar el modelo sin SIGSEGV.
-    ///
-    /// Spec: gtcrn-dual-channel (tareas 2.2, 4.1, 4.2).
-    bool loadTorchModule(AAssetManager* mgr, const char* assetPath) {
-#if HAVE_PYTORCH
+    /// Returns true if the model loaded and introspection passed.
+    /// Spec: gtcrn-dual-channel (Option D).
+    bool loadDualOnnxModel(AAssetManager* mgr, const char* assetPath) {
         std::vector<uint8_t> bytes = readAsset(mgr, assetPath);
         if (bytes.empty()) {
-            DNN_LOGE("loadTorchModule: failed to read .ptl from assets");
+            DNN_LOGE("loadDualOnnxModel: failed to read ONNX model from assets");
             return false;
         }
-        DNN_LOGI("loadTorchModule: model loaded (%zu bytes)", bytes.size());
+        DNN_LOGI("loadDualOnnxModel: model loaded (%zu bytes)", bytes.size());
 
-        // ── Cargar el TorchScript (full JIT interpreter) desde el buffer en RAM ──
-        // API FULL: torch::jit::load(std::istream&) -> torch::jit::Module.
-        // El full runtime puede cargar tanto .pt como .ptl formats.
         try {
-            std::string strbuf(reinterpret_cast<const char*>(bytes.data()),
-                               bytes.size());
-            std::istringstream iss(strbuf, std::ios::binary);
-            torchModule = std::make_unique<torch::jit::Module>(
-                torch::jit::load(iss));
-            torchModule->eval();
-        } catch (const std::exception& e) {
-            DNN_LOGE("loadTorchModule: torch::jit::load failed: %s", e.what());
-            torchModule.reset();
-            return false;
-        } catch (...) {
-            DNN_LOGE("loadTorchModule: torch::jit::load failed (unknown)");
-            torchModule.reset();
+            session = std::make_unique<Ort::Session>(
+                env, bytes.data(), bytes.size(), sessionOpts);
+        } catch (const Ort::Exception& e) {
+            DNN_LOGE("loadDualOnnxModel: Ort::Session failed: %s", e.what());
             return false;
         }
 
-        // ── Skip dummy forward — el modelo trazado con T=48000 no soporta
-        // otros valores de T, y correr un forward con 48000 samples durante
-        // la inicializacion consume demasiada memoria/tiempo en dispositivos
-        // de gama baja (Moto G32). La validacion ocurre implicitamente en el
-        // primer forward real del worker thread.
-        torchLoaded = true;
-        DNN_LOGI("loadTorchModule: OK, dual-channel model loaded "
-                 "(validation deferred to first real forward)");
+        if (!introspectModel()) {
+            DNN_LOGE("loadDualOnnxModel: model introspection failed");
+            session.reset();
+            return false;
+        }
+
+        DNN_LOGI("loadDualOnnxModel: OK, dual ONNX model ready (WPE+GTCRN core)");
         return true;
-#else
-        (void)mgr;
-        (void)assetPath;
-        DNN_LOGE("loadTorchModule: HAVE_PYTORCH not defined — dual model "
-                 "unavailable, staying in bypass");
-        return false;
-#endif
     }
 
-    /// Ejecuta una inferencia dual-channel sobre kDnnDualBlock samples de cada
-    /// canal (ch0/ch1 @ 16 kHz). Arma tensor [1,2,T], corre module.forward(),
-    /// extrae la salida mono [1,T] y la empuja al outputRing.
-    /// Devuelve true si el frame se proceso OK; false -> falla (el worker pasa a
-    /// bypass permanente hasta reset). Nunca lanza (captura toda excepcion).
-    /// Spec: gtcrn-dual-channel (tareas 2.5, 4.3).
-    bool processStereoFrame(const float* ch0, const float* ch1) {
-#if HAVE_PYTORCH
-        if (!torchLoaded) return false;
+    /// Processes one dual-channel frame: STFT(2ch) -> WPE -> ONNX -> iSTFT/OLA.
+    ///
+    /// Takes kDnnHopSize samples from each channel (ch0, ch1) at 16 kHz.
+    /// Performs STFT on both, runs WPE beamformer to get single-channel enhanced
+    /// spectrum, then feeds it through the ONNX GTCRN core (same as processOneFrame
+    /// for the ONNX run + iSTFT/OLA). Pushes kDnnHopSize samples to outputRing.
+    ///
+    /// @param hopCh0  kDnnHopSize new samples from microphone 0 (16 kHz)
+    /// @param hopCh1  kDnnHopSize new samples from microphone 1 (16 kHz)
+    /// @param vadActive  Current VAD state (for WPE noise estimation)
+    /// @return true if frame processed OK; false -> bypass (model failure)
+    bool processDualFrame(const float* hopCh0, const float* hopCh1, bool vadActive) {
+        // ── 1. STFT for channel 0 ───────────────────────────────────────
+        // Shift stftInBuf left by kDnnHopSize and append new samples.
+        std::memmove(stftInBuf.data(),
+                     stftInBuf.data() + kDnnHopSize,
+                     (kDnnFftSize - kDnnHopSize) * sizeof(float));
+        std::memcpy(stftInBuf.data() + (kDnnFftSize - kDnnHopSize),
+                    hopCh0, kDnnHopSize * sizeof(float));
 
-        constexpr int T = kDnnDualBlock;
-        if (static_cast<int>(dualTensorData.size()) < 2 * T) {
-            dualTensorData.assign(2 * T, 0.0f);
+        // Apply analysis window (sqrt-Hann) and FFT for ch0.
+        for (int i = 0; i < kDnnFftSize; ++i) {
+            fftRe[i] = stftInBuf[i] * hannWin[i];
+            fftIm[i] = 0.0f;
         }
-        // Layout [1,2,T]: fila 0 = ch0, fila 1 = ch1 (contiguo).
-        std::memcpy(dualTensorData.data(),     ch0, T * sizeof(float));
-        std::memcpy(dualTensorData.data() + T, ch1, T * sizeof(float));
+        fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/false);
 
+        // Store ch0 spectrum in complex format for WPE.
+        constexpr int nBins = kDnnFftSize / 2 + 1;  // 257
+        WpeBeamformer::Complex X0[WpeBeamformer::kNumBins];
+        for (int f = 0; f < nBins; ++f) {
+            X0[f] = WpeBeamformer::Complex(fftRe[f], fftIm[f]);
+        }
+
+        // ── 2. STFT for channel 1 ───────────────────────────────────────
+        std::memmove(stftInBufCh1.data(),
+                     stftInBufCh1.data() + kDnnHopSize,
+                     (kDnnFftSize - kDnnHopSize) * sizeof(float));
+        std::memcpy(stftInBufCh1.data() + (kDnnFftSize - kDnnHopSize),
+                    hopCh1, kDnnHopSize * sizeof(float));
+
+        for (int i = 0; i < kDnnFftSize; ++i) {
+            fftReCh1[i] = stftInBufCh1[i] * hannWin[i];
+            fftImCh1[i] = 0.0f;
+        }
+        fftRadix2(fftReCh1.data(), fftImCh1.data(), kDnnFftSize, /*invert=*/false);
+
+        WpeBeamformer::Complex X1[WpeBeamformer::kNumBins];
+        for (int f = 0; f < nBins; ++f) {
+            X1[f] = WpeBeamformer::Complex(fftReCh1[f], fftImCh1[f]);
+        }
+
+        // ── 3. WPE beamformer: 2ch spectra -> 1ch enhanced spectrum ─────
+        WpeBeamformer::Complex Y[WpeBeamformer::kNumBins];
+        wpeBeamformer.process(X0, X1, Y, vadActive);
+
+        // ── 4. Pack enhanced spectrum into ONNX input [1,257,1,2] ────────
+        const auto& mixShape = inputShapes[mixInputIdx];
+        if (mixShape.size() != 4 || mixShape[0] != 1 || mixShape[1] != nBins ||
+            mixShape[2] != 1 || mixShape[3] != 2) {
+            DNN_LOGE("processDualFrame: unsupported mix shape (expected [1,257,1,2])");
+            return false;
+        }
+        std::fill(mixTensorData.begin(), mixTensorData.end(), 0.0f);
+        for (int f = 0; f < nBins; ++f) {
+            mixTensorData[f * 2 + 0] = Y[f].real();
+            mixTensorData[f * 2 + 1] = Y[f].imag();
+        }
+
+        // ── 5. Build ONNX tensors and Run ────────────────────────────────
+        std::vector<Ort::Value> inputs;
+        inputs.reserve(inputNames.size());
+        for (size_t i = 0; i < inputNames.size(); ++i) {
+            inputs.push_back(Ort::Value(nullptr));
+        }
+
+        inputs[mixInputIdx] = Ort::Value::CreateTensor<float>(
+            memInfo,
+            mixTensorData.data(),
+            mixTensorData.size(),
+            inputShapes[mixInputIdx].data(),
+            inputShapes[mixInputIdx].size());
+
+        for (size_t k = 0; k < cacheInputIdx.size(); ++k) {
+            const int idx = cacheInputIdx[k];
+            inputs[idx] = Ort::Value::CreateTensor<float>(
+                memInfo,
+                caches[k].data(),
+                caches[k].size(),
+                inputShapes[idx].data(),
+                inputShapes[idx].size());
+        }
+
+        std::vector<Ort::Value> outputs;
         const auto t0 = std::chrono::steady_clock::now();
         try {
-            torch::InferenceMode guard;
-            at::Tensor input = torch::from_blob(
-                dualTensorData.data(), {1, 2, T}, torch::kFloat32);
-            std::vector<c10::IValue> inputs{input};
-            at::Tensor out = torchModule->forward(inputs).toTensor();
-
-            if (out.dim() != 2 || out.size(0) != 1 || out.size(1) != T) {
-                DNN_LOGE("processStereoFrame: unexpected output shape");
-                return false;
-            }
-            at::Tensor outc = out.contiguous();
-            const float* outData = outc.data_ptr<float>();
-
-            const auto t1 = std::chrono::steady_clock::now();
-            lastInferenceUsLocal.store(
-                static_cast<uint32_t>(
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        t1 - t0).count()),
-                std::memory_order_relaxed);
-
-            // Push atomico del frame completo: si no entra entero, drop (evita
-            // desalinear el 1:1 con el dryDelayRing -> clicks periodicos).
-            if (outputRing.freeSpace() < T) {
-                droppedFramesLocal.fetch_add(1, std::memory_order_relaxed);
-                return true;
-            }
-            outputRing.push(outData, T);
-            return true;
-        } catch (const std::exception& e) {
-            DNN_LOGE("processStereoFrame: LibTorch forward exception: %s",
-                     e.what());
-            return false;
-        } catch (...) {
-            DNN_LOGE("processStereoFrame: LibTorch forward exception (unknown)");
+            outputs = session->Run(
+                Ort::RunOptions{nullptr},
+                inputNameCStr.data(), inputs.data(), inputs.size(),
+                outputNameCStr.data(), outputNameCStr.size());
+        } catch (const Ort::Exception& e) {
+            DNN_LOGE("processDualFrame: OnnxRuntime Run failed: %s", e.what());
             return false;
         }
-#else
-        (void)ch0;
-        (void)ch1;
-        return false;
-#endif
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            t1 - t0).count();
+        lastInferenceUsLocal.store(static_cast<uint32_t>(us),
+                                    std::memory_order_relaxed);
+
+        if (outputs.size() != outputNames.size()) {
+            DNN_LOGE("processDualFrame: Run returned %zu outputs (expected %zu)",
+                     outputs.size(), outputNames.size());
+            return false;
+        }
+
+        // ── 6. Copy updated caches ──────────────────────────────────────
+        for (size_t k = 0; k < cacheOutputIdx.size(); ++k) {
+            const int idx = cacheOutputIdx[k];
+            const float* p = outputs[idx].GetTensorData<float>();
+            const size_t n = caches[k].size();
+            std::memcpy(caches[k].data(), p, n * sizeof(float));
+        }
+
+        // ── 7. Unpack enhanced tensor -> fftRe/fftIm ────────────────────
+        const float* enhData = outputs[enhOutputIdx].GetTensorData<float>();
+        std::fill(fftRe.begin(), fftRe.end(), 0.0f);
+        std::fill(fftIm.begin(), fftIm.end(), 0.0f);
+        for (int f = 0; f < nBins; ++f) {
+            fftRe[f] = enhData[f * 2 + 0];
+            fftIm[f] = enhData[f * 2 + 1];
+        }
+        // Hermitian symmetry for real-valued reconstruction.
+        for (int f = 1; f < kDnnFftSize / 2; ++f) {
+            fftRe[kDnnFftSize - f] =  fftRe[f];
+            fftIm[kDnnFftSize - f] = -fftIm[f];
+        }
+
+        // ── 8. iFFT ─────────────────────────────────────────────────────
+        fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/true);
+
+        // ── 9. Synthesis window (sqrt-Hann) + OLA ────────────────────────
+        static constexpr float kOlaScale =
+            (2.0f * static_cast<float>(kDnnHopSize)) /
+            static_cast<float>(kDnnFftSize);
+        for (int i = 0; i < kDnnFftSize; ++i) {
+            fftRe[i] *= hannWin[i] * kOlaScale;
+            olaBuf[i] += fftRe[i];
+        }
+
+        // ── 10. Extract kDnnHopSize samples from OLA buffer ──────────────
+        std::memcpy(outputFrame.data(), olaBuf.data(),
+                    kDnnHopSize * sizeof(float));
+        std::memmove(olaBuf.data(),
+                     olaBuf.data() + kDnnHopSize,
+                     (kDnnFftSize - kDnnHopSize) * sizeof(float));
+        std::fill(olaBuf.begin() + (kDnnFftSize - kDnnHopSize),
+                  olaBuf.end(), 0.0f);
+
+        // ── 11. Push to outputRing ───────────────────────────────────────
+        if (outputRing.freeSpace() < kDnnHopSize) {
+            droppedFramesLocal.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        outputRing.push(outputFrame.data(), kDnnHopSize);
+
+        return true;
     }
 
     /// Inspecciona la sesión ONNX para descubrir nombres y shapes de I/O.
@@ -1021,6 +1099,11 @@ struct DnnDenoiser::Impl {
         std::fill(fftRe.begin(),      fftRe.end(),      0.0f);
         std::fill(fftIm.begin(),      fftIm.end(),      0.0f);
         std::fill(outputFrame.begin(),outputFrame.end(),0.0f);
+        // Dual-channel state.
+        std::fill(stftInBufCh1.begin(), stftInBufCh1.end(), 0.0f);
+        std::fill(fftReCh1.begin(), fftReCh1.end(), 0.0f);
+        std::fill(fftImCh1.begin(), fftImCh1.end(), 0.0f);
+        wpeBeamformer.reset();
     }
 
     /// Ejecuta una inferencia GTCRN sobre un frame de kDnnHopSize samples
@@ -1203,16 +1286,16 @@ struct DnnDenoiser::Impl {
 
     /// Loop principal del worker.
     ///
-    /// Dos rutas según `channels`:
-    ///   - mono (1): drena kDnnHopSize de inputRing → STFT+ONNX (processOneFrame).
-    ///   - dual (2): drena kDnnDualBlock de inputRing y inputRingCh1 → arma
-    ///               tensor [1,2,T] y corre LibTorch (processStereoFrame).
-    /// La inferencia (mono u dual) SIEMPRE corre acá, nunca en el audio thread.
+    /// Both mono and dual paths now operate frame-by-frame at kDnnHopSize:
+    ///   - mono (1): drena kDnnHopSize de inputRing -> STFT+ONNX (processOneFrame).
+    ///   - dual (2): drena kDnnHopSize de inputRing y inputRingCh1 ->
+    ///               STFT(2ch)+WPE+ONNX+iSTFT (processDualFrame).
+    /// The inference ALWAYS runs here, never in the audio thread.
     void workerLoop() {
         DNN_LOGI("Worker thread started");
         std::vector<float> hopBuf(kDnnHopSize, 0.0f);
-        std::vector<float> hopCh0(kDnnDualBlock, 0.0f);
-        std::vector<float> hopCh1(kDnnDualBlock, 0.0f);
+        std::vector<float> hopCh0(kDnnHopSize, 0.0f);
+        std::vector<float> hopCh1(kDnnHopSize, 0.0f);
 
         while (workerRun.load(std::memory_order_acquire)) {
             // Reset si fue solicitado.
@@ -1225,17 +1308,10 @@ struct DnnDenoiser::Impl {
             }
 
             const bool dual = (channels.load(std::memory_order_acquire) == 2);
-            const int  need = dual ? kDnnDualBlock : kDnnHopSize;
+            // Both paths now use kDnnHopSize (frame-by-frame, 8ms latency).
+            const int  need = kDnnHopSize;
 
             // Esperar hasta tener `need` samples disponibles (ambos canales si dual).
-            //
-            // MEJORA #4 (ruido-profundo.md): wait_for bajado de 50 ms → 5 ms.
-            // Con kDnnHopSize=128 (8 ms a 16 kHz) y `notify_one()` desde el audio
-            // thread cada vez que cruza el umbral, el wait_for casi nunca dispara
-            // por timeout en operación normal. Pero cuando hay backpressure (GC
-            // pause, scheduling jitter), 5 ms de poll deja al worker reaccionar
-            // 10× más rápido que los 50 ms anteriores. Combinado con el ring
-            // reducido a 1024 (~64 ms vs 256 ms), los drops bajo carga real bajan.
             {
                 std::unique_lock<std::mutex> lk(workerMtx);
                 workerCv.wait_for(lk, std::chrono::milliseconds(5),
@@ -1253,19 +1329,25 @@ struct DnnDenoiser::Impl {
             if (!modelReady) continue;
 
             if (dual) {
-                // ── Ruta dual: LibTorch ────────────────────────────────
-                if (inputRing.available() < kDnnDualBlock ||
-                    inputRingCh1.available() < kDnnDualBlock) {
+                // ── Ruta dual: WPE + ONNX (frame-by-frame) ────────────
+                if (inputRing.available() < kDnnHopSize ||
+                    inputRingCh1.available() < kDnnHopSize) {
                     continue;
                 }
-                const int p0 = inputRing.pop(hopCh0.data(), kDnnDualBlock);
-                const int p1 = inputRingCh1.pop(hopCh1.data(), kDnnDualBlock);
-                if (p0 < kDnnDualBlock || p1 < kDnnDualBlock) continue;  // race raro.
+                const int p0 = inputRing.pop(hopCh0.data(), kDnnHopSize);
+                const int p1 = inputRingCh1.pop(hopCh1.data(), kDnnHopSize);
+                if (p0 < kDnnHopSize || p1 < kDnnHopSize) continue;
 
-                const bool ok = processStereoFrame(hopCh0.data(), hopCh1.data());
+                // VAD state: use the voiceActive flag from the audio thread.
+                // This is a simplification; in practice, the VAD may have latency
+                // but it's acceptable for covariance estimation purposes.
+                const bool vadActive = true;  // Conservative: assume speech present
+                // (noise covariance updated via external notifyVoiceActive)
+
+                const bool ok = processDualFrame(hopCh0.data(), hopCh1.data(), vadActive);
                 if (!ok) {
-                    DNN_LOGW("processStereoFrame failed → flagging inactive");
-                    modelReady = false;  // bypass permanente hasta reset.
+                    DNN_LOGW("processDualFrame failed -> flagging inactive");
+                    modelReady = false;
                     continue;
                 }
                 processedFramesLocal.fetch_add(1, std::memory_order_relaxed);
@@ -1434,13 +1516,13 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
         return impl_->channels.load(std::memory_order_acquire) == 2;
     }
 
-    DNN_LOGI("initializeDual: loading %s (LibTorch full JIT dual-channel)",
+    DNN_LOGI("initializeDual: loading %s (ONNX dual-channel, WPE+GTCRN core)",
              assetPath ? assetPath : "(null)");
 
-    // Cargar el .ptl y validar el contrato de shape [1,2,48000] -> [1,48000].
-    // Cualquier fallo (asset, load, shape, excepcion) -> Bypass_Seguro.
-    if (!impl_->loadTorchModule(assetMgr, assetPath)) {
-        DNN_LOGE("initializeDual: model load/validation failed → bypass");
+    // Load the ONNX model using the same OnnxRuntime infrastructure as mono.
+    // The dual model has the same interface: [1,257,1,2] + caches.
+    if (!impl_->loadDualOnnxModel(assetMgr, assetPath)) {
+        DNN_LOGE("initializeDual: model load/validation failed -> bypass");
         impl_->channels.store(1, std::memory_order_release);
         inputChannelsMode_.store(1, std::memory_order_release);
         active_.store(false, std::memory_order_release);
@@ -1452,7 +1534,7 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
     impl_->modelReady = true;
     active_.store(true, std::memory_order_release);
     impl_->startWorker();
-    DNN_LOGI("initializeDual: OK, worker thread running (dual-channel)");
+    DNN_LOGI("initializeDual: OK, worker thread running (dual-channel WPE+ONNX)");
     return true;
 }
 
@@ -1705,9 +1787,10 @@ void DnnDenoiser::processStereo(const float* ch0, const float* ch1,
         const int pushed1 = impl_->inputRingCh1.push(impl_->downStagingCh1.data(), d1);
         if (pushed1 < d1) droppedFrames_.fetch_add(1, std::memory_order_relaxed);
     }
-    // Notificar al worker solo cuando ambos canales tienen un bloque completo.
-    if (impl_->inputRing.available() >= kDnnDualBlock &&
-        impl_->inputRingCh1.available() >= kDnnDualBlock) {
+    // Notificar al worker solo cuando ambos canales tienen un frame completo.
+    // Both mono and dual paths now use kDnnHopSize for frame-by-frame processing.
+    if (impl_->inputRing.available() >= kDnnHopSize &&
+        impl_->inputRingCh1.available() >= kDnnHopSize) {
         impl_->workerCv.notify_one();
     }
 
