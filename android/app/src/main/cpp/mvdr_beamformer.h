@@ -248,7 +248,16 @@ private:
         realFFT(frameBuf, X1, kFftSize);
 
         // --- Actualizar Rnn durante segmentos noise-only ---
-        if (!vadActive) {
+        // FIX: warmup forzado. Si el VAD del SceneAnalyzer se pega en true
+        // (bug observado en el modo MVDR), Rnn nunca se actualizaba y la
+        // salida era ruido tipo "emisora sin sintonía". Ahora, los primeros
+        // kRnnWarmupFrames (~50 frames = ~800 ms @ 62.5 fps) fuerzan la
+        // actualización aunque el VAD diga "voz activa". Esto captura la
+        // matriz de covarianza espacial general (voz+ruido); no es óptimo
+        // pero es mucho mejor que Rnn=0. Después del warmup respeta vadActive.
+        constexpr int kRnnWarmupFrames = 50;
+        const bool warmup = (frameCount_ < kRnnWarmupFrames);
+        if (!vadActive || warmup) {
             updateRnn(X0, X1);
             rnnInitialized_ = true;
         }
