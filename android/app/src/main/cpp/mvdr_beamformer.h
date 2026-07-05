@@ -92,6 +92,11 @@ public:
         rnnInitialized_ = false;
         firstFrameProcessed_ = false;
         frameCount_ = 0;
+
+        // Estado del supresor de reverberacion tardia (dereverb espectral).
+        for (int k = 0; k < kNumBins; ++k) {
+            revPowerPrev_[k] = 0.0f;
+        }
     }
 
     /// Habilita o deshabilita el beamformer en runtime (thread-safe).
@@ -279,6 +284,43 @@ private:
                 computeMvdrWeights(k, w);
                 // y[k] = w^H * x = conj(w0)*X0 + conj(w1)*X1
                 Y[k] = std::conj(w[0]) * X0[k] + std::conj(w[1]) * X1[k];
+            }
+        }
+
+        // --- Supresion de reverberacion tardia (dereverb espectral) ---
+        // Ataca el "eco" de la sala que el MVDR (beamforming espacial) NO quita
+        // y que antes eliminaba el WPE (removido por el crash de LAPACK).
+        //
+        // Modelo (Lebart/Habets simplificado, sin matrices): la reverberacion
+        // tardia decae exponencialmente. Estimamos su energia como una version
+        // atenuada de la potencia del frame anterior y la restamos del actual.
+        // La voz directa tiene ataques (energia creciente) -> gain ~1; la cola
+        // reverberante (energia decreciente/estacionaria) -> gain baja.
+        //
+        // kReverbDecay = 10^(-6 * Tframe / RT60), RT60~0.5s (sala hogar),
+        //   Tframe = kHopSize/fs = 128/16000 = 8 ms -> ~0.80.
+        // kReverbOver = factor de sobre-sustraccion. kReverbFloor = piso de
+        //   ganancia (max ~10 dB de supresion, conservador para no distorsionar).
+        if (dereverbEnabled_.load(std::memory_order_acquire)) {
+            constexpr float kReverbDecay = 0.80f;
+            constexpr float kReverbOver  = 1.6f;
+            constexpr float kReverbFloor = 0.30f;
+            for (int k = 0; k < kNumBins; ++k) {
+                const float power = Y[k].real() * Y[k].real()
+                                  + Y[k].imag() * Y[k].imag();
+                const float lateRev = kReverbDecay * revPowerPrev_[k];
+                float gain = 1.0f;
+                if (power > 1e-12f) {
+                    gain = (power - kReverbOver * lateRev) / power;
+                }
+                if (gain < kReverbFloor) gain = kReverbFloor;
+                if (gain > 1.0f) gain = 1.0f;
+                Y[k] *= gain;
+                // Actualizar tracker con la potencia (post-gain) para que la
+                // cola se siga rastreando sin realimentar la parte suprimida.
+                const float powerPost = power * gain * gain;
+                revPowerPrev_[k] = kReverbDecay * revPowerPrev_[k]
+                                 + (1.0f - kReverbDecay) * powerPost;
             }
         }
 
@@ -509,6 +551,11 @@ private:
     bool rnnInitialized_ = false;
     bool firstFrameProcessed_ = false;
     int frameCount_ = 0;
+
+    // Supresor de reverberacion tardia: potencia rastreada por bin.
+    float revPowerPrev_[kNumBins] = {};
+    // Toggle del dereverb (default ON; ataca el "eco" de la sala).
+    std::atomic<bool> dereverbEnabled_{true};
 };
 
 #endif // HEARING_AID_MVDR_BEAMFORMER_H
