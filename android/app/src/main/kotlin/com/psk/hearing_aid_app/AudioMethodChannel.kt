@@ -764,68 +764,20 @@ class AudioMethodChannel(
     /**
      * Habilita/deshabilita el beamforming MVDR dual-mic.
      *
-     * Requiere reiniciar el engine porque el cambio de channelCount
-     * (mono ↔ estéreo) exige re-abrir el input stream Oboe.
-     * Sigue el mismo patrón que handleSetConversationMode.
+     * En la nueva arquitectura (spec gtcrn-dual-channel), el toggle binario
+     * de beamforming mapea al selector de motor de 3 estados:
+     *   enabled=true  → kMvdrBackup  (mode=2)
+     *   enabled=false → kBypass      (mode=0)
+     *
+     * El engine maneja internamente el re-open estéreo/mono en caliente
+     * (crossfade anti-clic + geometría de captura). NO se necesita restart.
      */
     private fun handleSetBeamformingMode(
         enabled: Boolean,
         result: MethodChannel.Result
     ) {
-        val engineRunning = nativeBridge.getOutputDeviceId() >= 0
-        if (!engineRunning) {
-            // Engine no corre: guardar flag para el próximo start.
-            nativeBridge.nativeSetBeamformingMode(enabled)
-            Log.i(TAG, "setBeamformingMode($enabled) — engine idle, flag stored")
-            result.success(null)
-            return
-        }
-
-        // Engine corriendo → reiniciar con nuevo channelCount.
-        noiseSuppressor?.release()
-        noiseSuppressor = null
-
-        nativeBridge.stop()
-
-        // Setear flag ANTES de re-start.
-        nativeBridge.nativeSetBeamformingMode(enabled)
-        nativeBridge.nativeSetConversationMode(conversationMode)
-
-        val sampleRate = if (conversationMode) 16_000 else 48_000
-        val bufferSize = if (conversationMode) 64 else 256
-
-        nativeBridge.start(
-            sampleRate = sampleRate,
-            bufferSize = bufferSize,
-            eqGains = lastEqGains,
-            volumeDb = lastVolumeDb,
-            expansionKnee = lastExpKnee,
-            expansionRatio = lastExpRatio,
-            compressionKnee = lastCompKnee,
-            compressionRatio = lastCompRatio,
-            attackMs = lastAttackMs,
-            releaseMs = lastReleaseMs,
-            nrLevel = 0,
-            mpoThresholdDbSpl = lastMpoDbSpl,
-            splOffset = 120f
-        )
-
-        // Re-init DNN denoiser en el nuevo engine.
-        try {
-            nativeBridge.nativeInitDnnDenoiser(context.assets)
-            nativeBridge.nativeSetDnnEnabled(lastDnnEnabled)
-            nativeBridge.nativeSetDnnIntensity(lastDnnIntensity)
-            Log.i(TAG, "setBeamformingMode: DNN re-enabled=$lastDnnEnabled")
-        } catch (t: Throwable) {
-            Log.w(TAG, "setBeamformingMode: re-initDnnDenoiser failed: ${t.message}")
-        }
-
-        // Activar el beamformer en el engine recién creado (si enabled).
-        if (enabled) {
-            nativeBridge.nativeSetBeamformingEnabled(true)
-        }
-
-        Log.i(TAG, "setBeamformingMode($enabled) — engine restarted")
+        val mode = if (enabled) 2 else 0  // 2=kMvdrBackup, 0=kBypass
+        nativeBridge.nativeSetEnhancementEngineMode(mode)
         result.success(null)
     }
 
