@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-004",
+  "type": "fix",
+  "description": "Post-review fixes: (1) Wire VAD voiceActive_ from DnnDenoiser to Impl for dual worker loop, (2) Remove dead Rxx computation from WpeBeamformer, (3) Make export script fail hard when layer discovery produces no core layers (unless --manual).",
+  "status": "in_progress",
+  "steps": [
+    "In dnn_denoiser.cpp: Add a std::atomic<bool>* voiceActivePtr member to Impl that points to the outer DnnDenoiser::voiceActive_. Set it during construction (or via a setter). Replace 'const bool vadActive = true' in the dual worker path with 'voiceActivePtr_->load(std::memory_order_acquire)' to read the actual VAD state.",
+    "In wpe_beamformer.h: Remove updateRxx() method, rxx_ array, rxxInitialized_ flag, and the call to updateRxx in process(). Update the process() logic to remove the rxxInitialized_ branch (the delay-and-sum fallback can use a simple frameCount_ check instead).",
+    "In tools/export_gtcrn_dual_core.py: After discover_layers() returns, check if encoder and decoder are both None. If so and --manual is NOT set, print an error and sys.exit(1). Only proceed with create_adaptive_wrapper if at least encoder or decoder was found, or if --manual is set."
+  ],
+  "acceptance_criteria": [
+    "dnn_denoiser.cpp no longer has 'const bool vadActive = true' in the dual worker path - it reads from voiceActive_ via pointer",
+    "wpe_beamformer.h has no rxx_ member, no updateRxx method, no rxxInitialized_ field",
+    "export_gtcrn_dual_core.py calls sys.exit(1) with a clear error when discovery fails and --manual is not set",
+    "All files pass syntax checks (g++ -fsyntax-only for C++, python ast.parse for Python)"
+  ],
+  "verification": [
+    "g++ -std=c++17 -fsyntax-only -I... wpe_beamformer.h",
+    "grep 'vadActive = true' dnn_denoiser.cpp returns no matches",
+    "grep 'rxx_\\|updateRxx\\|rxxInitialized' wpe_beamformer.h returns no matches",
+    "python3 -c \"import ast; ast.parse(open('tools/export_gtcrn_dual_core.py').read()); print('OK')\"" 
+  ],
+  "blocked_reason": null,
+  "findings": null
+}

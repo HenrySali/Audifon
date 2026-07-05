@@ -646,6 +646,11 @@ struct DnnDenoiser::Impl {
     std::mutex              workerMtx;
     std::condition_variable workerCv;
 
+    /// Pointer to the outer DnnDenoiser::voiceActive_ atomic.
+    /// Set after construction via setVoiceActivePtr(). The worker loop reads
+    /// this to pass the actual VAD state to the WPE beamformer.
+    std::atomic<bool>* voiceActivePtr_ = nullptr;
+
     /// Contadores expuestos (también espejados en atomics públicos del wrapper).
     std::atomic<uint64_t>   processedFramesLocal{0};
     std::atomic<uint64_t>   droppedFramesLocal{0};
@@ -1338,11 +1343,13 @@ struct DnnDenoiser::Impl {
                 const int p1 = inputRingCh1.pop(hopCh1.data(), kDnnHopSize);
                 if (p0 < kDnnHopSize || p1 < kDnnHopSize) continue;
 
-                // VAD state: use the voiceActive flag from the audio thread.
-                // This is a simplification; in practice, the VAD may have latency
-                // but it's acceptable for covariance estimation purposes.
-                const bool vadActive = true;  // Conservative: assume speech present
-                // (noise covariance updated via external notifyVoiceActive)
+                // VAD state: read from the outer DnnDenoiser's voiceActive_
+                // atomic, which is set by notifyVoiceActive() from the audio
+                // thread. When vadActive is false (noise-only), the WPE
+                // beamformer updates its noise covariance for spatial filtering.
+                const bool vadActive = (voiceActivePtr_ != nullptr)
+                    ? voiceActivePtr_->load(std::memory_order_acquire)
+                    : true;  // Conservative fallback if pointer not set
 
                 const bool ok = processDualFrame(hopCh0.data(), hopCh1.data(), vadActive);
                 if (!ok) {
@@ -1444,7 +1451,11 @@ struct DnnDenoiser::Impl {
 // DnnDenoiser methods
 // ─────────────────────────────────────────────────────────────────────────────
 
-DnnDenoiser::DnnDenoiser() : impl_(std::make_unique<Impl>()) {}
+DnnDenoiser::DnnDenoiser() : impl_(std::make_unique<Impl>()) {
+    // Give the Impl a pointer to our voiceActive_ atomic so the worker loop
+    // can read the actual VAD state for the WPE beamformer.
+    impl_->voiceActivePtr_ = &voiceActive_;
+}
 
 DnnDenoiser::~DnnDenoiser() = default;
 

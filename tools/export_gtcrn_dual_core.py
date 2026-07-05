@@ -753,6 +753,31 @@ def main():
             sys.exit(1)
     else:
         found, top_level = discover_layers(model)
+        # Hard failure if no core layers discovered (encoder AND decoder missing).
+        # Without at least one of these, the wrapper will silently wrap the full
+        # model forward(), which may include STFT/complex ops that break on Android.
+        if found["encoder"] is None and found["decoder"] is None:
+            print(f"\n{'='*70}")
+            print("ERROR: Layer discovery failed.")
+            print(f"{'='*70}")
+            print("\nCould not find encoder or decoder sub-modules in the model.")
+            print("The AdaptiveGTCRNCore wrapper cannot safely extract the neural")
+            print("core without these layers. Wrapping the full model would likely")
+            print("include STFT/complex/linalg ops that are incompatible with the")
+            print("C++ pipeline on Android.")
+            print("\nAvailable top-level sub-modules:")
+            for name in top_level.keys():
+                print(f"  - {name}")
+            print("\nTo fix this, use --manual mode with explicit layer names:")
+            print(f"  python {sys.argv[0]} --manual \\")
+            print(f"      --encoder-name <name> --decoder-name <name> \\")
+            print(f"      --sequence-model-name <name>")
+            print("\nOr inspect the model structure:")
+            print('  python -c "from gtcrn_iva import GTCRN_IVA; m = GTCRN_IVA(); '
+                  '[print(n, type(mod).__name__, '
+                  'sum(p.numel() for p in mod.parameters())) '
+                  'for n, mod in m.named_children()]"')
+            sys.exit(1)
 
     # Step 3: Create wrapper
     print(f"\n{'='*70}")

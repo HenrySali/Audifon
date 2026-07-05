@@ -8,14 +8,12 @@
 /// Algorithm (2-mic simplified WPE / MVDR-like spatial filter):
 ///   For each frequency bin k:
 ///     1. Form observation vector x[k] = [X0[k], X1[k]]^T
-///     2. Update spatial covariance matrix Rxx[k] with exponential smoothing:
-///        Rxx[k] = alpha * Rxx[k] + (1-alpha) * x[k] * x[k]^H
-///     3. When VAD=false (noise-only), also update noise covariance Rnn[k]:
+///     2. When VAD=false (noise-only), update noise covariance Rnn[k]:
 ///        Rnn[k] = alpha_n * Rnn[k] + (1-alpha_n) * x[k] * x[k]^H
-///     4. Compute MVDR/Wiener weights via 2x2 analytic inversion:
-///        w[k] = Rxx^{-1}[k] * d[k] / (d[k]^H * Rxx^{-1}[k] * d[k])
+///     3. Compute MVDR weights via 2x2 analytic inversion of Rnn:
+///        w[k] = Rnn^{-1}[k] * d[k] / (d[k]^H * Rnn^{-1}[k] * d[k])
 ///        where d[k] = reference steering vector [1, 0]^T (first mic as ref)
-///     5. Apply: Y[k] = w[k]^H * x[k]
+///     4. Apply: Y[k] = w[k]^H * x[k]
 ///
 /// The steering vector is [1, 0]^T (select first microphone as reference),
 /// which makes the beamformer act as a spatial noise suppressor that preserves
@@ -57,13 +55,9 @@ public:
     /// Number of frequency bins (kDnnFftSize/2 + 1 = 257).
     static constexpr int kNumBins = 257;
 
-    /// Exponential smoothing factor for the signal covariance matrix Rxx.
-    /// Higher values = more memory (slower adaptation). 0.95 is a good
-    /// tradeoff between tracking speed and estimation stability.
-    static constexpr float kAlphaSignal = 0.95f;
-
     /// Exponential smoothing factor for the noise covariance matrix Rnn.
-    /// Slightly higher than signal alpha for more stable noise estimate.
+    /// Higher values = more memory (slower adaptation). 0.98 provides a
+    /// stable noise estimate while still tracking slow changes.
     static constexpr float kAlphaNoise = 0.98f;
 
     /// Regularization (diagonal loading) for matrix inversion.
@@ -76,17 +70,11 @@ public:
     /// Call before first use and after any discontinuity (seek, mode change).
     void reset() {
         for (int k = 0; k < kNumBins; ++k) {
-            rxx_[k][0][0] = Complex(0.0f, 0.0f);
-            rxx_[k][0][1] = Complex(0.0f, 0.0f);
-            rxx_[k][1][0] = Complex(0.0f, 0.0f);
-            rxx_[k][1][1] = Complex(0.0f, 0.0f);
-
             rnn_[k][0][0] = Complex(0.0f, 0.0f);
             rnn_[k][0][1] = Complex(0.0f, 0.0f);
             rnn_[k][1][0] = Complex(0.0f, 0.0f);
             rnn_[k][1][1] = Complex(0.0f, 0.0f);
         }
-        rxxInitialized_ = false;
         rnnInitialized_ = false;
         frameCount_ = 0;
     }
@@ -99,9 +87,6 @@ public:
     /// @param vadActive  true if VAD detects speech (do NOT update noise stats)
     void process(const Complex* X0, const Complex* X1,
                  Complex* Y, bool vadActive) {
-        // Always update signal covariance (tracks overall signal statistics).
-        updateRxx(X0, X1);
-
         // Update noise covariance only during noise-only segments.
         if (!vadActive) {
             updateRnn(X0, X1);
@@ -110,14 +95,14 @@ public:
 
         // Compute output per bin.
         for (int k = 0; k < kNumBins; ++k) {
-            if (!rxxInitialized_) {
+            if (frameCount_ < kMinFramesForOutput) {
                 // Not enough data yet: simple delay-and-sum (average).
                 Y[k] = (X0[k] + X1[k]) * 0.5f;
             } else if (!rnnInitialized_) {
-                // Signal stats available but no noise estimate: use reference mic.
+                // No noise estimate available yet: use reference mic passthrough.
                 Y[k] = X0[k];
             } else {
-                // Full MVDR/Wiener filtering.
+                // Full MVDR spatial filtering using noise covariance.
                 Complex w[2];
                 computeWeights(k, w);
                 // y[k] = w^H * x = conj(w[0])*X0 + conj(w[1])*X1
@@ -129,26 +114,9 @@ public:
     }
 
 private:
-    /// Update signal covariance matrix Rxx with exponential smoothing.
-    void updateRxx(const Complex* X0, const Complex* X1) {
-        const float alpha = rxxInitialized_ ? kAlphaSignal : 0.0f;
-        const float oneMinusAlpha = 1.0f - alpha;
-
-        for (int k = 0; k < kNumBins; ++k) {
-            Complex x0 = X0[k];
-            Complex x1 = X1[k];
-
-            rxx_[k][0][0] = alpha * rxx_[k][0][0] +
-                            oneMinusAlpha * (x0 * std::conj(x0));
-            rxx_[k][0][1] = alpha * rxx_[k][0][1] +
-                            oneMinusAlpha * (x0 * std::conj(x1));
-            rxx_[k][1][0] = alpha * rxx_[k][1][0] +
-                            oneMinusAlpha * (x1 * std::conj(x0));
-            rxx_[k][1][1] = alpha * rxx_[k][1][1] +
-                            oneMinusAlpha * (x1 * std::conj(x1));
-        }
-        rxxInitialized_ = true;
-    }
+    /// Minimum frames before attempting spatial filtering output.
+    /// Allows the delay-and-sum fallback to run during initial startup.
+    static constexpr int kMinFramesForOutput = 3;
 
     /// Update noise covariance matrix Rnn with exponential smoothing.
     /// Only called during noise-only segments (vadActive == false).
@@ -223,19 +191,13 @@ private:
 
     // --- Internal state ---
 
-    /// Signal spatial covariance matrix per frequency bin [kNumBins][2][2].
-    Complex rxx_[kNumBins][2][2] = {};
-
     /// Noise spatial covariance matrix per frequency bin [kNumBins][2][2].
     Complex rnn_[kNumBins][2][2] = {};
-
-    /// Whether Rxx has been initialized (at least one update).
-    bool rxxInitialized_ = false;
 
     /// Whether Rnn has been initialized (at least one noise-only frame).
     bool rnnInitialized_ = false;
 
-    /// Frame counter (for diagnostics).
+    /// Frame counter (for diagnostics and initial startup logic).
     int frameCount_ = 0;
 };
 
