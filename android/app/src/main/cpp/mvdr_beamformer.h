@@ -39,7 +39,12 @@ public:
 
     // Parametros del algoritmo
     static constexpr float kRnnAlpha = 0.98f;             ///< Smoothing exponencial de Rnn
-    static constexpr float kReg = 1e-6f;                  ///< Diagonal loading (regularizacion)
+    // Diagonal loading (regularizacion). Subido de 1e-6 a 1e-3: con carga muy
+    // baja, en silencio los pesos MVDR se disparan y amplifican el ruido propio
+    // de los micrófonos (hiss residual). 1e-3 calma el beamformer en niveles
+    // bajos sin distorsionar la voz (robust MVDR / diagonal loading clásico,
+    // Cox et al.; validado en implementaciones de audífono smartphone).
+    static constexpr float kReg = 1e-3f;                  ///< Diagonal loading (regularizacion)
     static constexpr float kMicSpacing = 0.14f;           ///< Separacion entre mics (metros)
     static constexpr float kSoundSpeed = 343.0f;          ///< Velocidad del sonido (m/s)
     static constexpr float kPi = 3.14159265358979f;
