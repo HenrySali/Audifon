@@ -38,13 +38,12 @@ import 'diagnostic/diagnostic_flow_screen.dart';
 import 'diagnostic_analyzer_screen.dart';
 import 'diagnostico_dsp_screen.dart';
 import 'session_log_screen.dart';
+import 'unified_diagnostics_screen.dart';
 import 'adaptive_learning_screen.dart';
 import 'dsp_config_detail_screen.dart';
 import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
 import 'smart_scene_screen.dart';
-import 'spectrum_analyzer_screen.dart';
-import 'subsystem_diagnostics_screen.dart';
 import 'preset_learning_screen.dart';
 import 'technical_service_screen.dart';
 import '../../feedback_checklist/screens/feedback_checklist_dialog.dart';
@@ -889,15 +888,13 @@ class _StatusBar extends StatelessWidget {
                     ),
                   ),
                   // Spec tecnico-paciente-feature-parity · Task 12.2 · Req 6.1.
-                  // Botón "Diagnóstico DSP" — abre la pantalla de captura de
-                  // 60 s (WAV+JSON) homóloga a la del paciente. La screen
-                  // hace pre-check del motor (Req 6.11) y se autoabastece
-                  // del AmplificationBloc vía context.read<>.
+                  // Botón único de diagnóstico unificado — reemplaza los 4
+                  // botones individuales (DSP, Sesión, Spectrum, Subsistemas).
                   Builder(
                     builder: (context) => IconButton(
-                      icon: const Icon(Icons.fiber_smart_record,
-                          color: Colors.white70, size: 21),
-                      tooltip: 'Diagnóstico DSP',
+                      icon: const Icon(Icons.medical_services,
+                          color: Colors.cyanAccent, size: 21),
+                      tooltip: 'Diagnóstico Completo',
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
                           minWidth: 34, minHeight: 34),
@@ -906,30 +903,7 @@ class _StatusBar extends StatelessWidget {
                           MaterialPageRoute(
                             builder: (_) => BlocProvider.value(
                               value: context.read<AmplificationBloc>(),
-                              child: const DiagnosticoDspScreen(),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  // Registro libre de eventos del bloc — sin grabar audio,
-                  // captura cambios de preset/ambiente/MHL/volumen/audiograma
-                  // mientras el técnico opera la app, copiable al portapapeles.
-                  Builder(
-                    builder: (context) => IconButton(
-                      icon: const Icon(Icons.event_note,
-                          color: Colors.white70, size: 21),
-                      tooltip: 'Registro de sesión',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                          minWidth: 34, minHeight: 34),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => BlocProvider.value(
-                              value: context.read<AmplificationBloc>(),
-                              child: const SessionLogScreen(),
+                              child: const UnifiedDiagnosticsScreen(),
                             ),
                           ),
                         );
@@ -953,38 +927,6 @@ class _StatusBar extends StatelessWidget {
                               value: context.read<AmplificationBloc>(),
                               child: const AdaptiveLearningScreen(),
                             ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  // Botón de analizador de espectro
-                  Builder(
-                    builder: (context) => IconButton(
-                      icon: const Icon(Icons.graphic_eq, color: Colors.white70, size: 21),
-                      tooltip: 'Spectrum Analyzer',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const SpectrumAnalyzerScreen(),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  // Botón de diagnóstico de subsistemas
-                  Builder(
-                    builder: (context) => IconButton(
-                      icon: const Icon(Icons.developer_board, color: Colors.white70, size: 21),
-                      tooltip: 'Diagnóstico Subsistemas',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const SubsystemDiagnosticsScreen(),
                           ),
                         );
                       },
