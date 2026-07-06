@@ -2,19 +2,55 @@
 /// @brief MVDR Beamformer de 2 microfonos para realce de voz frontal (header-only).
 ///
 /// Opera en dominio frecuencia (STFT) con overlap-add.
-/// Usa el VAD externo (SceneAnalyzer) para estimar la matriz de
-/// correlacion del ruido durante segmentos noise-only.
 ///
 /// Papers de referencia:
 ///   - PMC7545265: VAD-assisted MVDR en smartphone
 ///   - PMC7398114: MVDR + DNN para hearing aids
 ///   - PMC7928060: Efficient two-microphone speech enhancement
+///   - Ephraim & Malah (1984): decision-directed a priori SNR (post-filtro).
+///   - Cox et al.: robust MVDR / diagonal loading.
 ///
 /// Uso:
 ///   MvdrBeamformer bf;
 ///   bf.init(sampleRate);
 ///   // En el callback de audio:
 ///   bf.process(ch0, ch1, output, numFrames, vadActive);
+///
+/// =====================================================================
+/// FIXES MVDR 1-4 (validados en Octave: ANALISIS_MVDR/mvdr_run_fix.m,
+/// RESUMEN_MVDR_FIX.txt). Diagnostico: la salida sonaba a "emisora sin
+/// sintonia" con voz ronca porque Rnn absorbia la propia voz (auto-
+/// cancelacion) y el WNG se disparaba.
+///
+///   FIX #1  AUTO-CANCELACION (causa principal). Se elimino el refresh
+///           periodico forzado de Rnn (kRnnRefreshInterval) que actualizaba
+///           CON voz presente, y se dejo de depender del VAD externo (se
+///           pega en true por histeresis). Ahora la deteccion noise-only es
+///           INTERNA y robusta: energia de trama vs piso con min-tracking
+///           (thrFactor=3.0, riseFactor=1.01) + estacionariedad espectral
+///           (flujo log-espectral < fluxThr=6.0). Rnn se actualiza SOLO en
+///           noise-only (o durante el warmup inicial); se CONGELA con voz.
+///           Resultado sim: updates-durante-voz 58 -> 0; correlacion de voz
+///           0.374 -> 0.497; SNR de voz -7.9 dB -> -4.8 dB.
+///
+///   FIX #2  POST-FILTRO WIENER single-channel decision-directed (Ephraim-
+///           Malah) tras el MVDR (=> MWF de facto). Ganancia con SNR a
+///           posteriori/priori (ddBeta=0.98), piso gMinDb=-12 dB. La potencia
+///           de ruido a la salida sale de w^H*Rnn*w. Baja el musical-noise
+///           107.6 -> 64.2.
+///
+///   FIX #3  DIAGONAL LOADING ADAPTATIVO = loadMu*trace(Rnn)/2 (loadMu=1.0),
+///           con piso 1e-9, en vez del kReg=1e-3 fijo. Acota el white-noise-
+///           gain: ||w||^2 max 1.98 -> 0.67.
+///
+///   FIX #4  DEREVERB SUAVIZADO: over 1.6->1.1, floor 0.30->0.40 y suavizado
+///           temporal de la ganancia (drGainSmooth=0.60) anti musical-noise.
+///
+/// Todos los parametros nuevos son miembros atomicos con setters (patron
+/// setDereverb*) y DEFAULTS = valores validados, para afinar sin recompilar
+/// si luego se cablea JNI. El argumento vadActive de process() quedo sin uso
+/// funcional (la deteccion es interna); se mantiene por compatibilidad de ABI.
+/// =====================================================================
 
 #ifndef HEARING_AID_MVDR_BEAMFORMER_H
 #define HEARING_AID_MVDR_BEAMFORMER_H
@@ -96,7 +132,16 @@ public:
         // Estado del supresor de reverberacion tardia (dereverb espectral).
         for (int k = 0; k < kNumBins; ++k) {
             revPowerPrev_[k] = 0.0f;
+            drGain_[k] = 1.0f;          // FIX #4: ganancia dereverb suavizada
+            prevLmag_[k] = 0.0f;        // FIX #1: log-mag previo (flujo espectral)
+            Gprev_[k] = 1.0f;           // FIX #2: ganancia Wiener previa (DD)
+            gammaPrev_[k] = 1.0f;       // FIX #2: SNR a posteriori previo (DD)
         }
+
+        // FIX #1: estado de deteccion noise-only interna.
+        noiseE_ = 0.0f;
+        haveFloor_ = false;
+        havePrevL_ = false;
     }
 
     /// Habilita o deshabilita el beamformer en runtime (thread-safe).
@@ -171,6 +216,67 @@ public:
         if (decay < 0.0f) decay = 0.0f;
         if (decay > 0.99f) decay = 0.99f;
         dereverbDecay_.store(decay, std::memory_order_relaxed);
+    }
+
+    /// FIX #4: suavizado temporal de la ganancia de dereverb (anti musical-
+    /// noise). g_smooth[k] = s*g_smooth[k] + (1-s)*g_inst[k]. Default 0.60.
+    void setDereverbGainSmooth(float s) {
+        if (s < 0.0f) s = 0.0f;
+        if (s > 0.99f) s = 0.99f;
+        dereverbGainSmooth_.store(s, std::memory_order_relaxed);
+    }
+
+    // ─── FIX #1: deteccion noise-only interna (reemplaza dependencia del VAD) ─
+    // Rnn se actualiza SOLO cuando la trama es noise-only (energia baja vs
+    // piso min-tracked + estacionariedad espectral) o durante el warmup.
+
+    /// Umbral de energia noise-only: E < thrFactor*pisoRuido. Default 3.0.
+    void setNoiseThrFactor(float f) {
+        if (f < 1.0f) f = 1.0f;
+        noiseThrFactor_.store(f, std::memory_order_relaxed);
+    }
+    /// Tasa de subida del piso de ruido (min-tracking). Default 1.01.
+    void setNoiseRiseFactor(float f) {
+        if (f < 1.0f) f = 1.0f;
+        if (f > 1.5f) f = 1.5f;
+        noiseRiseFactor_.store(f, std::memory_order_relaxed);
+    }
+    /// Exigir tambien estacionariedad espectral para noise-only. Default true.
+    void setNoiseUseFlux(bool e) {
+        noiseUseFlux_.store(e, std::memory_order_relaxed);
+    }
+    /// Umbral de flujo log-espectral (var trama a trama). Default 6.0.
+    void setNoiseFluxThr(float f) {
+        if (f < 0.0f) f = 0.0f;
+        noiseFluxThr_.store(f, std::memory_order_relaxed);
+    }
+
+    // ─── FIX #3: diagonal loading adaptativo ─────────────────────────────
+    /// Factor del loading adaptativo: reg = loadMu*trace(Rnn)/2. Default 1.0.
+    /// loadMu<=0 => usa el loading fijo kReg de respaldo.
+    void setLoadMu(float mu) {
+        loadMu_.store(mu, std::memory_order_relaxed);
+    }
+
+    // ─── FIX #2: post-filtro Wiener decision-directed ────────────────────
+    /// Toggle del post-filtro Wiener. Default ON.
+    void setWienerEnabled(bool e) {
+        wienerEnabled_.store(e, std::memory_order_release);
+    }
+    bool isWienerEnabled() const {
+        return wienerEnabled_.load(std::memory_order_acquire);
+    }
+    /// Piso de ganancia Wiener en dB. Default -12 dB.
+    void setWienerGMinDb(float db) {
+        if (db > 0.0f) db = 0.0f;
+        if (db < -60.0f) db = -60.0f;
+        wienerGMinDb_.store(db, std::memory_order_relaxed);
+    }
+    /// Factor decision-directed (a priori SNR). Default 0.98.
+    void setWienerDdBeta(float b) {
+        if (b < 0.0f) b = 0.0f;
+        if (b > 0.9999f) b = 0.9999f;
+        wienerDdBeta_.store(b, std::memory_order_relaxed);
     }
 
     /// Procesa un bloque de audio estereo y produce salida mono beamformed.
@@ -283,47 +389,99 @@ private:
         Complex Y[kNumBins];
         float frameBuf[kFftSize];
 
+        // Energia de la trama (2 mics, muestras ventaneadas) para FIX #1.
+        float frameEnergy = 0.0f;
+
         // --- STFT del canal 0 ---
         for (int n = 0; n < kFftSize; ++n) {
             frameBuf[n] = inputBuf0_[n] * window_[n];
+            frameEnergy += frameBuf[n] * frameBuf[n];
         }
         realFFT(frameBuf, X0, kFftSize);
 
         // --- STFT del canal 1 ---
         for (int n = 0; n < kFftSize; ++n) {
             frameBuf[n] = inputBuf1_[n] * window_[n];
+            frameEnergy += frameBuf[n] * frameBuf[n];
         }
         realFFT(frameBuf, X1, kFftSize);
 
-        // --- Actualizar Rnn durante segmentos noise-only ---
-        // FIX: warmup forzado + refresh periódico. Si el VAD se pega en true
-        // (observado: ruido de fondo con vadScore 0.37-0.81 mantiene el VAD
-        // activo por histéresis), Rnn nunca se actualiza y la salida es ruido
-        // tipo "emisora sin sintonía" con voz ronca atenuada.
-        //
-        // Solución de 2 capas:
-        //   1. Los primeros kRnnWarmupFrames (50) fuerzan actualización
-        //      incondicional (captura Rnn inicial).
-        //   2. Después del warmup, cada kRnnRefreshInterval frames (20 =
-        //      ~320 ms @ 62.5 fps) se fuerza UNA actualización aunque el VAD
-        //      diga voz. Esto mantiene Rnn actualizada ante cambios lentos
-        //      del ruido de fondo sin degradar la voz (1 frame de 8 ms cada
-        //      320 ms es imperceptible — 3 actualizaciones/s).
+        // --- FIX #1: actualizar Rnn SOLO en noise-only (deteccion interna) ---
+        // Diagnostico (RESUMEN_MVDR_FIX.txt): el refresh periodico forzado y
+        // la dependencia del VAD externo (que se pega en true por histeresis:
+        // vadScore 0.37-0.81 mantiene voz) hacian que Rnn se actualizara CON
+        // voz presente => el MVDR aprendia la voz como "ruido" y la cancelaba
+        // (updates-durante-voz=58). Se elimina el refresh periodico y el VAD;
+        // la deteccion noise-only es interna y robusta:
+        //   (a) energia baja: E < thrFactor * pisoRuido, con piso por
+        //       min-tracking (baja instantanea, sube lento *riseFactor).
+        //   (b) estacionariedad: flujo log-espectral < fluxThr.
+        // Rnn se actualiza solo si noise-only (o warmup inicial); se CONGELA
+        // con voz. El argumento vadActive queda sin uso (compat. ABI).
+        (void)vadActive;
         constexpr int kRnnWarmupFrames = 50;
-        constexpr int kRnnRefreshInterval = 20;
+
+        const float thrFactor  = noiseThrFactor_.load(std::memory_order_relaxed);
+        const float riseFactor = noiseRiseFactor_.load(std::memory_order_relaxed);
+        const bool  useFlux    = noiseUseFlux_.load(std::memory_order_relaxed);
+        const float fluxThr    = noiseFluxThr_.load(std::memory_order_relaxed);
+
+        // Piso de ruido por min-tracking sobre la energia de trama.
+        if (!haveFloor_) {
+            noiseE_ = frameEnergy;
+            haveFloor_ = true;
+        } else if (frameEnergy < noiseE_) {
+            noiseE_ = frameEnergy;                 // baja instantanea
+        } else {
+            noiseE_ *= riseFactor;                 // sube lento (min-tracking)
+            if (noiseE_ > frameEnergy) noiseE_ = frameEnergy;
+        }
+        const bool lowEnergy = (frameEnergy < thrFactor * noiseE_);
+
+        // Estacionariedad espectral: varianza del log-espectro trama a trama.
+        bool stationary = true;
+        {
+            float flux = 0.0f;
+            for (int k = 0; k < kNumBins; ++k) {
+                const float mag2 = X0[k].real() * X0[k].real()
+                                 + X0[k].imag() * X0[k].imag();
+                const float lmag = 10.0f * std::log10(mag2 + 1e-9f);
+                if (useFlux && havePrevL_) {
+                    const float d = lmag - prevLmag_[k];
+                    flux += d * d;
+                }
+                prevLmag_[k] = lmag;
+            }
+            if (useFlux && havePrevL_) {
+                flux /= static_cast<float>(kNumBins);
+                stationary = (flux < fluxThr);
+            }
+            havePrevL_ = true;
+        }
+
+        const bool noiseOnly = lowEnergy && stationary;
         const bool warmup = (frameCount_ < kRnnWarmupFrames);
-        const bool periodicRefresh = (frameCount_ >= kRnnWarmupFrames) &&
-                                     ((frameCount_ % kRnnRefreshInterval) == 0);
-        if (!vadActive || warmup || periodicRefresh) {
-            updateRnn(X0, X1);
+
+        // doUpdate replica mvdr_run_fix.m: (noiseOnly || !init) && (noiseOnly || warmup).
+        // La 1ra trama inicializa con alpha=0 (carga directa); luego solo
+        // se actualiza en noise-only (o warmup si aun no habia init).
+        const bool doUpdate = noiseOnly || !rnnInitialized_;
+        if (doUpdate && (noiseOnly || warmup)) {
+            const float a = rnnInitialized_ ? kRnnAlpha : 0.0f;
+            updateRnn(X0, X1, a);
             rnnInitialized_ = true;
         }
 
         // --- Calcular y aplicar pesos MVDR por bin ---
+        // noisePow[k] = potencia de ruido a la salida (w^H*Rnn*w), la usa el
+        // post-filtro Wiener (FIX #2).
+        float noisePow[kNumBins];
         for (int k = 0; k < kNumBins; ++k) {
             if (!rnnInitialized_) {
                 // Sin estimacion de ruido aun: delay-and-sum simple
                 Y[k] = (X0[k] + X1[k]) * 0.5f;
+                noisePow[k] = 0.5f * (X0[k].real() * X0[k].real() + X0[k].imag() * X0[k].imag()
+                                    + X1[k].real() * X1[k].real() + X1[k].imag() * X1[k].imag());
             } else {
                 // Vector de observacion x = [X0[k], X1[k]]^T
                 // w = Rnn^{-1} * d / (d^H * Rnn^{-1} * d)
@@ -331,6 +489,35 @@ private:
                 computeMvdrWeights(k, w);
                 // y[k] = w^H * x = conj(w0)*X0 + conj(w1)*X1
                 Y[k] = std::conj(w[0]) * X0[k] + std::conj(w[1]) * X1[k];
+                // Potencia de ruido a la salida: w^H * Rnn * w (Rnn sin loading).
+                const Complex Rw0 = rnn_[k][0][0] * w[0] + rnn_[k][0][1] * w[1];
+                const Complex Rw1 = rnn_[k][1][0] * w[0] + rnn_[k][1][1] * w[1];
+                const float np = (std::conj(w[0]) * Rw0 + std::conj(w[1]) * Rw1).real();
+                noisePow[k] = (np > 1e-12f) ? np : 1e-12f;
+            }
+        }
+
+        // --- FIX #2: post-filtro Wiener single-channel (decision-directed) ---
+        // Ephraim-Malah: xi (a priori) = ddBeta*(Gprev^2*gammaPrev) +
+        // (1-ddBeta)*max(gamma-1,0); G = xi/(1+xi), con piso Gmin (=-12 dB).
+        // Convierte el MVDR en un MWF de facto y suprime el ruido residual
+        // sin musical-noise excesivo (RESUMEN: musical-noise 107.6 -> 64.2).
+        if (wienerEnabled_.load(std::memory_order_acquire) && rnnInitialized_) {
+            const float gMinDb = wienerGMinDb_.load(std::memory_order_relaxed);
+            const float ddBeta = wienerDdBeta_.load(std::memory_order_relaxed);
+            const float Gmin   = std::pow(10.0f, gMinDb / 20.0f);   // piso en amplitud
+            const float xiMin  = (Gmin * Gmin) / (1.0f - Gmin * Gmin + 1e-9f);
+            for (int k = 0; k < kNumBins; ++k) {
+                const float Ypow  = Y[k].real() * Y[k].real() + Y[k].imag() * Y[k].imag();
+                const float gamma = Ypow / (noisePow[k] + 1e-12f);   // a posteriori
+                float xi = ddBeta * (Gprev_[k] * Gprev_[k] * gammaPrev_[k])
+                         + (1.0f - ddBeta) * std::max(gamma - 1.0f, 0.0f);   // a priori (DD)
+                if (xi < xiMin) xi = xiMin;
+                float G = xi / (1.0f + xi);
+                if (G < Gmin) G = Gmin;
+                Y[k] *= G;
+                Gprev_[k] = G;
+                gammaPrev_[k] = gamma;
             }
         }
 
@@ -356,6 +543,8 @@ private:
             const float kReverbDecay = dereverbDecay_.load(std::memory_order_relaxed);
             const float kReverbOver  = dereverbOver_.load(std::memory_order_relaxed);
             const float kReverbFloor = dereverbFloor_.load(std::memory_order_relaxed);
+            // FIX #4: suavizado temporal de la ganancia (anti musical-noise).
+            const float kGainSmooth  = dereverbGainSmooth_.load(std::memory_order_relaxed);
             for (int k = 0; k < kNumBins; ++k) {
                 const float power = Y[k].real() * Y[k].real()
                                   + Y[k].imag() * Y[k].imag();
@@ -366,10 +555,13 @@ private:
                 }
                 if (gain < kReverbFloor) gain = kReverbFloor;
                 if (gain > 1.0f) gain = 1.0f;
-                Y[k] *= gain;
+                // FIX #4: suavizar la ganancia en el tiempo por bin.
+                drGain_[k] = kGainSmooth * drGain_[k] + (1.0f - kGainSmooth) * gain;
+                const float g = drGain_[k];
+                Y[k] *= g;
                 // Actualizar tracker con la potencia (post-gain) para que la
                 // cola se siga rastreando sin realimentar la parte suprimida.
-                const float powerPost = power * gain * gain;
+                const float powerPost = power * g * g;
                 revPowerPrev_[k] = kReverbDecay * revPowerPrev_[k]
                                  + (1.0f - kReverbDecay) * powerPost;
             }
@@ -393,8 +585,9 @@ private:
     /// con suavizado exponencial. Solo llamar durante noise-only.
     /// Nota: diagonal loading se aplica en computeMvdrWeights() justo antes
     /// de la inversion, no durante la acumulacion, para evitar drift.
-    void updateRnn(const Complex* X0, const Complex* X1) {
-        const float alpha = kRnnAlpha;
+    /// @param alpha factor de suavizado (FIX #1: alpha=0 en la 1ra trama para
+    ///        cargar Rnn directo; kRnnAlpha en las siguientes).
+    void updateRnn(const Complex* X0, const Complex* X1, float alpha = kRnnAlpha) {
         const float oneMinusAlpha = 1.0f - alpha;
 
         for (int k = 0; k < kNumBins; ++k) {
@@ -418,11 +611,25 @@ private:
     /// Diagonal loading (kReg) se aplica aqui justo antes de la inversion
     /// para no acumular regularizacion en la estimacion de Rnn.
     void computeMvdrWeights(int k, Complex* w) const {
+        // FIX #3: diagonal loading ADAPTATIVO = loadMu * trace(Rnn)/2, con
+        // piso 1e-9. Acota el white-noise-gain (||w||^2 max 1.98 -> 0.67 en la
+        // sim) sin el kReg=1e-3 fijo, que en bins de baja energia sobre-
+        // regularizaba y en bins de alta energia casi no cargaba. loadMu<=0
+        // vuelve al kReg fijo de respaldo.
+        const float loadMu = loadMu_.load(std::memory_order_relaxed);
+        float reg;
+        if (loadMu > 0.0f) {
+            reg = loadMu * 0.5f * (rnn_[k][0][0].real() + rnn_[k][1][1].real());
+            if (reg < 1e-9f) reg = 1e-9f;
+        } else {
+            reg = kReg;
+        }
+
         // Aplicar diagonal loading a una copia local antes de invertir
-        Complex R00 = rnn_[k][0][0] + Complex(kReg, 0.0f);
+        Complex R00 = rnn_[k][0][0] + Complex(reg, 0.0f);
         Complex R01 = rnn_[k][0][1];
         Complex R10 = rnn_[k][1][0];
-        Complex R11 = rnn_[k][1][1] + Complex(kReg, 0.0f);
+        Complex R11 = rnn_[k][1][1] + Complex(reg, 0.0f);
 
         // Rnn^{-1} para matriz 2x2:
         // inv(R) = (1/det) * [R11, -R01; -R10, R00]
@@ -605,12 +812,36 @@ private:
 
     // Supresor de reverberacion tardia: potencia rastreada por bin.
     float revPowerPrev_[kNumBins] = {};
+    // FIX #4: ganancia de dereverb suavizada por bin (init 1.0 en init()).
+    float drGain_[kNumBins] = {};
     // Toggle del dereverb (default ON; ataca el "eco" de la sala).
     std::atomic<bool> dereverbEnabled_{true};
-    // Parametros del dereverb (R5, tarea 5.1). Defaults = valores previos.
-    std::atomic<float> dereverbDecay_{0.80f};  ///< RT60 proxy (AC1)
-    std::atomic<float> dereverbOver_{1.6f};    ///< over-subtraction (AC2)
-    std::atomic<float> dereverbFloor_{0.30f};  ///< spectral floor (AC2/AC4)
+    // Parametros del dereverb. FIX #4: defaults SUAVIZADOS validados en Octave
+    // (over 1.6->1.1, floor 0.30->0.40) + suavizado temporal de la ganancia.
+    std::atomic<float> dereverbDecay_{0.80f};       ///< RT60 proxy (AC1)
+    std::atomic<float> dereverbOver_{1.1f};         ///< over-subtraction (FIX #4)
+    std::atomic<float> dereverbFloor_{0.40f};       ///< spectral floor (FIX #4)
+    std::atomic<float> dereverbGainSmooth_{0.60f};  ///< suavizado ganancia (FIX #4)
+
+    // ─── FIX #1: estado de deteccion noise-only interna ──────────────────
+    float noiseE_ = 0.0f;              ///< piso de ruido (min-tracking)
+    bool  haveFloor_ = false;          ///< piso inicializado
+    float prevLmag_[kNumBins] = {};    ///< log-espectro previo (flujo)
+    bool  havePrevL_ = false;          ///< log-espectro previo valido
+    std::atomic<float> noiseThrFactor_{3.0f};   ///< E < thrFactor*piso => low energy
+    std::atomic<float> noiseRiseFactor_{1.01f}; ///< tasa de subida del piso
+    std::atomic<bool>  noiseUseFlux_{true};     ///< exigir estacionariedad
+    std::atomic<float> noiseFluxThr_{6.0f};     ///< umbral de flujo espectral
+
+    // ─── FIX #3: diagonal loading adaptativo ─────────────────────────────
+    std::atomic<float> loadMu_{1.0f};  ///< reg = loadMu*trace(Rnn)/2 (<=0 => kReg)
+
+    // ─── FIX #2: post-filtro Wiener decision-directed ────────────────────
+    std::atomic<bool>  wienerEnabled_{true};    ///< toggle (default ON)
+    std::atomic<float> wienerGMinDb_{-12.0f};   ///< piso de ganancia (dB)
+    std::atomic<float> wienerDdBeta_{0.98f};    ///< factor decision-directed
+    float Gprev_[kNumBins] = {};                ///< ganancia Wiener previa (DD)
+    float gammaPrev_[kNumBins] = {};            ///< SNR a posteriori previo (DD)
 };
 
 #endif // HEARING_AID_MVDR_BEAMFORMER_H
