@@ -84,6 +84,11 @@ void DspPipeline::init(const AudioConfig& config) {
     sce_.setEnabled(true);   // Activado por default (mejora inteligibilidad)
     sce_.setFactor(0.4f);    // Moderado: -4 dB en valles (conservador)
 
+    // Inicializar Expansor de baja frecuencia (R1). Default OFF / ratio 1.0
+    // (passthrough) → NO cambia el comportamiento previo (R6.3). El técnico lo
+    // activa por la cadena JNI → Kotlin → Dart (setExpanderParams).
+    expander_.init(config.sampleRate);
+
     // Inicializar TNR (Transient Noise Reducer) — para impulsos abruptos
     tnr_.init(config.sampleRate);
     tnr_.setEnabled(true); // Activado por default
@@ -363,6 +368,14 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     // La protección contra overflow la provee el MPO (threshold 110 dB SPL = 0.316 lineal).
     // Adaptive EQ scaling fue eliminado: causaba doble atenuación con MPO y reducía
     // la amplificación prescrita innecesariamente (validado: audioXpress OTC DSP paper).
+
+    // ─── 3.4. Expansor de baja frecuencia ≤1000 Hz (R1) ────────────────
+    // Downward expansion band-limitada que atenúa el hiss del mic en silencios
+    // SIN tocar las consonantes (>1000 Hz intactas). Actúa sobre el nivel de
+    // entrada REAL (inputLevelDb, PRE-EQ) y ANTES del EQ, para que la expansión
+    // opere sobre la señal de entrada y no sobre la amplificada. Default OFF
+    // (passthrough) → sin cambios respecto al comportamiento previo (R6.3).
+    expander_.process(buffer, blockSize, inputLevelDb);
 
     // ─── 3.5. Spectral Contrast Enhancement (SCE) ──────────────────────
     // Atenúa valles entre formantes para que la voz "resalte" más sobre el

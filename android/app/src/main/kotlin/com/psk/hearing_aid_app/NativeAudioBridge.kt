@@ -182,6 +182,74 @@ class NativeAudioBridge {
     }
 
     /**
+     * Configura el Expansor de baja frecuencia ≤1000 Hz (R1, spec
+     * mvdr-noise-clarity-tuning). Downward expansion band-limitada para
+     * eliminar el hiss del mic en silencios sin tocar consonantes.
+     * Default OFF / ratio 1.0 → passthrough (comportamiento previo, R6.3).
+     * Thread-safe.
+     *
+     * @param enabled Toggle de activación (AC5). Default false.
+     * @param kneeDbSpl Knee de expansión en dB SPL (AC1). Default 45.
+     * @param ratio Ratio de expansión, 1.0 = passthrough (AC4). Default 1.0.
+     * @param cutoffHz Frecuencia de corte superior (AC2). Default 1000.
+     * @param attackMs Ataque (recuperación de ganancia) en ms (AC6, ≤50).
+     * @param releaseMs Liberación (atenuación) en ms (AC4a). Default 400.
+     */
+    fun setExpander(
+        enabled: Boolean = false,
+        kneeDbSpl: Float = 45f,
+        ratio: Float = 1f,
+        cutoffHz: Float = 1000f,
+        attackMs: Float = 30f,
+        releaseMs: Float = 400f
+    ) {
+        nativeSetExpander(enabled, kneeDbSpl, ratio, cutoffHz, attackMs, releaseMs)
+    }
+
+    /**
+     * Configura el Supresor de reverberación tardía del MVDR (R5, spec
+     * mvdr-noise-clarity-tuning). Efectivo solo en modo MVDR; fuera de él
+     * el beamformer hace bypass. Default = comportamiento previo
+     * (enabled=true, strength=1.6, floor=0.30, decay=0.80). Thread-safe.
+     *
+     * @param enabled Toggle del dereverb (AC3). Default true.
+     * @param strength Over-subtraction factor (AC2). Default 1.6.
+     * @param floor Suelo espectral (AC2/AC4). Default 0.30.
+     * @param decay Factor de decaimiento / RT60 proxy (AC1). Default 0.80.
+     */
+    fun setDereverb(
+        enabled: Boolean = true,
+        strength: Float = 1.6f,
+        floor: Float = 0.30f,
+        decay: Float = 0.80f
+    ) {
+        nativeSetDereverb(enabled, strength, floor, decay)
+    }
+
+    /**
+     * Configura los umbrales del clasificador de entorno (R4, spec
+     * mvdr-noise-clarity-tuning). Defaults = valores previos si no se envían
+     * (R6.5). Thread-safe.
+     *
+     * @param speechEnterDb SNR (dB) para ENTRAR a SPEECH. Default 6.0.
+     * @param speechExitDb SNR (dB) para SALIR de SPEECH. Default 4.0.
+     * @param noiseSnrDb SNR (dB) bajo el cual el entorno es NOISE. Default 1.5.
+     * @param quietEnterDbSpl Nivel (dB SPL) para ENTRAR a QUIET. Default 44.
+     * @param quietExitDbSpl Nivel (dB SPL) para SALIR de QUIET. Default 49.
+     */
+    fun setClassifierThresholds(
+        speechEnterDb: Float = 6f,
+        speechExitDb: Float = 4f,
+        noiseSnrDb: Float = 1.5f,
+        quietEnterDbSpl: Float = 44f,
+        quietExitDbSpl: Float = 49f
+    ) {
+        nativeSetClassifierThresholds(
+            speechEnterDb, speechExitDb, noiseSnrDb, quietEnterDbSpl, quietExitDbSpl
+        )
+    }
+
+    /**
      * Habilita/deshabilita la clasificación automática de entorno.
      * Thread-safe, puede llamarse desde cualquier hilo.
      *
@@ -339,6 +407,33 @@ class NativeAudioBridge {
     )
 
     private external fun nativeSetNrLevel(level: Int)
+
+    /** Expansor de baja frecuencia ≤1000 Hz (R1). Ver [setExpander]. */
+    private external fun nativeSetExpander(
+        enabled: Boolean,
+        kneeDbSpl: Float,
+        ratio: Float,
+        cutoffHz: Float,
+        attackMs: Float,
+        releaseMs: Float
+    )
+
+    /** Supresor de reverberación tardía del MVDR (R5). Ver [setDereverb]. */
+    private external fun nativeSetDereverb(
+        enabled: Boolean,
+        strength: Float,
+        floor: Float,
+        decay: Float
+    )
+
+    /** Umbrales del clasificador de entorno (R4). Ver [setClassifierThresholds]. */
+    private external fun nativeSetClassifierThresholds(
+        speechEnterDb: Float,
+        speechExitDb: Float,
+        noiseSnrDb: Float,
+        quietEnterDbSpl: Float,
+        quietExitDbSpl: Float
+    )
 
     private external fun nativeSetAutoClassifyEnabled(enabled: Boolean)
 

@@ -113,20 +113,27 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
     float level = smoothedLevelDb_;
     float snr = smoothedSnrDb_;
 
+    // R4 tarea 3.1: leer los umbrales configurables (atómicos). Defaults =
+    // valores previos, así el comportamiento es idéntico si nadie los cambia.
+    const float snrSpeechEnter = speechSnrEnterDb_.load(std::memory_order_relaxed);
+    const float snrSpeechExit  = speechSnrExitDb_.load(std::memory_order_relaxed);
+    const float snrNoiseThresh = noiseSnrThresholdDb_.load(std::memory_order_relaxed);
+    const float quietEnter      = quietLevelEnterDbSpl_.load(std::memory_order_relaxed);
+    const float quietExit       = quietLevelExitDbSpl_.load(std::memory_order_relaxed);
+
     EnvironmentClass current = static_cast<EnvironmentClass>(
         currentClass_.load(std::memory_order_relaxed));
 
     const bool inQuiet = (current == EnvironmentClass::QUIET);
-    const float quietBoundary = inQuiet ? kEnvLevelQuietExit
-                                        : kEnvLevelQuietEnter;
+    const float quietBoundary = inQuiet ? quietExit : quietEnter;
     const bool levelSaysQuiet = (level < quietBoundary) && !voiceRecent;
 
     if (levelSaysQuiet) {
         newClass = EnvironmentClass::QUIET;
     } else if (current == EnvironmentClass::SPEECH) {
         // Ya estamos en SPEECH — solo salir si SNR cae bajo el umbral de salida
-        if (snr < kEnvSnrSpeechExit) {
-            newClass = (snr < kEnvSnrNoiseThreshold) ?
+        if (snr < snrSpeechExit) {
+            newClass = (snr < snrNoiseThresh) ?
                 EnvironmentClass::NOISE : EnvironmentClass::SPEECH_IN_NOISE;
         } else {
             newClass = EnvironmentClass::SPEECH; // mantener
@@ -138,9 +145,9 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
         // no quede atascada en NOISE / SPEECH_IN_NOISE — caso típico:
         // alguien habla cerca del mic del celular saturando el AGC.
         const float speechCeil = voiceRecent ? 88.0f : kEnvLevelSpeechMax;
-        if (snr > kEnvSnrSpeechEnter && level <= speechCeil) {
+        if (snr > snrSpeechEnter && level <= speechCeil) {
             newClass = EnvironmentClass::SPEECH;
-        } else if (snr > kEnvSnrSpeechExit) {
+        } else if (snr > snrSpeechExit) {
             newClass = EnvironmentClass::SPEECH_IN_NOISE;
         } else {
             newClass = EnvironmentClass::NOISE; // mantener
@@ -152,9 +159,9 @@ EnvironmentClass EnvironmentClassifier::update(float inputLevelDbSpl,
         // habitual: la voz humana puede llegar a 80-85 dB SPL en hablas
         // muy cercanas y sigue siendo SPEECH (no NOISE).
         const float speechCeil = voiceRecent ? 88.0f : kEnvLevelSpeechMax;
-        if (snr > kEnvSnrSpeechEnter && level <= speechCeil) {
+        if (snr > snrSpeechEnter && level <= speechCeil) {
             newClass = EnvironmentClass::SPEECH;
-        } else if (snr < kEnvSnrNoiseThreshold) {
+        } else if (snr < snrNoiseThresh) {
             newClass = EnvironmentClass::NOISE;
         } else {
             newClass = EnvironmentClass::SPEECH_IN_NOISE;

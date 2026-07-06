@@ -122,6 +122,57 @@ class AudioBridgeImpl implements AudioBridge {
   }
 
   @override
+  Future<void> setExpander({
+    bool enabled = false,
+    double kneeDbSpl = 45.0,
+    double ratio = 1.0,
+    double cutoffHz = 1000.0,
+    double attackMs = 30.0,
+    double releaseMs = 400.0,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setExpander', {
+      'enabled': enabled,
+      'kneeDbSpl': kneeDbSpl,
+      'ratio': ratio,
+      'cutoffHz': cutoffHz,
+      'attackMs': attackMs,
+      'releaseMs': releaseMs,
+    });
+  }
+
+  @override
+  Future<void> setDereverb({
+    bool enabled = true,
+    double strength = 1.6,
+    double floor = 0.30,
+    double decay = 0.80,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setDereverb', {
+      'enabled': enabled,
+      'strength': strength,
+      'floor': floor,
+      'decay': decay,
+    });
+  }
+
+  @override
+  Future<void> setClassifierThresholds({
+    double speechEnterDb = 6.0,
+    double speechExitDb = 4.0,
+    double noiseSnrDb = 1.5,
+    double quietEnterDbSpl = 44.0,
+    double quietExitDbSpl = 49.0,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setClassifierThresholds', {
+      'speechEnterDb': speechEnterDb,
+      'speechExitDb': speechExitDb,
+      'noiseSnrDb': noiseSnrDb,
+      'quietEnterDbSpl': quietEnterDbSpl,
+      'quietExitDbSpl': quietExitDbSpl,
+    });
+  }
+
+  @override
   Future<void> updateNrLevel(int level) async {
     if (level < 0 || level > 3) {
       throw ArgumentError.value(

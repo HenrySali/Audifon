@@ -146,8 +146,40 @@ public:
     void setTnrThreshold(float ratio) { pipeline_.setTnrThreshold(ratio); }
     void setTnrAttenuationDb(float db) { pipeline_.setTnrAttenuationDb(db); }
 
+    // ─── Expansor de baja frecuencia (R1, tarea 4.3) ─────────────────────
+    /// Forward a DspPipeline::setExpanderParams. Default OFF/ratio 1.0 →
+    /// passthrough (R6.3). Thread-safe.
+    void setExpanderParams(bool enabled, float kneeDbSpl, float ratio,
+                           float cutoffHz, float attackMs, float releaseMs) {
+        pipeline_.setExpanderParams(enabled, kneeDbSpl, ratio, cutoffHz,
+                                    attackMs, releaseMs);
+    }
+
+    // ─── Supresor de reverberacion (R5, tarea 5.2) ───────────────────────
+    /// Forward a MvdrBeamformer. Los setters son no-op efectivos fuera del
+    /// modo MVDR (el beamformer hace bypass), pero el estado queda guardado
+    /// para cuando se active el modo MVDR. Default = comportamiento previo.
+    void setDereverbParams(bool enabled, float strength, float floor,
+                           float decay) {
+        mvdrBeamformer_.setDereverbEnabled(enabled);
+        mvdrBeamformer_.setDereverbStrength(strength);
+        mvdrBeamformer_.setDereverbFloor(floor);
+        mvdrBeamformer_.setDereverbDecay(decay);
+    }
+
     // ─── Environment Classifier (thread-safe) ───────────────────────────
     void setAutoClassifyEnabled(bool enabled);
+
+    /// Configura los umbrales del clasificador de entorno (R4, tarea 3.3).
+    /// Forward a DspPipeline::setClassifierThresholds. Defaults = valores
+    /// previos si Dart no envía (R6.5). Thread-safe.
+    void setClassifierThresholds(float speechEnterDb, float speechExitDb,
+                                 float noiseSnrDb,
+                                 float quietEnterDbSpl, float quietExitDbSpl) {
+        pipeline_.setClassifierThresholds(speechEnterDb, speechExitDb,
+                                          noiseSnrDb, quietEnterDbSpl,
+                                          quietExitDbSpl);
+    }
     /// Pin del preset Smart Scene aplicado manualmente — ver
     /// DspPipeline::setSmartPresetPinned() para la semántica completa.
     /// Wrapper directo al pipeline subyacente.

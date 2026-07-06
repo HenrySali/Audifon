@@ -91,6 +91,19 @@ private:
     /// Promedia magnitudes en 12 bandas EQ y entrega el array por banda.
     void buildBandEnergies(float bandsDb[kSceneNumBands]) const;
 
+    /// Decide la SceneClass a partir de las métricas corregidas (R4, tarea
+    /// 3.2). Espejo conservador del SceneDecisionMaker de Dart. Consume el
+    /// snr_db/piso ya corregidos por el fix de escala R2.
+    /// @param inputDbSpl Nivel de entrada (dB SPL).
+    /// @param snrDb SNR corregido (dB).
+    /// @param f Features espectrales del frame.
+    /// @param voiceActive Flag del VAD.
+    /// @param confidenceOut [out] Confianza [0,1] de la clase elegida.
+    /// @return Clase de escena.
+    SceneClass classifyScene(float inputDbSpl, float snrDb,
+                             const SpectralFeatures& f,
+                             bool voiceActive, float& confidenceOut) const;
+
     /// Publica el snapshot atómicamente.
     void publishSnapshot(const SceneSnapshot& snap);
 

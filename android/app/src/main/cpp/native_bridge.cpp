@@ -447,6 +447,86 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetWdrcParams(
     g_engine->setWdrcParams(params);
 }
 
+/// Configura el Expansor de baja frecuencia ≤1000 Hz (R1, tarea 4.3).
+/// Downward expansion band-limitada. Default OFF/ratio 1.0 → passthrough
+/// (R6.3). Thread-safe (atómicos internos).
+///
+/// @param enabled Toggle de activación (AC5).
+/// @param kneeDbSpl Knee de expansión en dB SPL (AC1).
+/// @param ratio Ratio de expansión, 1.0 = passthrough (AC4).
+/// @param cutoffHz Frecuencia de corte superior (AC2).
+/// @param attackMs Ataque (recuperación de ganancia) en ms (AC6, ≤50).
+/// @param releaseMs Liberación (atenuación) en ms (AC4a).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetExpander(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled,
+        jfloat kneeDbSpl,
+        jfloat ratio,
+        jfloat cutoffHz,
+        jfloat attackMs,
+        jfloat releaseMs) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setExpanderParams(enabled == JNI_TRUE, kneeDbSpl, ratio,
+                                cutoffHz, attackMs, releaseMs);
+}
+
+/// Configura el Supresor de reverberación tardía del MVDR (R5, tarea 5.2).
+/// Los setters son no-op efectivos fuera del modo MVDR (el beamformer hace
+/// bypass), pero el estado queda guardado. Default = comportamiento previo
+/// (enabled=true, strength=1.6, floor=0.30, decay=0.80). Thread-safe.
+///
+/// @param enabled Toggle del dereverb (AC3).
+/// @param strength Over-subtraction factor (AC2).
+/// @param floor Suelo espectral (AC2/AC4).
+/// @param decay Factor de decaimiento / RT60 proxy (AC1).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetDereverb(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled,
+        jfloat strength,
+        jfloat floor,
+        jfloat decay) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setDereverbParams(enabled == JNI_TRUE, strength, floor, decay);
+}
+
+/// Configura los umbrales del clasificador de entorno (R4, tarea 3.3).
+/// Defaults = valores previos si Dart no envía (R6.5). Thread-safe.
+///
+/// @param speechEnterDb SNR (dB) para ENTRAR a SPEECH (default 6.0).
+/// @param speechExitDb  SNR (dB) para SALIR de SPEECH  (default 4.0).
+/// @param noiseSnrDb    SNR (dB) bajo el cual el entorno es NOISE (default 1.5).
+/// @param quietEnterDbSpl Nivel (dB SPL) para ENTRAR a QUIET (default 44).
+/// @param quietExitDbSpl  Nivel (dB SPL) para SALIR de QUIET  (default 49).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetClassifierThresholds(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jfloat speechEnterDb,
+        jfloat speechExitDb,
+        jfloat noiseSnrDb,
+        jfloat quietEnterDbSpl,
+        jfloat quietExitDbSpl) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setClassifierThresholds(speechEnterDb, speechExitDb, noiseSnrDb,
+                                      quietEnterDbSpl, quietExitDbSpl);
+}
+
 /// Actualiza el nivel de reducción de ruido.
 /// Thread-safe: usa std::atomic internamente.
 ///

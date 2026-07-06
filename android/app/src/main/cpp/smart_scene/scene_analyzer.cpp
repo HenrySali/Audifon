@@ -18,6 +18,14 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 
+// ── Constantes del fix de escala R2 (tareas 2.2/2.3) ─────────────────────────
+/// Piso de ruido acotado defensivamente al rango físico del mic real (dBFS).
+constexpr float kNoiseFloorMinDbFs = -60.0f;
+constexpr float kNoiseFloorMaxDbFs = -40.0f;
+/// Tope físico del SNR estimado (dB). Sin saturación artificial en 40.
+constexpr float kSnrMinDb = -20.0f;
+constexpr float kSnrMaxDb =  40.0f;
+
 /// Bit-reversal in-place sobre arrays real/imag de tamaño N (potencia de 2).
 inline void bitReverse(float* re, float* im, int N) {
     int j = 0;
@@ -193,10 +201,31 @@ void SceneAnalyzer::computeFft() {
     noise_.update(bandsDb);
     float noiseFloorDb = noise_.getNoiseFloorDb();
 
-    // 7) SNR estimado (dB), clampeado al rango del clasificador existente.
-    float snrDb = inputDbSpl - noiseFloorDb;
-    if (snrDb < -20.0f) snrDb = -20.0f;
-    if (snrDb >  40.0f) snrDb =  40.0f;
+    // ── FIX escala R2 (mvdr-noise-clarity-tuning, tareas 2.2/2.3) ──────────
+    // DECISIÓN T1(c): se corrige la ESCALA del snr_db del snapshot (no se
+    // reemplaza por el SNR autoconsistente de estimateSnrFromNr). Motivo: el
+    // SNR autoconsistente vive en el path del NR Wiener (DspPipeline, otro
+    // hilo) y ya alimenta el EnvironmentClassifier; acoplarlo al SceneAnalyzer
+    // cruzaría dos módulos/hilos independientes. El fix mínimo y autocontenido
+    // es unificar la referencia de nivel.
+    //
+    // Bug original: inputDbSpl está en dB SPL (rms + splOffset≈93) pero
+    // noiseFloorDb viene de energías FFT por banda SIN calibrar (~dBFS). La
+    // resta mezclaba referencias → SNR saturaba en el tope (40 dB) y el piso
+    // se reportaba en -77..-97 dBFS. Ahora:
+    //   1) Se acota el piso a [-60, -40] dBFS (rango físico del mic real).
+    //   2) El SNR se computa con AMBOS términos en dBFS: se le quita el
+    //      splOffset al input (inputDbFs = inputDbSpl - splOffset_) para que
+    //      snr = inputDbFs - noiseFloorDb sea coherente.
+    //   3) El clamp de SNR pasa a ser un tope físico [-20, 40] sin saturar
+    //      artificialmente en 40 (el valor ahora varía con el contenido).
+    if (noiseFloorDb < kNoiseFloorMinDbFs) noiseFloorDb = kNoiseFloorMinDbFs;
+    if (noiseFloorDb > kNoiseFloorMaxDbFs) noiseFloorDb = kNoiseFloorMaxDbFs;
+
+    const float inputDbFs = inputDbSpl - splOffset_;
+    float snrDb = inputDbFs - noiseFloorDb;
+    if (snrDb < kSnrMinDb) snrDb = kSnrMinDb;
+    if (snrDb > kSnrMaxDb) snrDb = kSnrMaxDb;
 
     // 8) VAD híbrido robusto: usa muestras de tiempo + bandas + piso de
     //    ruido + flatness + tilt + centroide. El nuevo VAD reactiva
@@ -248,8 +277,22 @@ void SceneAnalyzer::computeFft() {
         snap.noise_per_band_db[b] = noise_.getProfileDb()[b];
     }
     snap.impulse_count = 0;
-    snap.scene_class = static_cast<uint8_t>(SceneClass::UNKNOWN); // Fase 1
-    snap.scene_confidence = 0.0f;
+
+    // ── R4 (mvdr-noise-clarity-tuning, tarea 3.2): decisión de SceneClass ──
+    // DECISIÓN T1(b): la métrica "Clase detectada" de la UI
+    // (smart_scene_screen.dart, _MetricRow) lee snapshot.sceneClass CRUDO,
+    // que estaba hardcodeado a UNKNOWN (Fase 1) → de ahí el "unknown 100%".
+    // El path del SmartScene auto (scene_engine → SceneDecisionMaker en Dart)
+    // reclasifica desde las métricas del snapshot y NO usa este campo, pero
+    // depende del snr_db (ya corregido en R2). Habilitamos aquí la decisión
+    // usando el snr_db/piso corregidos + VAD + nivel + features, de modo que
+    // el campo crudo también converja (R4 AC1/AC6). La lógica es un espejo
+    // conservador de la del SceneDecisionMaker de Dart.
+    float sceneConfidence = 0.0f;
+    snap.scene_class = static_cast<uint8_t>(
+        classifyScene(inputDbSpl, snrDb, features,
+                      vad_.isVoiceActive(), sceneConfidence));
+    snap.scene_confidence = sceneConfidence;
 
     publishSnapshot(snap);
 }
@@ -311,6 +354,78 @@ uint64_t SceneAnalyzer::getElapsedUs() const {
     auto delta = now - startTime_;
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(delta).count());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Decisión de escena (R4, tarea 3.2) — espejo conservador del
+// SceneDecisionMaker de Dart (lib/scene/scene_decision_maker.dart).
+// Consume el snr_db/piso YA corregidos por el fix de escala R2.
+// ─────────────────────────────────────────────────────────────────────────────
+SceneClass SceneAnalyzer::classifyScene(float inputDbSpl,
+                                        float snrDb,
+                                        const SpectralFeatures& f,
+                                        bool voiceActive,
+                                        float& confidenceOut) const {
+    // Umbrales alineados con SceneDecisionMaker (Dart) para coherencia.
+    constexpr float kSilenceDbSpl        = 30.0f;
+    constexpr float kCleanSpeechSnrDb    = 15.0f;
+    constexpr float kLowDominantTiltMax  = -8.0f;  // dB/octava
+    constexpr float kHighDominantTiltMin =  2.0f;  // dB/octava
+    constexpr float kMusicFlatnessMax    = 0.10f;
+    constexpr float kMusicCentroidMinHz  = 600.0f;
+
+    auto confFromDistance = [](float distance, float fullAt) -> float {
+        if (distance < 0.0f) return 0.5f;
+        if (fullAt <= 0.0f) return 1.0f;
+        float c = 0.5f + 0.5f * (distance / fullAt);
+        return c < 0.5f ? 0.5f : (c > 1.0f ? 1.0f : c);
+    };
+
+    // 1) Silencio: nivel muy bajo, precedencia sobre todo.
+    if (inputDbSpl < kSilenceDbSpl) {
+        confidenceOut = confFromDistance(kSilenceDbSpl - inputDbSpl, 10.0f);
+        return SceneClass::SILENCE;
+    }
+
+    // 2) Música: armónica estable, flatness baja, sin voz, nivel alto.
+    if (!voiceActive && f.flatness < kMusicFlatnessMax &&
+        f.centroid_hz >= kMusicCentroidMinHz && inputDbSpl >= 50.0f) {
+        float c = ((kMusicFlatnessMax - f.flatness) / kMusicFlatnessMax) * 0.6f +
+                  ((f.centroid_hz - kMusicCentroidMinHz) / 4000.0f) * 0.4f;
+        confidenceOut = c < 0.0f ? 0.0f : (c > 1.0f ? 1.0f : c);
+        return SceneClass::MUSIC;
+    }
+
+    // 3) Voz (VAD activo): sub-clase por SNR y tilt.
+    if (voiceActive) {
+        if (snrDb >= kCleanSpeechSnrDb) {
+            confidenceOut = confFromDistance(snrDb - kCleanSpeechSnrDb, 10.0f);
+            return SceneClass::VOICE_ONLY;
+        }
+        if (f.tilt_db_per_octave < kLowDominantTiltMax) {
+            confidenceOut = confFromDistance(
+                kLowDominantTiltMax - f.tilt_db_per_octave, 6.0f);
+            return SceneClass::VOICE_IN_NOISE_LOW;
+        }
+        float c = 1.0f - (snrDb / kCleanSpeechSnrDb);
+        confidenceOut = c < 0.4f ? 0.4f : (c > 1.0f ? 1.0f : c);
+        return SceneClass::VOICE_IN_NOISE_MID;
+    }
+
+    // 4) Sin voz, no silencio, no música → ruido; grave vs agudo por tilt.
+    if (f.tilt_db_per_octave < kLowDominantTiltMax) {
+        confidenceOut = confFromDistance(
+            kLowDominantTiltMax - f.tilt_db_per_octave, 8.0f);
+        return SceneClass::NOISE_LOW_DOMINANT;
+    }
+    if (f.tilt_db_per_octave > kHighDominantTiltMin) {
+        confidenceOut = confFromDistance(
+            f.tilt_db_per_octave - kHighDominantTiltMin, 8.0f);
+        return SceneClass::NOISE_HIGH_DOMINANT;
+    }
+    // Ruido balanceado sin voz: convención noise_high_dominant (menos NR).
+    confidenceOut = 0.4f;
+    return SceneClass::NOISE_HIGH_DOMINANT;
 }
 
 void SceneAnalyzer::buildBandEnergies(float bandsDb[kSceneNumBands]) const {

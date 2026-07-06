@@ -204,6 +204,10 @@ class AudioMethodChannel(
                 "updateVolume" -> handleUpdateVolume(call, result)
                 "updateWdrcParams" -> handleUpdateWdrcParams(call, result)
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
+                // ─── mvdr-noise-clarity-tuning ──────────────────────────
+                "setExpander" -> handleSetExpander(call, result)
+                "setDereverb" -> handleSetDereverb(call, result)
+                "setClassifierThresholds" -> handleSetClassifierThresholds(call, result)
                 "updateAutoClassify" -> handleUpdateAutoClassify(call, result)
                 "setSmartPresetPinned" -> handleSetSmartPresetPinned(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
@@ -842,6 +846,58 @@ class AudioMethodChannel(
             compRatio = compRatio.toFloat(),
             attackMs = attackMs.toFloat(),
             releaseMs = releaseMs.toFloat()
+        )
+        result.success(null)
+    }
+
+    /**
+     * Configura el Expansor de baja frecuencia ≤1000 Hz (R1, spec
+     * mvdr-noise-clarity-tuning). Default OFF/ratio 1.0 → passthrough (R6.5).
+     *
+     * Argumentos: { enabled: Boolean, kneeDbSpl, ratio, cutoffHz, attackMs,
+     *               releaseMs } (todos opcionales; ausencia → default seguro).
+     */
+    private fun handleSetExpander(call: MethodCall, result: MethodChannel.Result) {
+        val enabled = call.argument<Boolean>("enabled") ?: false
+        val kneeDbSpl = (call.argument<Double>("kneeDbSpl") ?: 45.0).toFloat()
+        val ratio = (call.argument<Double>("ratio") ?: 1.0).toFloat()
+        val cutoffHz = (call.argument<Double>("cutoffHz") ?: 1000.0).toFloat()
+        val attackMs = (call.argument<Double>("attackMs") ?: 30.0).toFloat()
+        val releaseMs = (call.argument<Double>("releaseMs") ?: 400.0).toFloat()
+        nativeBridge.setExpander(enabled, kneeDbSpl, ratio, cutoffHz, attackMs, releaseMs)
+        result.success(null)
+    }
+
+    /**
+     * Configura el Supresor de reverberación tardía del MVDR (R5, spec
+     * mvdr-noise-clarity-tuning). Default = comportamiento previo (R6.5).
+     *
+     * Argumentos: { enabled: Boolean, strength, floor, decay } (opcionales).
+     */
+    private fun handleSetDereverb(call: MethodCall, result: MethodChannel.Result) {
+        val enabled = call.argument<Boolean>("enabled") ?: true
+        val strength = (call.argument<Double>("strength") ?: 1.6).toFloat()
+        val floor = (call.argument<Double>("floor") ?: 0.30).toFloat()
+        val decay = (call.argument<Double>("decay") ?: 0.80).toFloat()
+        nativeBridge.setDereverb(enabled, strength, floor, decay)
+        result.success(null)
+    }
+
+    /**
+     * Configura los umbrales del clasificador de entorno (R4, spec
+     * mvdr-noise-clarity-tuning). Default = valores previos (R6.5).
+     *
+     * Argumentos: { speechEnterDb, speechExitDb, noiseSnrDb, quietEnterDbSpl,
+     *               quietExitDbSpl } (opcionales; ausencia → default previo).
+     */
+    private fun handleSetClassifierThresholds(call: MethodCall, result: MethodChannel.Result) {
+        val speechEnterDb = (call.argument<Double>("speechEnterDb") ?: 6.0).toFloat()
+        val speechExitDb = (call.argument<Double>("speechExitDb") ?: 4.0).toFloat()
+        val noiseSnrDb = (call.argument<Double>("noiseSnrDb") ?: 1.5).toFloat()
+        val quietEnterDbSpl = (call.argument<Double>("quietEnterDbSpl") ?: 44.0).toFloat()
+        val quietExitDbSpl = (call.argument<Double>("quietExitDbSpl") ?: 49.0).toFloat()
+        nativeBridge.setClassifierThresholds(
+            speechEnterDb, speechExitDb, noiseSnrDb, quietEnterDbSpl, quietExitDbSpl
         )
         result.success(null)
     }

@@ -27,6 +27,11 @@ public:
     /// Tamaño de la ventana de mínimos (frames). 50 frames * ~5 ms = 250 ms.
     static constexpr int kMinWindowSize = 50;
 
+    /// Piso de ruido inicial plausible (dBFS). FIX escala R2: reemplaza el
+    /// arranque en -90/-60 dBFS por un valor cercano al ruido propio del mic
+    /// real (~-50 dBFS) para evitar el undertrack transitorio a -77..-97 dBFS.
+    static constexpr float kInitNoiseFloorDb = -50.0f;
+
     NoiseProfile();
 
     /// Reinicia el estado interno.

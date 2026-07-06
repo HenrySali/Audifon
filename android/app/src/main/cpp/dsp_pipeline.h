@@ -31,6 +31,7 @@
 #include "output_compressor.h"
 #include "adaptive_feedback_canceller.h"
 #include "spectral_contrast_enhancer.h"
+#include "expander.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -200,6 +201,27 @@ public:
     void setSceFactor(float factor) { sce_.setFactor(factor); }
     float getSceFactor() const { return sce_.getFactor(); }
 
+    // ─── Expansor de baja frecuencia (R1, tarea 4) ──────────────────────
+    /// Configura el Expansor de baja frecuencia (downward expansion ≤1000 Hz).
+    /// Default: enabled=false, ratio=1.0 → passthrough (R6.3, AC5, AC7). Los
+    /// setters son thread-safe (atómicos en Expander).
+    /// @param enabled Toggle de activación (AC5).
+    /// @param kneeDbSpl Knee de expansión en dB SPL (AC1, default 45).
+    /// @param ratio Ratio de expansión, 1.0 = passthrough (AC4).
+    /// @param cutoffHz Frecuencia de corte superior (AC2, default 1000).
+    /// @param attackMs Ataque (recuperación de ganancia) en ms (AC6, ≤50).
+    /// @param releaseMs Liberación (atenuación) en ms (AC4a, default 400).
+    void setExpanderParams(bool enabled, float kneeDbSpl, float ratio,
+                           float cutoffHz, float attackMs, float releaseMs) {
+        expander_.setKneeDbSpl(kneeDbSpl);
+        expander_.setRatio(ratio);
+        expander_.setCutoffHz(cutoffHz);
+        expander_.setAttackMs(attackMs);
+        expander_.setReleaseMs(releaseMs);
+        expander_.setEnabled(enabled);
+    }
+    bool isExpanderEnabled() const { return expander_.isEnabled(); }
+
     /// Ratio del compresor de salida (input:output). Default: 4.0 (4:1).
     void setOutputCompressorRatio(float ratio) { oc_.setRatio(ratio); }
     /// Ancho del soft-knee del compresor de salida en dB. Default: 6 dB.
@@ -267,6 +289,22 @@ public:
     /// Cuando está habilitada, NR y WDRC se ajustan automáticamente.
     /// @param enabled true para habilitar, false para deshabilitar
     void setAutoClassifyEnabled(bool enabled);
+
+    /// Configura los umbrales del clasificador de entorno (R4, tarea 3.3).
+    /// Todos los parámetros son configurables desde Dart; defaults = valores
+    /// previos si Dart no los envía (R6.5). Thread-safe (atómicos internos).
+    /// @param speechEnterDb SNR (dB) para ENTRAR a SPEECH (default 6.0)
+    /// @param speechExitDb  SNR (dB) para SALIR de SPEECH  (default 4.0)
+    /// @param noiseSnrDb    SNR (dB) bajo el cual el entorno es NOISE (1.5)
+    /// @param quietEnterDbSpl Nivel (dB SPL) para ENTRAR a QUIET (default 44)
+    /// @param quietExitDbSpl  Nivel (dB SPL) para SALIR de QUIET  (default 49)
+    void setClassifierThresholds(float speechEnterDb, float speechExitDb,
+                                 float noiseSnrDb,
+                                 float quietEnterDbSpl, float quietExitDbSpl) {
+        envClassifier_.setSpeechSnrThresholds(speechEnterDb, speechExitDb);
+        envClassifier_.setNoiseSnrThreshold(noiseSnrDb);
+        envClassifier_.setQuietLevelThresholds(quietEnterDbSpl, quietExitDbSpl);
+    }
 
     /// Pin del preset Smart Scene aplicado manualmente.
     ///
@@ -433,6 +471,7 @@ private:
     AdaptiveFeedbackCanceller afc_; ///< AFC adaptativo (estima y resta feedback path)
     NoiseReduction nr_;       ///< Reducción de ruido (solo atenúa)
     SpectralContrastEnhancer sce_; ///< SCE: realza voz atenuando valles (solo atenúa)
+    Expander expander_;       ///< Expansor de baja frecuencia ≤1kHz (R1, solo atenúa; default OFF)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)

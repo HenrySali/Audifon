@@ -169,6 +169,32 @@ public:
         return currentClass_.load(std::memory_order_relaxed);
     }
 
+    // ─── Umbrales configurables (R4, tarea 3.1) ──────────────────────────
+    // Los umbrales de decisión pasan de constexpr fijos a miembros atómicos
+    // con setters, para poder afinar el clasificador desde Dart sin recompilar
+    // (mvdr-noise-clarity-tuning). Defaults = valores previos → comportamiento
+    // idéntico si Dart no envía nada (R6.5).
+
+    /// Umbrales de SNR (dB) para entrar/salir de SPEECH (histéresis).
+    /// Default enter=6, exit=4 (valores previos kEnvSnrSpeechEnter/Exit).
+    void setSpeechSnrThresholds(float enterDb, float exitDb) {
+        speechSnrEnterDb_.store(enterDb, std::memory_order_relaxed);
+        speechSnrExitDb_.store(exitDb, std::memory_order_relaxed);
+    }
+
+    /// Umbral de SNR (dB) por debajo del cual el entorno es NOISE.
+    /// Default 1.5 (valor previo kEnvSnrNoiseThreshold).
+    void setNoiseSnrThreshold(float db) {
+        noiseSnrThresholdDb_.store(db, std::memory_order_relaxed);
+    }
+
+    /// Umbrales de nivel (dB SPL) para entrar/salir de QUIET (histéresis).
+    /// Default enter=44, exit=49 (valores previos kEnvLevelQuietEnter/Exit).
+    void setQuietLevelThresholds(float enterDbSpl, float exitDbSpl) {
+        quietLevelEnterDbSpl_.store(enterDbSpl, std::memory_order_relaxed);
+        quietLevelExitDbSpl_.store(exitDbSpl, std::memory_order_relaxed);
+    }
+
     /// Obtiene el nivel de NR recomendado para el entorno actual.
     /// @return 0=off, 1=bajo, 2=medio, 3=alto
     int getRecommendedNrLevel() const;
@@ -217,6 +243,13 @@ private:
 
     // --- Estado publicado (legible desde cualquier hilo) ---
     std::atomic<int> currentClass_{static_cast<int>(EnvironmentClass::QUIET)};
+
+    // --- Umbrales configurables (R4, tarea 3.1) — defaults = valores previos.
+    std::atomic<float> speechSnrEnterDb_{kEnvSnrSpeechEnter};      // 6.0
+    std::atomic<float> speechSnrExitDb_{kEnvSnrSpeechExit};        // 4.0
+    std::atomic<float> noiseSnrThresholdDb_{kEnvSnrNoiseThreshold};// 1.5
+    std::atomic<float> quietLevelEnterDbSpl_{kEnvLevelQuietEnter}; // 44.0
+    std::atomic<float> quietLevelExitDbSpl_{kEnvLevelQuietExit};   // 49.0
 };
 
 #endif // HEARING_AID_ENVIRONMENT_CLASSIFIER_H

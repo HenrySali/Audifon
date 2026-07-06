@@ -696,7 +696,7 @@ class _LoopbackQcScreenState extends State<LoopbackQcScreen> {
   Widget _buildAudiogramDropdown() {
     return DropdownButtonFormField<String>(
       key: const Key('qc_audiogram_dropdown'),
-      initialValue: _selectedAudiogram,
+      value: _selectedAudiogram,
       decoration: const InputDecoration(labelText: 'Audiograma test'),
       items: _audiogramFixtures.keys
           .map((k) => DropdownMenuItem(value: k, child: Text(k)))
@@ -711,7 +711,7 @@ class _LoopbackQcScreenState extends State<LoopbackQcScreen> {
   Widget _buildInputDropdown() {
     return DropdownButtonFormField<double>(
       key: const Key('qc_input_dropdown'),
-      initialValue: _selectedInput,
+      value: _selectedInput,
       decoration: const InputDecoration(labelText: 'Input level (dB SPL)'),
       items: _inputLevels
           .map((v) => DropdownMenuItem(
@@ -729,7 +729,7 @@ class _LoopbackQcScreenState extends State<LoopbackQcScreen> {
   Widget _buildFrequencyDropdown() {
     return DropdownButtonFormField<int>(
       key: const Key('qc_freq_dropdown'),
-      initialValue: _selectedFrequency,
+      value: _selectedFrequency,
       decoration: const InputDecoration(labelText: 'Frecuencia (Hz)'),
       items: _testFrequencies
           .map((v) => DropdownMenuItem(value: v, child: Text('$v Hz')))
@@ -763,8 +763,8 @@ class _LoopbackQcScreenState extends State<LoopbackQcScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
               color: m.pass
-                  ? Colors.green.withValues(alpha: 0.15)
-                  : Colors.red.withValues(alpha: 0.15),
+                  ? Colors.green.withOpacity(0.15)
+                  : Colors.red.withOpacity(0.15),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(

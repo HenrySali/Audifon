@@ -16,15 +16,22 @@ NoiseProfile::NoiseProfile() {
 }
 
 void NoiseProfile::reset() {
+    // FIX escala R2 (mvdr-noise-clarity-tuning, tarea 2.2): el piso de ruido
+    // se inicializa a un valor físicamente plausible (~-50 dBFS, el orden de
+    // magnitud del ruido propio del mic del Moto G32) en vez de -90/-60. El
+    // arranque en -90 hacía que el minimum-statistics undertrackeara y
+    // reportara -77..-97 dBFS (imposible para un mic real) hasta converger,
+    // saturando el SNR del snapshot. El consumidor (scene_analyzer) acota el
+    // piso a [-60, -40] dBFS de forma defensiva.
     for (int b = 0; b < kSceneNumBands; ++b) {
-        noiseDb_[b] = -60.0f;
+        noiseDb_[b] = kInitNoiseFloorDb;
         for (int i = 0; i < kMinWindowSize; ++i) {
-            history_[b][i] = -90.0f;
+            history_[b][i] = kInitNoiseFloorDb;
         }
     }
     historyIdx_ = 0;
     historyFill_ = 0;
-    globalNoiseFloorDb_ = -90.0f;
+    globalNoiseFloorDb_ = kInitNoiseFloorDb;
 }
 
 void NoiseProfile::update(const float bandEnergyDb[kSceneNumBands]) {

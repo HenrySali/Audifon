@@ -135,6 +135,44 @@ public:
     /// @return Angulo de steering actual (grados).
     float getSteeringAngle() const { return steeringAngleDeg_; }
 
+    // ─── Supresor de reverberacion tardia (R5, tarea 5.1) ────────────────
+    // Toggle + parametros del dereverb espectral (Lebart/Habets simplificado).
+    // Defaults = comportamiento previo (ON, decay 0.80, over 1.6, floor 0.30).
+
+    /// Toggle del dereverb (AC3). Default ON (comportamiento actual). Poner en
+    /// false devuelve la salida del MVDR sin la etapa de dereverb.
+    void setDereverbEnabled(bool e) {
+        dereverbEnabled_.store(e, std::memory_order_release);
+    }
+    bool isDereverbEnabled() const {
+        return dereverbEnabled_.load(std::memory_order_acquire);
+    }
+
+    /// Intensidad de la sobre-sustraccion (over-subtraction factor, AC2).
+    /// Mayor = mas supresion de la cola tardia. Default 1.6.
+    void setDereverbStrength(float over) {
+        if (over < 1.0f) over = 1.0f;
+        if (over > 4.0f) over = 4.0f;
+        dereverbOver_.store(over, std::memory_order_relaxed);
+    }
+
+    /// Suelo espectral de ganancia (spectral floor, AC2/AC4). Preserva la voz
+    /// directa: cuanto mas alto, menos supresion maxima. Default 0.30
+    /// (≈ -10 dB de supresion maxima).
+    void setDereverbFloor(float floor) {
+        if (floor < 0.05f) floor = 0.05f;
+        if (floor > 1.0f) floor = 1.0f;
+        dereverbFloor_.store(floor, std::memory_order_relaxed);
+    }
+
+    /// Factor de decaimiento (RT60 proxy, AC1). Default 0.80 (RT60~0.5 s a
+    /// Tframe=8 ms). Mayor = cola mas larga asumida.
+    void setDereverbDecay(float decay) {
+        if (decay < 0.0f) decay = 0.0f;
+        if (decay > 0.99f) decay = 0.99f;
+        dereverbDecay_.store(decay, std::memory_order_relaxed);
+    }
+
     /// Procesa un bloque de audio estereo y produce salida mono beamformed.
     /// Usa overlap-add internamente para manejar bloques de cualquier tamano.
     /// @param ch0 Canal 0 (mic inferior), numFrames muestras float32
@@ -302,9 +340,13 @@ private:
         // kReverbOver = factor de sobre-sustraccion. kReverbFloor = piso de
         //   ganancia (max ~10 dB de supresion, conservador para no distorsionar).
         if (dereverbEnabled_.load(std::memory_order_acquire)) {
-            constexpr float kReverbDecay = 0.80f;
-            constexpr float kReverbOver  = 1.6f;
-            constexpr float kReverbFloor = 0.30f;
+            // R5 (mvdr-noise-clarity-tuning, tarea 5.1): parametros del
+            // dereverb promovidos de constexpr locales a miembros atomicos con
+            // setters. Defaults = valores previos (decay 0.80, over 1.6, floor
+            // 0.30) → comportamiento identico si Dart no los cambia (R6.5).
+            const float kReverbDecay = dereverbDecay_.load(std::memory_order_relaxed);
+            const float kReverbOver  = dereverbOver_.load(std::memory_order_relaxed);
+            const float kReverbFloor = dereverbFloor_.load(std::memory_order_relaxed);
             for (int k = 0; k < kNumBins; ++k) {
                 const float power = Y[k].real() * Y[k].real()
                                   + Y[k].imag() * Y[k].imag();
@@ -556,6 +598,10 @@ private:
     float revPowerPrev_[kNumBins] = {};
     // Toggle del dereverb (default ON; ataca el "eco" de la sala).
     std::atomic<bool> dereverbEnabled_{true};
+    // Parametros del dereverb (R5, tarea 5.1). Defaults = valores previos.
+    std::atomic<float> dereverbDecay_{0.80f};  ///< RT60 proxy (AC1)
+    std::atomic<float> dereverbOver_{1.6f};    ///< over-subtraction (AC2)
+    std::atomic<float> dereverbFloor_{0.30f};  ///< spectral floor (AC2/AC4)
 };
 
 #endif // HEARING_AID_MVDR_BEAMFORMER_H

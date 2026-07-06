@@ -105,6 +105,45 @@ abstract class AudioBridge {
   /// [level] valores: 0=off, 1=bajo, 2=medio, 3=alto.
   Future<void> updateNrLevel(int level);
 
+  /// Configura el Expansor de baja frecuencia ≤1000 Hz (R1, spec
+  /// mvdr-noise-clarity-tuning). Downward expansion band-limitada que
+  /// atenúa el hiss del mic en silencios sin tocar consonantes.
+  ///
+  /// Default OFF / [ratio] 1.0 → passthrough (comportamiento previo, R6.5).
+  /// Cualquier parámetro omitido usa su default seguro en el lado nativo.
+  Future<void> setExpander({
+    bool enabled = false,
+    double kneeDbSpl = 45.0,
+    double ratio = 1.0,
+    double cutoffHz = 1000.0,
+    double attackMs = 30.0,
+    double releaseMs = 400.0,
+  });
+
+  /// Configura el Supresor de reverberación tardía del MVDR (R5, spec
+  /// mvdr-noise-clarity-tuning). Efectivo solo en modo MVDR.
+  ///
+  /// Default = comportamiento previo (enabled=true, strength=1.6,
+  /// floor=0.30, decay=0.80) → R6.5.
+  Future<void> setDereverb({
+    bool enabled = true,
+    double strength = 1.6,
+    double floor = 0.30,
+    double decay = 0.80,
+  });
+
+  /// Configura los umbrales del clasificador de entorno (R4, spec
+  /// mvdr-noise-clarity-tuning).
+  ///
+  /// Default = valores previos si no se envían (R6.5).
+  Future<void> setClassifierThresholds({
+    double speechEnterDb = 6.0,
+    double speechExitDb = 4.0,
+    double noiseSnrDb = 1.5,
+    double quietEnterDbSpl = 44.0,
+    double quietExitDbSpl = 49.0,
+  });
+
   /// Ajusta la intensidad del DNN (Deep Neural Network) denoiser en
   /// runtime, en el rango `[0.0, 1.0]`.
   ///
