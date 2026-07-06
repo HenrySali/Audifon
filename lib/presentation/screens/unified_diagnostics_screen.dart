@@ -244,67 +244,262 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     }
   }
 
+  /// Smart Scene: polling 10 Hz durante 5 s (50 snapshots).
+  /// Reporta min/max/avg de las métricas principales y la clase dominante.
   Future<Map<String, dynamic>> _testSmartScene() async {
-    final raw = await _channel.invokeMethod<Uint8List>('getSceneSnapshot');
-    if (raw == null || raw.isEmpty) {
+    // Verificar que el motor responda
+    final check = await _channel.invokeMethod<Uint8List>('getSceneSnapshot');
+    if (check == null || check.isEmpty) {
       return {'status': 'Motor no activo', 'available': false};
     }
-    final snap = SceneSnapshot.fromBytes(raw);
-    if (snap == null) return {'status': 'Parse error', 'available': false};
+
+    const int durationMs = 5000;
+    const int intervalMs = 100; // 10 Hz
+    const int expectedSamples = durationMs ~/ intervalMs;
+
+    final List<double> inputLevels = [];
+    final List<double> snrValues = [];
+    final List<double> vadScores = [];
+    final List<double> tilts = [];
+    final List<int> sceneClasses = [];
+    int parseErrors = 0;
+
+    for (int i = 0; i < expectedSamples; i++) {
+      if (!mounted) break;
+      final raw = await _channel.invokeMethod<Uint8List>('getSceneSnapshot');
+      if (raw != null && raw.isNotEmpty) {
+        final snap = SceneSnapshot.fromBytes(raw);
+        if (snap != null) {
+          inputLevels.add(snap.inputDbSpl);
+          snrValues.add(snap.snrDb);
+          vadScores.add(snap.vadScore);
+          tilts.add(snap.spectralTiltDb);
+          sceneClasses.add(snap.sceneClass.index);
+        } else {
+          parseErrors++;
+        }
+      }
+      if (i < expectedSamples - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (inputLevels.isEmpty) {
+      return {'status': 'Sin datos tras $durationMs ms', 'available': false};
+    }
+
+    // Clase dominante (moda)
+    final classCount = <int, int>{};
+    for (final c in sceneClasses) {
+      classCount[c] = (classCount[c] ?? 0) + 1;
+    }
+    final dominantClass = classCount.entries
+        .reduce((a, b) => a.value >= b.value ? a : b)
+        .key;
+
+    double _avg(List<double> l) => l.reduce((a, b) => a + b) / l.length;
+    double _min(List<double> l) => l.reduce((a, b) => a < b ? a : b);
+    double _max(List<double> l) => l.reduce((a, b) => a > b ? a : b);
+
     return {
       'available': true,
-      'inputDbSpl': snap.inputDbSpl,
-      'snrDb': snap.snrDb,
-      'vadScore': snap.vadScore,
-      'tilt': snap.spectralTiltDb,
-      'centroid': snap.spectralCentroidHz,
-      'envClass': snap.sceneClass.index,
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': inputLevels.length,
+      'inputDbSpl (min/avg/max)':
+          '${_min(inputLevels).toStringAsFixed(1)} / ${_avg(inputLevels).toStringAsFixed(1)} / ${_max(inputLevels).toStringAsFixed(1)}',
+      'snrDb (min/avg/max)':
+          '${_min(snrValues).toStringAsFixed(1)} / ${_avg(snrValues).toStringAsFixed(1)} / ${_max(snrValues).toStringAsFixed(1)}',
+      'vadScore (avg)': _avg(vadScores).toStringAsFixed(3),
+      'tilt (avg)': _avg(tilts).toStringAsFixed(2),
+      'claseDominante': dominantClass,
+      'parseErrors': parseErrors,
     };
   }
 
 
+  /// Diagnóstico DSP: grabación real de 15 s de audio dual-channel.
+  /// Inicia la grabación nativa, polea el progreso a 1 Hz, y reporta resultado.
   Future<Map<String, dynamic>> _testDspRecording() async {
-    // Verificar que el motor esté activo
     final bloc = context.read<AmplificationBloc>();
     final active = bloc.state is AmplificationActive;
     if (!active) {
       return {'status': 'Motor no activo', 'canRecord': false};
     }
-    // No iniciamos grabación real en el test rápido — solo verificamos
-    // que el sistema esté listo para grabar.
+
+    // Generar nombre temporal para la grabación de diagnóstico
+    final now = DateTime.now();
+    final baseName = 'diag_test_${now.year}${_pad2(now.month)}${_pad2(now.day)}'
+        '_${_pad2(now.hour)}${_pad2(now.minute)}${_pad2(now.second)}';
+    final wavFilename = '$baseName.wav';
+
+    // Iniciar grabación
+    bool started = false;
+    try {
+      started = await _channel.invokeMethod<bool>(
+            'startDiagnosticRecording',
+            {'filePath': wavFilename},
+          ) ??
+          false;
+    } catch (_) {
+      started = false;
+    }
+
+    if (!started) {
+      return {
+        'status': 'No se pudo iniciar la grabación',
+        'canRecord': false,
+      };
+    }
+
+    // Polling de progreso a 1 Hz durante máximo 18 s (15 + margen)
+    const int maxPolls = 18;
+    int lastProgressMs = 0;
+    for (int i = 0; i < maxPolls; i++) {
+      if (!mounted) break;
+      await Future.delayed(const Duration(seconds: 1));
+      try {
+        final progress = await _channel.invokeMethod<int>(
+              'getDiagnosticRecordingProgress',
+            ) ??
+            -1;
+        if (progress < 0) {
+          // Error durante grabación
+          return {
+            'status': 'Error durante grabación (progress = -1)',
+            'completada': false,
+            'tiempoAlcanzado': '${lastProgressMs ~/ 1000} s',
+          };
+        }
+        lastProgressMs = progress;
+        if (progress >= 15000) break; // 15 s alcanzados
+      } catch (_) {
+        break;
+      }
+    }
+
+    // Detener grabación
+    int stopResult = -1;
+    try {
+      stopResult = await _channel.invokeMethod<int>(
+            'stopDiagnosticRecording',
+          ) ??
+          -1;
+    } catch (_) {
+      stopResult = -1;
+    }
+
     return {
-      'canRecord': true,
-      'motorActivo': true,
-      'duracionNominal': '15 s',
-      'formato': 'WAV dual-channel (pre/post DSP) + JSON',
+      'completada': stopResult == 0,
+      'duración': '${lastProgressMs ~/ 1000} s',
+      'archivo': wavFilename,
+      'formato': 'WAV dual-channel (pre/post DSP)',
+      'stopCode': stopResult,
     };
   }
 
+  String _pad2(int n) => n.toString().padLeft(2, '0');
+
+  /// Registro de Sesión: arranca el servicio, captura durante 10 s,
+  /// detiene, y reporta los eventos capturados.
   Future<Map<String, dynamic>> _testSessionLog() async {
+    final bloc = context.read<AmplificationBloc>();
+
+    // Si ya está grabando, solo reportamos estado actual
+    if (_sessionSvc.isRecording) {
+      return {
+        'status': 'Ya estaba grabando',
+        'isRecording': true,
+        'eventCount': _sessionSvc.events.length,
+        'elapsed': _sessionSvc.elapsed.inSeconds,
+      };
+    }
+
+    // Arrancar grabación
+    _sessionSvc.start(bloc);
+
+    // Esperar 10 s capturando eventos
+    const int durationSec = 10;
+    for (int i = 0; i < durationSec; i++) {
+      if (!mounted) break;
+      await Future.delayed(const Duration(seconds: 1));
+    }
+
+    // Detener
+    _sessionSvc.stop(bloc);
+
+    final events = _sessionSvc.events;
     return {
-      'serviceAvailable': true,
-      'isRecording': _sessionSvc.isRecording,
-      'eventCount': _sessionSvc.events.length,
-      'elapsed': _sessionSvc.elapsed.inSeconds,
+      'completado': true,
+      'duración': '$durationSec s',
+      'eventCount': events.length,
       'hasInitialSnapshot': _sessionSvc.initialSnapshot != null,
+      'hasFinalSnapshot': _sessionSvc.finalSnapshot != null,
+      'tiposDeEvento': _countEventTypes(events),
     };
   }
 
+  /// Cuenta los tipos de eventos capturados por SessionLogService.
+  String _countEventTypes(List<Map<String, dynamic>> events) {
+    final types = <String, int>{};
+    for (final e in events) {
+      final kind = (e['kind'] as String?) ?? 'unknown';
+      types[kind] = (types[kind] ?? 0) + 1;
+    }
+    if (types.isEmpty) return 'ninguno';
+    return types.entries.map((e) => '${e.key}: ${e.value}').join(', ');
+  }
+
+  /// Spectrum Analyzer: activa FFT, polea a 10 Hz durante 5 s (50 snapshots),
+  /// desactiva FFT, y reporta estadísticas del espectro.
   Future<Map<String, dynamic>> _testSpectrum() async {
     _spectrumBridge.startAnalysis();
-    // Dar tiempo al nativo para producir un snapshot
-    await Future.delayed(const Duration(milliseconds: 150));
-    final snap = await _spectrumBridge.getCurrentSpectrum();
+
+    // Esperar que el nativo active el FFT
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    const int durationMs = 5000;
+    const int intervalMs = 100; // 10 Hz
+    const int expectedSamples = durationMs ~/ intervalMs;
+
+    final List<double> inputLevels = [];
+    final List<double> outputLevels = [];
+    final List<int> envClasses = [];
+    int nullCount = 0;
+
+    for (int i = 0; i < expectedSamples; i++) {
+      if (!mounted) break;
+      final snap = await _spectrumBridge.getCurrentSpectrum();
+      if (snap != null) {
+        inputLevels.add(snap.inputLevelDb);
+        outputLevels.add(snap.outputLevelDb);
+        envClasses.add(snap.environmentClass);
+      } else {
+        nullCount++;
+      }
+      if (i < expectedSamples - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
     _spectrumBridge.stopAnalysis();
-    if (snap == null) {
+
+    if (inputLevels.isEmpty) {
       return {'available': false, 'status': 'Sin datos de espectro'};
     }
+
+    double _avg(List<double> l) => l.reduce((a, b) => a + b) / l.length;
+    double _min(List<double> l) => l.reduce((a, b) => a < b ? a : b);
+    double _max(List<double> l) => l.reduce((a, b) => a > b ? a : b);
+
     return {
       'available': true,
-      'bins': 64,
-      'inputLevelDb': snap.inputLevelDb,
-      'outputLevelDb': snap.outputLevelDb,
-      'envClass': snap.environmentClass,
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': inputLevels.length,
+      'inputDb (min/avg/max)':
+          '${_min(inputLevels).toStringAsFixed(1)} / ${_avg(inputLevels).toStringAsFixed(1)} / ${_max(inputLevels).toStringAsFixed(1)}',
+      'outputDb (min/avg/max)':
+          '${_min(outputLevels).toStringAsFixed(1)} / ${_avg(outputLevels).toStringAsFixed(1)} / ${_max(outputLevels).toStringAsFixed(1)}',
+      'snapshotsNulos': nullCount,
     };
   }
 
