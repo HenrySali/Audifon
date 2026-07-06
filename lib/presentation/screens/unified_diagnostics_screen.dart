@@ -19,7 +19,6 @@
 /// Resultados copiables al portapapeles (individual o completo).
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -257,9 +256,9 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
       'inputDbSpl': snap.inputDbSpl,
       'snrDb': snap.snrDb,
       'vadScore': snap.vadScore,
-      'tilt': snap.tilt,
-      'centroid': snap.centroid,
-      'envClass': snap.environmentClass,
+      'tilt': snap.spectralTiltDb,
+      'centroid': snap.spectralCentroidHz,
+      'envClass': snap.sceneClass.index,
     };
   }
 
@@ -302,9 +301,9 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     }
     return {
       'available': true,
-      'bins': snap.binCount,
-      'peakFreqHz': snap.peakFrequencyHz,
-      'peakMagnitudeDb': snap.peakMagnitudeDb,
+      'bins': 64,
+      'inputLevelDb': snap.inputLevelDb,
+      'outputLevelDb': snap.outputLevelDb,
       'envClass': snap.environmentClass,
     };
   }
