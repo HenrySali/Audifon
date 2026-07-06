@@ -504,97 +504,350 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   }
 
 
+  /// Motor de Realce: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta estabilidad del modo, % tiempo MVDR/DNN activos.
   Future<Map<String, dynamic>> _testEnhancement() async {
-    final mode = await _channel.invokeMethod<int>('getEnhancementEngineMode');
-    final bf = await _channel.invokeMethod<bool>('getBeamformingActive');
-    final dnn = await _channel.invokeMethod<bool>('getDnnIsActive');
+    const int durationMs = 5000;
+    const int intervalMs = 200; // 5 Hz
+    const int expected = durationMs ~/ intervalMs;
+
+    final List<int> modes = [];
+    int bfActiveCount = 0;
+    int dnnActiveCount = 0;
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final mode = await _channel.invokeMethod<int>('getEnhancementEngineMode') ?? 0;
+        final bf = await _channel.invokeMethod<bool>('getBeamformingActive') ?? false;
+        final dnn = await _channel.invokeMethod<bool>('getDnnIsActive') ?? false;
+        modes.add(mode);
+        if (bf) bfActiveCount++;
+        if (dnn) dnnActiveCount++;
+        samples++;
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false};
+
     final modeNames = ['Bypass', 'Dual-DNN (GTCRN)', 'MVDR Beamformer'];
+    final modeCount = <int, int>{};
+    for (final m in modes) {
+      modeCount[m] = (modeCount[m] ?? 0) + 1;
+    }
+    final dominantMode = modeCount.entries
+        .reduce((a, b) => a.value >= b.value ? a : b)
+        .key;
+    final modeChanges = _countChanges(modes);
+
     return {
-      'mode': mode ?? 0,
-      'modeName': modeNames[(mode ?? 0).clamp(0, 2)],
-      'beamformingActive': bf ?? false,
-      'dnnActive': dnn ?? false,
+      'available': true,
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'modoDominante': modeNames[dominantMode.clamp(0, 2)],
+      'cambiosDeModo': modeChanges,
+      'mvdrActivo%': '${(bfActiveCount * 100 / samples).toStringAsFixed(0)}%',
+      'dnnActivo%': '${(dnnActiveCount * 100 / samples).toStringAsFixed(0)}%',
+      'estable': modeChanges == 0,
     };
   }
 
+  /// Cuenta transiciones en una lista (cuántas veces cambia el valor).
+  int _countChanges(List<int> values) {
+    int changes = 0;
+    for (int i = 1; i < values.length; i++) {
+      if (values[i] != values[i - 1]) changes++;
+    }
+    return changes;
+  }
+
+  /// Latencia: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta min/avg/max de DSP processing y DNN inference, delta underruns.
   Future<Map<String, dynamic>> _testLatency() async {
-    final m = await _channel.invokeMethod<Map>('getLatencyMetrics');
-    if (m == null) return {'available': false, 'status': 'Sin métricas'};
-    final data = Map<String, dynamic>.from(m);
+    const int durationMs = 5000;
+    const int intervalMs = 200;
+    const int expected = durationMs ~/ intervalMs;
+
+    final List<double> dspAvgs = [];
+    final List<double> dspMaxes = [];
+    final List<double> dnnInferences = [];
+    int? underrunsStart;
+    int? underrunsEnd;
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final m = await _channel.invokeMethod<Map>('getLatencyMetrics');
+        if (m != null) {
+          final data = Map<String, dynamic>.from(m);
+          final dspAvg = data['dspProcessingMsAvg'];
+          final dspMax = data['dspProcessingMsMax'];
+          final dnnInf = data['dnnInferenceMs'];
+          final underruns = data['callbackUnderruns'];
+
+          if (dspAvg is num) dspAvgs.add(dspAvg.toDouble());
+          if (dspMax is num) dspMaxes.add(dspMax.toDouble());
+          if (dnnInf is num && dnnInf >= 0) dnnInferences.add(dnnInf.toDouble());
+          if (underruns is int) {
+            underrunsStart ??= underruns;
+            underrunsEnd = underruns;
+          }
+          samples++;
+        }
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false, 'status': 'Sin métricas'};
+
+    double _avg(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a + b) / l.length;
+    double _min(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a < b ? a : b);
+    double _max(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a > b ? a : b);
+
     return {
       'available': true,
-      'inputLatencyMs': data['inputLatencyMs'],
-      'outputLatencyMs': data['outputLatencyMs'],
-      'dspBlockMs': data['dspBlockMs'],
-      'dspProcessingMsAvg': data['dspProcessingMsAvg'],
-      'dspProcessingMsMax': data['dspProcessingMsMax'],
-      'dnnInferenceMs': data['dnnInferenceMs'],
-      'dnnGroupDelayMs': data['dnnGroupDelayMs'],
-      'tnrLookaheadMs': data['tnrLookaheadMs'],
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'dspProcessing (min/avg/max)':
+          '${_min(dspAvgs).toStringAsFixed(2)} / ${_avg(dspAvgs).toStringAsFixed(2)} / ${_max(dspAvgs).toStringAsFixed(2)} ms',
+      'dspPeakMax': '${_max(dspMaxes).toStringAsFixed(2)} ms',
+      'dnnInference (min/avg/max)': dnnInferences.isEmpty
+          ? 'N/A'
+          : '${_min(dnnInferences).toStringAsFixed(2)} / ${_avg(dnnInferences).toStringAsFixed(2)} / ${_max(dnnInferences).toStringAsFixed(2)} ms',
+      'underrunsInicio': underrunsStart ?? 0,
+      'underrunsFin': underrunsEnd ?? 0,
+      'underrunsNuevos': (underrunsEnd ?? 0) - (underrunsStart ?? 0),
     };
   }
 
+  /// DNN Denoiser: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta % tiempo activo, min/avg/max inferencia.
   Future<Map<String, dynamic>> _testDnn() async {
-    final active = await _channel.invokeMethod<bool>('getDnnIsActive');
-    final lat = await _channel.invokeMethod<Map>('getLatencyMetrics');
-    final latMap = lat != null ? Map<String, dynamic>.from(lat) : null;
+    const int durationMs = 5000;
+    const int intervalMs = 200;
+    const int expected = durationMs ~/ intervalMs;
+
+    int activeCount = 0;
+    final List<double> inferences = [];
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final active = await _channel.invokeMethod<bool>('getDnnIsActive') ?? false;
+        final lat = await _channel.invokeMethod<Map>('getLatencyMetrics');
+        if (active) activeCount++;
+        if (lat != null) {
+          final data = Map<String, dynamic>.from(lat);
+          final inf = data['dnnInferenceMs'];
+          if (inf is num && inf >= 0) inferences.add(inf.toDouble());
+        }
+        samples++;
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false};
+
+    double _avg(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a + b) / l.length;
+    double _min(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a < b ? a : b);
+    double _max(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a > b ? a : b);
+
     return {
-      'isActive': active ?? false,
-      'inferenceMs': latMap?['dnnInferenceMs'],
-      'groupDelayMs': latMap?['dnnGroupDelayMs'],
+      'available': true,
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'activo%': '${(activeCount * 100 / samples).toStringAsFixed(0)}%',
+      'inferencia (min/avg/max)': inferences.isEmpty
+          ? 'N/A (DNN inactiva)'
+          : '${_min(inferences).toStringAsFixed(2)} / ${_avg(inferences).toStringAsFixed(2)} / ${_max(inferences).toStringAsFixed(2)} ms',
+      'estable': inferences.isEmpty || (_max(inferences) - _min(inferences)) < 2.0,
     };
   }
 
 
+  /// WDRC: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta distribución de regiones, min/avg/max gainFactor y niveles.
   Future<Map<String, dynamic>> _testWdrc() async {
-    final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
-    if (m == null) return {'available': false};
-    final data = Map<String, dynamic>.from(m);
-    final regions = ['Expansión', 'Lineal', 'Compresión'];
-    final region = data['wdrcRegion'];
+    const int durationMs = 5000;
+    const int intervalMs = 200;
+    const int expected = durationMs ~/ intervalMs;
+
+    final List<int> regions = [];
+    final List<double> gains = [];
+    final List<double> postWdrcLevels = [];
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
+        if (m != null) {
+          final data = Map<String, dynamic>.from(m);
+          final region = data['wdrcRegion'];
+          final gain = data['wdrcGainFactor'];
+          final postWdrc = data['postWdrcLevel'];
+          if (region is int) regions.add(region);
+          if (gain is num) gains.add(gain.toDouble());
+          if (postWdrc is num) postWdrcLevels.add(postWdrc.toDouble());
+          samples++;
+        }
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false};
+
+    double _avg(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a + b) / l.length;
+    double _min(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a < b ? a : b);
+    double _max(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a > b ? a : b);
+
+    final regionNames = ['Expansión', 'Lineal', 'Compresión'];
+    final regionCount = <int, int>{};
+    for (final r in regions) {
+      regionCount[r] = (regionCount[r] ?? 0) + 1;
+    }
+    final regionDist = regionCount.entries
+        .map((e) => '${regionNames[e.key.clamp(0, 2)]}: ${(e.value * 100 / samples).toStringAsFixed(0)}%')
+        .join(', ');
+
     return {
       'available': true,
-      'region': region,
-      'regionName': (region is int && region >= 0 && region <= 2)
-          ? regions[region]
-          : 'Desconocido',
-      'gainFactor': data['wdrcGainFactor'],
-      'preDnnLevelDb': data['preDnnLevelDb'],
-      'usesExternalLevel': data['wdrcUsesExternalLevel'],
-      'postNrLevel': data['postNrLevel'],
-      'postEqLevel': data['postEqLevel'],
-      'postWdrcLevel': data['postWdrcLevel'],
-      'postVolumeLevel': data['postVolumeLevel'],
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'distribuciónRegiones': regionDist,
+      'cambiosDeRegión': _countChanges(regions),
+      'gainFactor (min/avg/max)':
+          '${_min(gains).toStringAsFixed(3)} / ${_avg(gains).toStringAsFixed(3)} / ${_max(gains).toStringAsFixed(3)}',
+      'postWdrc (min/avg/max)':
+          '${_min(postWdrcLevels).toStringAsFixed(1)} / ${_avg(postWdrcLevels).toStringAsFixed(1)} / ${_max(postWdrcLevels).toStringAsFixed(1)} dB',
     };
   }
 
+  /// MPO Limiter: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta % tiempo limitando, clips acumulados, peak máximo.
   Future<Map<String, dynamic>> _testMpo() async {
-    final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
-    if (m == null) return {'available': false};
-    final data = Map<String, dynamic>.from(m);
+    const int durationMs = 5000;
+    const int intervalMs = 200;
+    const int expected = durationMs ~/ intervalMs;
+
+    int limitingCount = 0;
+    int sustainedCount = 0;
+    int totalClips = 0;
+    final List<double> peaks = [];
+    final List<double> fractions = [];
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
+        if (m != null) {
+          final data = Map<String, dynamic>.from(m);
+          final frac = data['mpoLimitingFraction'];
+          final sust = data['mpoLimitingSustained'];
+          final peak = data['peakSample'];
+          final clips = data['clipCount'];
+
+          if (frac is num) {
+            fractions.add(frac.toDouble());
+            if (frac > 0.0) limitingCount++;
+          }
+          if (sust == true) sustainedCount++;
+          if (peak is num) peaks.add(peak.toDouble());
+          if (clips is int) totalClips += clips;
+          samples++;
+        }
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false};
+
+    double _avg(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a + b) / l.length;
+    double _max(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a > b ? a : b);
+
     return {
       'available': true,
-      'mpoLimitingFraction': data['mpoLimitingFraction'],
-      'mpoLimitingSustained': data['mpoLimitingSustained'],
-      'outputLevel': data['outputLevel'],
-      'peakSample': data['peakSample'],
-      'clipCount': data['clipCount'],
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'limitando%': '${(limitingCount * 100 / samples).toStringAsFixed(0)}%',
+      'sostenido%': '${(sustainedCount * 100 / samples).toStringAsFixed(0)}%',
+      'fracciónPromedio': _avg(fractions).toStringAsFixed(4),
+      'peakMáximo': _max(peaks).toStringAsFixed(4),
+      'clipsAcumulados': totalClips,
     };
   }
 
+  /// Protección: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta estabilidad del clasificador de entorno y EQ max gain.
   Future<Map<String, dynamic>> _testProtection() async {
-    final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
-    if (m == null) return {'available': false};
-    final data = Map<String, dynamic>.from(m);
+    const int durationMs = 5000;
+    const int intervalMs = 200;
+    const int expected = durationMs ~/ intervalMs;
+
+    final List<int> envClasses = [];
+    final List<double> eqMaxGains = [];
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
+        if (m != null) {
+          final data = Map<String, dynamic>.from(m);
+          final env = data['environmentClass'];
+          final eqMax = data['eqMaxGain'];
+          if (env is int) envClasses.add(env);
+          if (eqMax is num) eqMaxGains.add(eqMax.toDouble());
+          samples++;
+        }
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false};
+
+    double _max(List<double> l) => l.isEmpty ? 0 : l.reduce((a, b) => a > b ? a : b);
+
+    final envNames = ['QUIET', 'SPEECH', 'SPEECH_IN_NOISE', 'NOISE'];
+    final envCount = <int, int>{};
+    for (final e in envClasses) {
+      envCount[e] = (envCount[e] ?? 0) + 1;
+    }
+    final dominantEnv = envCount.entries
+        .reduce((a, b) => a.value >= b.value ? a : b)
+        .key;
+    final envChanges = _countChanges(envClasses);
+
     return {
       'available': true,
-      'afc': 'Activo (default)',
-      'fbs': 'Activo (default)',
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'ambienteDominante': envNames[dominantEnv.clamp(0, 3)],
+      'cambiosDeAmbiente': envChanges,
+      'clasificadorEstable': envChanges <= 2,
+      'eqMaxGain': '${_max(eqMaxGains).toStringAsFixed(1)} dB',
+      'afc': 'Activo',
+      'fbs': 'Activo',
       'tnr': 'Configurado',
-      'sce': 'Activo (default)',
-      'expander': 'Configurado vía Smart Scene',
-      'eqMaxGain': data['eqMaxGain'],
-      'environmentClass': data['environmentClass'],
+      'sce': 'Activo',
+      'expander': 'Vía Smart Scene',
     };
   }
 
@@ -620,15 +873,52 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     };
   }
 
+  /// Salud del Sistema: polling 5 Hz durante 5 s (25 muestras).
+  /// Reporta delta de underruns y estabilidad de timestamps.
   Future<Map<String, dynamic>> _testHealth() async {
-    final m = await _channel.invokeMethod<Map>('getLatencyMetrics');
-    if (m == null) return {'available': false};
-    final data = Map<String, dynamic>.from(m);
+    const int durationMs = 5000;
+    const int intervalMs = 200;
+    const int expected = durationMs ~/ intervalMs;
+
+    int? underrunsStart;
+    int? underrunsEnd;
+    int healthyCount = 0;
+    int samples = 0;
+
+    for (int i = 0; i < expected; i++) {
+      if (!mounted) break;
+      try {
+        final m = await _channel.invokeMethod<Map>('getLatencyMetrics');
+        if (m != null) {
+          final data = Map<String, dynamic>.from(m);
+          final underruns = data['callbackUnderruns'];
+          final healthy = data['timestampsHealthy'];
+          if (underruns is int) {
+            underrunsStart ??= underruns;
+            underrunsEnd = underruns;
+          }
+          if (healthy == true) healthyCount++;
+          samples++;
+        }
+      } catch (_) {}
+      if (i < expected - 1) {
+        await Future.delayed(const Duration(milliseconds: intervalMs));
+      }
+    }
+
+    if (samples == 0) return {'available': false};
+
+    final newUnderruns = (underrunsEnd ?? 0) - (underrunsStart ?? 0);
+
     return {
       'available': true,
-      'callbackUnderruns': data['callbackUnderruns'],
-      'timestampsHealthy': data['timestampsHealthy'],
-      'schemaVersion': data['schemaVersion'],
+      'duración': '${durationMs ~/ 1000} s',
+      'muestras': samples,
+      'underrunsInicio': underrunsStart ?? 0,
+      'underrunsFin': underrunsEnd ?? 0,
+      'underrunsNuevos': newUnderruns,
+      'creciendoActivamente': newUnderruns > 0,
+      'timestampsHealthy%': '${(healthyCount * 100 / samples).toStringAsFixed(0)}%',
     };
   }
 
