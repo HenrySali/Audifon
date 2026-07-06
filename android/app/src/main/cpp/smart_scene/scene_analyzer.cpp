@@ -418,8 +418,13 @@ SceneClass SceneAnalyzer::classifyScene(float inputDbSpl,
     }
 
     // 2) Música: armónica estable, flatness baja, sin voz, nivel alto.
+    //    FIX: agregar condición SNR > 0 para no confundir ruido de fondo
+    //    estacionario (que puede tener flatness baja y centroide alto)
+    //    con música real. Ruido de fondo tiene SNR negativo (no hay señal
+    //    intencional dominando sobre el piso) → no es música.
     if (!voiceActive && f.flatness < kMusicFlatnessMax &&
-        f.centroid_hz >= kMusicCentroidMinHz && inputDbSpl >= 50.0f) {
+        f.centroid_hz >= kMusicCentroidMinHz && inputDbSpl >= 50.0f &&
+        snrDb > 0.0f) {
         float c = ((kMusicFlatnessMax - f.flatness) / kMusicFlatnessMax) * 0.6f +
                   ((f.centroid_hz - kMusicCentroidMinHz) / 4000.0f) * 0.4f;
         confidenceOut = c < 0.0f ? 0.0f : (c > 1.0f ? 1.0f : c);
