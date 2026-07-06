@@ -193,10 +193,40 @@ void SceneAnalyzer::computeFft() {
                                 features);
     hasPrevMagnitude_ = true;
 
-    // 6) Bandas EQ y noise profile.
+    // ── FIX piso pegado en -60 (grabaciones Moto G32) ──────────────────────
+    // band_energy_db viene del PROMEDIO de potencia por bin de la FFT con
+    // ventana Hann (magnitude_[k] = |X[k]|/N), que vive ~25-30 dB por DEBAJO
+    // del nivel RMS de banda ancha del bloque. Como el consumidor acota el piso
+    // a [-60, -40] dBFS, el piso caía por debajo de -60 y quedaba PEGADO al
+    // borde (-60.00 constante en los logs) → el SNR no reflejaba el ruido real.
+    //
+    // Calibramos las energías por banda al MISMO dominio dBFS que inputDbFs
+    // (el nivel real del mic). Por Parseval, la suma de potencias por bin ≈ el
+    // mean-square del bloque; el offset que alinea el promedio espectral por
+    // bin con inputDbFs es (salvo la corrección de ventana/one-sided, que
+    // absorbemos) esencialmente constante e independiente del contenido. Así el
+    // piso pasa a estimarse sobre energía calibrada: en silencio real (ruido
+    // propio del mic ~-50 dBFS) cae naturalmente dentro del rango y SE MUEVE
+    // con el ruido de fondo, en vez de quedarse clavado en -60.
+    const float inputDbFsForCal = inputDbSpl - splOffset_;
+    double specPowSum = 0.0;
+    for (int k = 1; k < kSceneFftBins; ++k) {
+        specPowSum += static_cast<double>(magnitude_[k]) * magnitude_[k];
+    }
+    float bandCalibOffsetDb = 0.0f;
+    const int usedBins = kSceneFftBins - 1;
+    if (specPowSum > 1e-20 && usedBins > 0 && inputDbSpl > 0.0f) {
+        const float broadbandAvgDb = 10.0f * std::log10(
+            static_cast<float>(specPowSum / static_cast<double>(usedBins)));
+        bandCalibOffsetDb = inputDbFsForCal - broadbandAvgDb;
+    }
+
+    // 6) Bandas EQ y noise profile — sobre energía CALIBRADA a dBFS. El mismo
+    //    offset se aplica a las bandas que consume el VAD (paso 8), de modo que
+    //    las diferencias banda-vs-piso que usa el VAD quedan inalteradas.
     float bandsDb[kSceneNumBands];
     for (int b = 0; b < kSceneNumBands; ++b) {
-        bandsDb[b] = features.band_energy_db[b];
+        bandsDb[b] = features.band_energy_db[b] + bandCalibOffsetDb;
     }
     noise_.update(bandsDb);
     float noiseFloorDb = noise_.getNoiseFloorDb();

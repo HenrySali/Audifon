@@ -68,7 +68,13 @@ void NoiseProfile::update(const float bandEnergyDb[kSceneNumBands]) {
         }
         sumGlobal += noiseDb_[b];
     }
-    globalNoiseFloorDb_ = static_cast<float>(sumGlobal / kSceneNumBands);
+    // Compensación de sesgo del mínimo (Martin 2001, B_min): el promedio de
+    // los mínimos por banda subestima ~9 dB la potencia media del ruido
+    // estacionario. Sumamos el offset SOLO al escalar global (el perfil por
+    // banda noiseDb_/getProfileDb() queda crudo para el VAD). El consumidor
+    // (scene_analyzer) acota luego a [-60,-40] dBFS de forma defensiva.
+    globalNoiseFloorDb_ =
+        static_cast<float>(sumGlobal / kSceneNumBands) + kMinStatBiasCompDb;
 }
 
 } // namespace smart_scene

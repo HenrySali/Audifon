@@ -249,6 +249,15 @@ public:
     /// @param thresholdDbSpl Threshold en dB SPL (rango clínico [80, 132])
     void setMpoThresholdDbSpl(float thresholdDbSpl);
 
+    /// Ajusta el ancho de la rodilla suave (soft-knee) del limitador MPO, en
+    /// dB. FIX voz ronca: el MPO reduce la ganancia de forma progresiva por
+    /// DEBAJO del techo en vez de recortar duro (hard-clamp). Default seguro
+    /// (6 dB) aplicado en el constructor del MpoLimiter — este setter sólo se
+    /// necesita para afinación/diagnóstico. El invariante |output| ≤ threshold
+    /// se mantiene siempre. Thread-safe (1 atomic store).
+    /// @param kneeWidthDb Ancho de rodilla en dB (0 = hard-clamp clásico).
+    void setMpoKneeWidthDb(float kneeWidthDb);
+
     /// Obtiene el último nivel de entrada medido PRE-EQ (dB SPL).
     /// Actualizado cada bloque. Seguro para leer desde cualquier hilo.
     float getLastInputLevelDb() const;

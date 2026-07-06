@@ -32,6 +32,21 @@ public:
     /// real (~-50 dBFS) para evitar el undertrack transitorio a -77..-97 dBFS.
     static constexpr float kInitNoiseFloorDb = -50.0f;
 
+    /// Compensación de sesgo del mínimo (Martin 2001, factor B_min). El
+    /// estimador minimum-statistics toma el MÍNIMO de la ventana, que
+    /// subestima sistemáticamente la potencia media del ruido estacionario:
+    /// cuanto más larga la ventana (aquí kMinWindowSize=50) y más fluctuante
+    /// el ruido, mayor el sesgo hacia abajo. Empíricamente, con ruido de mic
+    /// a -50 dBFS el mínimo cae ~9 dB por debajo (piso estimado -59 dBFS).
+    /// Martin (2001) corrige este sesgo multiplicando la potencia mínima por
+    /// un factor B_min > 1 (equivalente a sumar un offset en dB) para que el
+    /// piso estimado quede cerca del nivel real. Aplicamos ese offset SOLO al
+    /// escalar global (no al perfil por banda que consume el VAD, que necesita
+    /// las diferencias banda-vs-mínimo sin alterar).
+    /// Ref: R. Martin, "Noise Power Spectral Density Estimation Based on
+    /// Optimal Smoothing and Minimum Statistics", IEEE TSAP 9(5), 2001.
+    static constexpr float kMinStatBiasCompDb = 9.0f;
+
     NoiseProfile();
 
     /// Reinicia el estado interno.

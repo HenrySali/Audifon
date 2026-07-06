@@ -567,6 +567,13 @@ void DspPipeline::setMpoThresholdDbSpl(float thresholdDbSpl) {
     applyMpoThresholdFromDbSpl(thresholdDbSpl);
 }
 
+void DspPipeline::setMpoKneeWidthDb(float kneeWidthDb) {
+    // Forward directo al limitador. La validación (NaN/Inf, rango) la hace
+    // MpoLimiter::setKneeWidthDb. No altera el techo de seguridad: la rodilla
+    // sólo actúa por debajo del threshold.
+    mpo_.setKneeWidthDb(kneeWidthDb);
+}
+
 void DspPipeline::applyMpoThresholdFromDbSpl(float dbSpl) {
     // MPO clínico no seteado (NaN) → techo digital puro (comportamiento legacy).
     if (!std::isfinite(dbSpl)) {

@@ -72,6 +72,23 @@ public:
     /// @param linear Threshold en amplitud lineal (debe ser > 0)
     void setThresholdLinear(float linear);
 
+    /// Establece el ancho de la RODILLA SUAVE (soft-knee) del limitador, en dB.
+    /// FIX voz ronca (grabaciones Moto G32): el limitador reduce la ganancia de
+    /// forma PROGRESIVA en la ventana [threshold·10^(-knee/2/20), threshold]
+    /// (por DEBAJO del techo) en vez de recortar la onda de golpe. Por encima
+    /// del knee se comporta como brickwall (ganancia = threshold/env) y el
+    /// hard-clamp final sigue siendo la red de seguridad absoluta.
+    /// - knee = 0 → comportamiento hard-clamp clásico (sin rodilla).
+    /// - knee > 0 → compresión de rodilla cuadrática antes del techo.
+    /// El INVARIANTE |output| ≤ thresholdLinear se mantiene siempre: la rodilla
+    /// sólo actúa por debajo del techo, nunca lo eleva.
+    /// @param kneeWidthDb Ancho de rodilla en dB (default seguro: 6 dB).
+    void setKneeWidthDb(float kneeWidthDb);
+
+    /// Obtiene el ancho de rodilla suave actual en dB.
+    /// @return Ancho de rodilla ∈ [0, ∞).
+    float getKneeWidthDb() const;
+
     /// Obtiene el threshold actual en amplitud lineal.
     /// @return Threshold lineal actual
     float getThresholdLinear() const;
@@ -111,6 +128,15 @@ private:
 
     /// Threshold en amplitud lineal (default: 10^((100-120)/20) = 0.1)
     std::atomic<float> thresholdLinear_{0.1f};
+
+    /// Ancho de la rodilla suave (soft-knee) en dB. Default 6 dB: la ganancia
+    /// empieza a reducirse ~3 dB por debajo del techo y llega a la reducción
+    /// plena (brickwall) al alcanzarlo. Valor conservador que suaviza el
+    /// recorte sin sacrificar headroom clínico. 0 → hard-clamp clásico.
+    std::atomic<float> kneeWidthDb_{kDefaultKneeWidthDb};
+
+    /// Ancho de rodilla por defecto (dB).
+    static constexpr float kDefaultKneeWidthDb = 6.0f;
 
     // --- Estado interno (solo accedido desde hilo de audio) ---
 

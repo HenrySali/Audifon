@@ -134,3 +134,23 @@ Plan de codificación incremental para llevar el modo MVDR a nivel producción. 
 - Por cada parámetro nuevo, trazar los tres eslabones C++ → `NativeAudioBridge.kt` → Dart antes de cerrar la tarea. Recordar que el paciente **clona** el C++ del técnico.
 - La tarea 8 es el único **Cambio_Prescriptivo**: impacta la prescripción del paciente y requiere confirmación explícita + validación en oído real (REM) y revisión audiológica humana. Ningún test de software la sustituye.
 - Las tareas de test re-procesan grabaciones offline ya existentes; no incluyen grabar audio nuevo con el paciente ni pruebas manuales de escucha.
+
+## Nota de afinación post-implementación (grabaciones reales Moto G32)
+
+Afinación derivada de grabaciones reales (ambiente doméstico tranquilo, voz cercana). Dos correcciones de audio, sin cambios prescriptivos, seguridad clínica intacta. Diagnostics limpios en todos los archivos tocados. Tests host standalone (patrón MSVC) actualizados; no ejecutados en el entorno del agente (sin toolchain C++), listos para correr en la máquina del dev.
+
+### A — Voz ronca por recorte duro del MPO → soft-knee (rodilla suave)
+- Evidencia: `postEqDb` 121–126 dB SPL con MPO en 98.75 dB (≈25 dB sobre el techo), `wdrcGain≈1.0`, `mpoFrac=1.0` → hard-clamp muestra-a-muestra → THD audible (voz ronca).
+- Cambio: `mpo_limiter.{h,cpp}` — la ganancia del limitador pasa de salto 1.0→brickwall a una **rodilla cuadrática (soft-knee)** que reduce la ganancia PROGRESIVAMENTE en la ventana `[-knee/2, +knee/2]` dB alrededor del threshold (por DEBAJO del techo). Por encima de la rodilla: brickwall (`gain = threshold/env`). El **hard-clamp final se mantiene** como red de seguridad absoluta → INVARIANTE `|salida| ≤ thresholdLinear` intacto (Property 9).
+- Parámetro nuevo: `kneeWidthDb_` (atómico, default seguro **6 dB**, acotado `[0,24]`; `0` = hard-clamp clásico). Setter `MpoLimiter::setKneeWidthDb()` + forwarder `DspPipeline::setMpoKneeWidthDb()`. Control interno de afinación; no se cableó UI/JNI (default seguro aplicado en el constructor). El paciente clona el mismo C++ → hereda el fix sin cambios adicionales.
+- Test: `cpp/tests/mpo_invariant_test.cpp` — Property 9/10 siguen valiendo; añadida **Property 11** (soft-knee reduce ganancia progresivamente por debajo del techo, monotonía con el nivel, contraste con hard-clamp `knee=0`, e invariante `|salida| ≤ threshold`).
+
+### B — Piso de ruido pegado en -60 → calibración a dBFS del input real
+- Evidencia: `noise_db_spl` SIEMPRE en -60.00 (borde del clamp). El piso venía de `features.band_energy_db[b]` (promedio de potencia por bin de la FFT con ventana Hann, ~25–30 dB por debajo del RMS de banda ancha) → caía bajo -60 y quedaba clavado en el borde; el SNR no reflejaba el ruido real.
+- Cambio: `smart_scene/scene_analyzer.cpp::computeFft()` — se calibran las energías por banda al MISMO dominio dBFS que `inputDbFs` mediante un offset derivado por Parseval (`bandCalibOffsetDb = inputDbFs − promedio espectral por bin`), aplicado a `bandsDb` ANTES de `noise_.update()` y del `vad_.process()`. Como el VAD sólo usa diferencias banda-vs-piso, el mismo offset a ambos lados deja su comportamiento inalterado. El clamp `[-60,-40]` queda como red defensiva; ahora el piso SE MUEVE dentro del rango (silencio real ~-50 dBFS) y SUBE con el ruido de fondo.
+- `noise_profile.{h,cpp}` sin cambios (init -50 dBFS ya es coherente con el nuevo dominio calibrado).
+- Test: `smart_scene/tests/test_noise_scale.cpp` — añadido **Test C** (`testFloorMovesWithNoise`): con ruido blanco a nivel de mic real, el piso NO queda pegado en -60 y SUBE al aumentar el ruido de fondo.
+
+### Cadena C++→Kotlin→Dart y CMake
+- Sólo se editaron `.cpp/.h` ya listados en `add_library(hearing_aid_dsp ...)` (`mpo_limiter.cpp`, `dsp_pipeline.cpp`, `smart_scene/scene_analyzer.cpp`) → **no requiere tocar `CMakeLists.txt`**. Los tests son host standalone (no entran al `.so`).
+- No se añadió superficie JNI nueva (el soft-knee es afinación interna con default seguro). No se tocó la app del paciente; el paciente clona el C++ del técnico y hereda ambos fixes.

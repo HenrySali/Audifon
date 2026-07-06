@@ -70,6 +70,10 @@ void MpoLimiter::process(float* buffer, int blockSize) {
         return;
     }
 
+    // Ancho de rodilla suave (dB). Leído una vez por bloque (atómico).
+    const float kneeWidthDb = kneeWidthDb_.load(std::memory_order_relaxed);
+    const float halfKneeDb = 0.5f * kneeWidthDb;
+
     // Umbral de "sostenido" en muestras, derivado del sample rate actual.
     // Al menos 1 muestra para evitar degenerados con sampleRate inválido.
     const int sustainedThreshSamples = std::max(
@@ -90,9 +94,40 @@ void MpoLimiter::process(float* buffer, int blockSize) {
         const float envCoeff = (absSample > env_) ? attackCoeff_ : releaseCoeff_;
         env_ += envCoeff * (absSample - env_);
 
-        // Ganancia objetivo = threshold / envolvente (compresiva). Si la
-        // envolvente no supera el threshold, ganancia unitaria (no limita).
-        gain_ = (env_ > threshold) ? (threshold / env_) : 1.0f;
+        // --- Ganancia objetivo con RODILLA SUAVE (soft-knee) ---
+        // FIX voz ronca (grabaciones Moto G32): en vez de saltar de ganancia
+        // 1.0 (sin limitar) a threshold/env (brickwall) justo en el techo —lo
+        // que hacía que la señal muy por encima entrara casi entera al
+        // hard-clamp y se recortara duro (THD → voz ronca)— aplicamos una
+        // rodilla cuadrática que reduce la ganancia PROGRESIVAMENTE en la
+        // ventana [-knee/2, +knee/2] dB alrededor del threshold. Por encima de
+        // la rodilla actúa el brickwall (threshold/env) y el hard-clamp final
+        // sigue garantizando el techo. La rodilla actúa SIEMPRE por debajo del
+        // techo → el invariante |output| ≤ threshold se mantiene.
+        //
+        // Sea overshootDb = 20·log10(env/threshold):
+        //   overshootDb ≤ -knee/2  → gain = 1.0 (sin limitar)
+        //   overshootDb ≥ +knee/2  → gain = threshold/env (brickwall)
+        //   en la rodilla          → gainDb = -(overshootDb+knee/2)² / (2·knee)
+        if (env_ <= 0.0f) {
+            gain_ = 1.0f;
+        } else if (kneeWidthDb <= 0.0f) {
+            // Sin rodilla → hard-clamp clásico (comportamiento previo).
+            gain_ = (env_ > threshold) ? (threshold / env_) : 1.0f;
+        } else {
+            const float overshootDb = 20.0f * std::log10(env_ / threshold);
+            if (overshootDb <= -halfKneeDb) {
+                gain_ = 1.0f;
+            } else if (overshootDb >= halfKneeDb) {
+                gain_ = threshold / env_;  // brickwall
+            } else {
+                // Rodilla cuadrática (ratio→∞): la ganancia baja suave desde
+                // 0 dB en el borde inferior hasta la reducción plena arriba.
+                const float x = overshootDb + halfKneeDb;
+                const float gainDb = -(x * x) / (2.0f * kneeWidthDb);
+                gain_ = std::pow(10.0f, gainDb / 20.0f);
+            }
+        }
 
         // Asegurar que la ganancia nunca excede 1.0 (MPO nunca amplifica)
         if (gain_ > 1.0f) {
@@ -162,6 +197,22 @@ void MpoLimiter::setThresholdLinear(float linear) {
     if (linear > 0.0f) {
         thresholdLinear_.store(linear, std::memory_order_relaxed);
     }
+}
+
+void MpoLimiter::setKneeWidthDb(float kneeWidthDb) {
+    // Rechazar NaN/Inf; acotar a [0, 24] dB (una rodilla > 24 dB no aporta
+    // y arrancaría a atenuar la voz conversacional). 0 → hard-clamp clásico.
+    if (!std::isfinite(kneeWidthDb) || kneeWidthDb < 0.0f) {
+        return;
+    }
+    if (kneeWidthDb > 24.0f) {
+        kneeWidthDb = 24.0f;
+    }
+    kneeWidthDb_.store(kneeWidthDb, std::memory_order_relaxed);
+}
+
+float MpoLimiter::getKneeWidthDb() const {
+    return kneeWidthDb_.load(std::memory_order_relaxed);
 }
 
 // ============================================================================
