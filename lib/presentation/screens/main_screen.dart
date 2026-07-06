@@ -44,6 +44,7 @@ import 'dsp_test_screen.dart';
 import 'simulator_screen.dart';
 import 'smart_scene_screen.dart';
 import 'spectrum_analyzer_screen.dart';
+import 'subsystem_diagnostics_screen.dart';
 import 'preset_learning_screen.dart';
 import 'technical_service_screen.dart';
 import '../../feedback_checklist/screens/feedback_checklist_dialog.dart';
@@ -968,6 +969,22 @@ class _StatusBar extends StatelessWidget {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const SpectrumAnalyzerScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Botón de diagnóstico de subsistemas
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.developer_board, color: Colors.white70, size: 21),
+                      tooltip: 'Diagnóstico Subsistemas',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SubsystemDiagnosticsScreen(),
                           ),
                         );
                       },
