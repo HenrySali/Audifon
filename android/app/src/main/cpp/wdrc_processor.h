@@ -133,6 +133,13 @@ private:
     /// Rango: [0.0, 1.0]. Inicializado a 1.0 (sin atenuación).
     float smoothedGain_ = 1.0f;
 
+public:
+    /// Retorna el último gain factor aplicado (post-suavizado).
+    /// Thread-safe para lectura casual desde hilo de diagnóstico.
+    float getLastGainFactor() const { return smoothedGain_; }
+
+private:
+
     /// Coeficientes de suavizado pre-calculados.
     /// attackCoeff: para transiciones rápidas (ganancia baja → más rápido)
     /// releaseCoeff: para transiciones lentas (ganancia sube → más lento)

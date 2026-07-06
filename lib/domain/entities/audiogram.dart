@@ -22,29 +22,27 @@ class Audiogram extends Equatable {
   /// Mapa de frecuencia (Hz) a umbral auditivo (dB HL).
   final Map<int, double> thresholds;
 
-  /// Audiograma predeterminado del usuario: 10 dB HL plano en las 12
-  /// frecuencias estándar.
+  /// Audiograma predeterminado del usuario: pérdida descendente moderada
+  /// configurada como seteo inicial de fábrica.
   ///
-  /// Decisión clínica: 10 dB HL es el límite superior de audición normal
-  /// (rango 0-25 dB HL según ANSI S3.6 / ISO 8253-1). Usar un audiograma
-  /// plano "casi normal" como default evita amplificar a un usuario antes
-  /// de que se mida — la prescripción NAL-NL2 sobre HL=10 produce
-  /// ganancias = 0 (extrapolación bajo el inicio de tabla en 20 dB HL,
-  /// luego clamped). Solo amplifica una vez que el usuario configura un
-  /// audiograma real.
+  /// Perfil: pérdida leve en graves (25 dB HL @ 250 Hz) progresando a
+  /// moderada-severa en agudos (60 dB HL @ 8 kHz). Compatible con
+  /// prescripción NAL-NL2 que produce ganancias significativas en
+  /// frecuencias del habla (2-4 kHz). El usuario puede sobrescribir
+  /// estos valores desde la pantalla "Configurar Audiograma".
   static const Map<int, double> defaultThresholds = {
-    250: 10,
-    500: 10,
-    750: 10,
-    1000: 10,
-    1500: 10,
-    2000: 10,
-    2500: 10,
-    3000: 10,
-    3500: 10,
-    4000: 10,
-    6000: 10,
-    8000: 10,
+    250: 25,
+    500: 30,
+    750: 35,
+    1000: 40,
+    1500: 40,
+    2000: 45,
+    2500: 45,
+    3000: 50,
+    3500: 50,
+    4000: 55,
+    6000: 55,
+    8000: 60,
   };
 
   /// Frecuencias audiométricas estándar (Hz).

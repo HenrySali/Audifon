@@ -396,6 +396,9 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     // dispare compresión innecesaria.
     wdrc_.process(buffer, blockSize, inputLevelDb);
 
+    // Métrica: gain factor efectivo del WDRC (FIX: antes nunca se escribía).
+    lastWdrcGainFactor_.store(wdrc_.getLastGainFactor(), std::memory_order_relaxed);
+
     // Métrica: nivel post-WDRC
     lastPostWdrcLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
