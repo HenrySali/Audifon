@@ -111,14 +111,14 @@ public:
     static constexpr float kAlphaDD  = 0.85f;
 
     /// Histéresis ancha. La banda muerta es 0.20.
-    /// Bajado a 0.50 porque el score natural de voz Klatt + voz real
-    /// del usuario en celular oscila entre 0.45 y 0.55 (LRT > 5,
-    /// midSnr > 6 dB, pitch ≈ 0.2). Con threshold 0.55 no se sostenía.
-    /// La diferencia con threshold low (0.30) sigue dando 20 puntos
-    /// de banda muerta — suficiente para evitar flicker en transición
-    /// silencio → voz → silencio.
-    static constexpr float kVoiceThresholdHigh = 0.55f;  // bajado 0.62→0.55: voz SCO da score 0.50-0.57
-    static constexpr float kVoiceThresholdLow  = 0.35f;
+    /// FIX (diagnóstico MVDR en ruido sin voz): ruido fuerte (89 dB SPL)
+    /// con estructura espectral producía score 0.76 que disparaba el VAD.
+    /// Subidos ambos umbrales para que solo voz humana real (score > 0.65
+    /// sostenido) active el flag. Ruido sin voz queda en 0.50-0.76 →
+    /// ya no cruza el threshold alto.
+    /// Banda muerta: 0.65 - 0.45 = 0.20 (misma amplitud que antes).
+    static constexpr float kVoiceThresholdHigh = 0.65f;  // subido 0.55→0.65
+    static constexpr float kVoiceThresholdLow  = 0.45f;  // subido 0.35→0.45
 
     /// Gate por nivel absoluto: por debajo de este SPL forzamos silencio.
     static constexpr float kMinSpeechDbSpl = 30.0f;

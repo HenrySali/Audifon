@@ -304,13 +304,13 @@ private:
         // Solución de 2 capas:
         //   1. Los primeros kRnnWarmupFrames (50) fuerzan actualización
         //      incondicional (captura Rnn inicial).
-        //   2. Después del warmup, cada kRnnRefreshInterval frames (100 =
-        //      ~1.6 s @ 62.5 fps) se fuerza UNA actualización aunque el VAD
+        //   2. Después del warmup, cada kRnnRefreshInterval frames (20 =
+        //      ~320 ms @ 62.5 fps) se fuerza UNA actualización aunque el VAD
         //      diga voz. Esto mantiene Rnn actualizada ante cambios lentos
         //      del ruido de fondo sin degradar la voz (1 frame de 8 ms cada
-        //      1.6 s es imperceptible).
+        //      320 ms es imperceptible — 3 actualizaciones/s).
         constexpr int kRnnWarmupFrames = 50;
-        constexpr int kRnnRefreshInterval = 100;
+        constexpr int kRnnRefreshInterval = 20;
         const bool warmup = (frameCount_ < kRnnWarmupFrames);
         const bool periodicRefresh = (frameCount_ >= kRnnWarmupFrames) &&
                                      ((frameCount_ % kRnnRefreshInterval) == 0);
