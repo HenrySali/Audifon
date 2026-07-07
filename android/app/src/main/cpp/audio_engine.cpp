@@ -445,6 +445,12 @@ void AudioEngine::setSmartPresetPinned(bool pinned) {
 
 void AudioEngine::applyScenePreset(const ScenePreset& preset) {
     pipeline_.applyScenePreset(preset);
+    // Aplicar también el modo de enhancement del preset (unificación
+    // de clasificadores: ScenePolicy decide todo, incluyendo el motor).
+    if (preset.enhancementMode >= 0 && preset.enhancementMode <= 3) {
+        setEnhancementEngineMode(
+            static_cast<EnhancementEngineMode>(preset.enhancementMode));
+    }
 }
 
 int AudioEngine::getCurrentEnvironmentClass() const {
@@ -587,20 +593,23 @@ void AudioEngine::setEnhancementEngineMode(EnhancementEngineMode mode) {
 
     // Mantener el flag del MVDR coherente con el modo (su process() hace
     // bypass a ch0 si no está enabled; renderEngineChunk lo invoca directo).
-    mvdrBeamformer_.setEnabled(mode == EnhancementEngineMode::kMvdrBackup
+    mvdrBeamformer_.setEnabled((mode == EnhancementEngineMode::kMvdrBackup
+                               || mode == EnhancementEngineMode::kHybridMvdrDnn)
                                && stereoInputAvailable_);
 
     // Habilitar/deshabilitar la instancia dual: processStereo() hace bypass a
     // ch0 salvo que enabled_==true (usa su propio crossfade dry/wet interno
     // de 50 ms, que complementa el crossfade ENTRE motores del callback).
-    dnnDenoiserDual_.setEnabled(mode == EnhancementEngineMode::kDualChannelDnn);
+    dnnDenoiserDual_.setEnabled(mode == EnhancementEngineMode::kDualChannelDnn
+                                || mode == EnhancementEngineMode::kHybridMvdrDnn);
 
-    // Los modos kDualChannelDnn y kMvdrBackup requieren captura estéreo.
+    // Los modos kDualChannelDnn, kMvdrBackup y kHybridMvdrDnn requieren captura estéreo.
     // Reutilizamos la lógica de re-open (Fix #3) SÓLO cuando cambia la
     // geometría de captura mono→estéreo (tarea 3.4). kBypass no fuerza
     // re-open: se queda en la geometría actual (lo más simple).
     const bool needStereo = (mode == EnhancementEngineMode::kDualChannelDnn
-                             || mode == EnhancementEngineMode::kMvdrBackup);
+                             || mode == EnhancementEngineMode::kMvdrBackup
+                             || mode == EnhancementEngineMode::kHybridMvdrDnn);
 
     if (needStereo && running_.load(std::memory_order_acquire)
         && !stereoInputAvailable_) {
@@ -610,7 +619,8 @@ void AudioEngine::setEnhancementEngineMode(EnhancementEngineMode mode) {
         start(config_);
         // Tras el re-open, mvdrBeamformer_ ya quedó configurado por start()
         // según el modo (Step 5c). Sincronizamos enabled por las dudas.
-        mvdrBeamformer_.setEnabled(mode == EnhancementEngineMode::kMvdrBackup
+        mvdrBeamformer_.setEnabled((mode == EnhancementEngineMode::kMvdrBackup
+                                   || mode == EnhancementEngineMode::kHybridMvdrDnn)
                                    && stereoInputAvailable_);
     }
 
@@ -642,6 +652,35 @@ void AudioEngine::renderEngineChunk(EnhancementEngineMode mode,
             // 2 mics → MVDR → mono. Si el beamformer está deshabilitado,
             // process() ya hace bypass a ch0 internamente.
             mvdrBeamformer_.process(ch0, ch1, dst, chunk, vadActive);
+            break;
+        case EnhancementEngineMode::kHybridMvdrDnn:
+            // Modo híbrido: MVDR crossover ≤1000 Hz + DualDNN completa.
+            // El MVDR solo cancela ruido en graves (donde funciona sin
+            // aliasing), y la DNN limpia todo el espectro.
+            // Estrategia: DNN procesa primero (fullband), luego el MVDR
+            // reemplaza las bajas frecuencias con su versión beamformed.
+            {
+                // DNN procesa fullband
+                dnnDenoiserDual_.processStereo(ch0, ch1, dst, chunk);
+                // MVDR procesa en paralelo (solo usamos ≤1000 Hz de su salida)
+                float mvdrOut[kMaxBeamBlockSize];
+                mvdrBeamformer_.process(ch0, ch1, mvdrOut, chunk, vadActive);
+                // Crossover: mezclar MVDR en bajas frecuencias.
+                // Filtro simple 1er orden LPF a 1000 Hz para la contribución MVDR.
+                // alpha = 2*pi*fc / (2*pi*fc + SR) ≈ fc/(fc + SR/(2*pi))
+                const float fc = 1000.0f;
+                const float alpha = fc / (fc + static_cast<float>(config_.sampleRate) / 6.2832f);
+                for (int i = 0; i < chunk; ++i) {
+                    // Extraer componente grave del MVDR
+                    hybridLpState_ = alpha * mvdrOut[i] + (1.0f - alpha) * hybridLpState_;
+                    float mvdrLow = hybridLpState_;
+                    // Extraer componente grave del DNN (para restarla)
+                    hybridLpStateDnn_ = alpha * dst[i] + (1.0f - alpha) * hybridLpStateDnn_;
+                    float dnnLow = hybridLpStateDnn_;
+                    // Reemplazar graves de DNN con graves de MVDR
+                    dst[i] = (dst[i] - dnnLow) + mvdrLow;
+                }
+            }
             break;
         case EnhancementEngineMode::kBypass:
         default:
@@ -982,6 +1021,13 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // numFrames > kMaxBeamBlockSize) y además ignoraba el beamforming. Usar
     // `outPtr` da al VAD la señal coherente con la que sale del beamformer.
     sceneAnalyzer_.process(outPtr, numFrames);
+
+    // Propagar la SceneClass del SceneAnalyzer al pipeline para que la
+    // tabla unificada (scene_policy.h) tome las decisiones de NR/WDRC/TNR.
+    {
+        auto snap = sceneAnalyzer_.getSnapshot();
+        pipeline_.setLastSceneClass(snap.scene_class);
+    }
 
     // ─── Cablear voice_active al DNN denoiser para el cap del Paso 1 ────
     // Spec dnn-voice-level-recovery R1.1, R1.2, R5.2:

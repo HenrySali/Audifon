@@ -83,7 +83,7 @@ public:
     // bajos sin distorsionar la voz (robust MVDR / diagonal loading clásico,
     // Cox et al.; validado en implementaciones de audífono smartphone).
     static constexpr float kReg = 1e-3f;                  ///< Diagonal loading (regularizacion)
-    static constexpr float kMicSpacing = 0.14f;           ///< Separacion entre mics (metros)
+    static constexpr float kMicSpacing = 0.16f;           ///< Separacion entre mics (metros) — Moto G32: 160mm bottom-to-top
     static constexpr float kSoundSpeed = 343.0f;          ///< Velocidad del sonido (m/s)
     static constexpr float kPi = 3.14159265358979f;
 

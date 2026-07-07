@@ -25,15 +25,18 @@ enum AudioEngineState {
 /// Reemplaza el toggle binario de beamforming por una selección de tres
 /// motores mutuamente excluyentes. El valor entero [nativeValue] es el
 /// contrato con el lado nativo: `setEnhancementEngineMode` espera
-/// `{"mode": Int}` donde 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup.
+/// `{"mode": Int}` donde 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup (experimental).
 enum EnhancementEngineMode {
   /// Sin realce: passthrough del canal 0. Default de arranque seguro.
   bypass(0),
 
-  /// Realce DNN dual-channel (GTCRN). Motor recomendado.
+  /// Realce DNN dual-channel (GTCRN). Motor recomendado — funciona en
+  /// cualquier hardware sin depender de geometría de micrófonos.
   dualChannelDnn(1),
 
-  /// Beamformer MVDR clásico. Respaldo.
+  /// Beamformer MVDR clásico. EXPERIMENTAL — no funciona correctamente
+  /// en dispositivos con mic spacing > 8 cm (aliasing espacial). Oculto
+  /// del selector principal. Solo accesible para investigación.
   mvdrBackup(2);
 
   const EnhancementEngineMode(this.nativeValue);

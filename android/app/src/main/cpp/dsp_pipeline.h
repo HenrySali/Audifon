@@ -68,6 +68,7 @@ struct ScenePreset {
     bool tnrEnabled = false;     ///< Transient Noise Reducer ON/OFF
     float mpoThresholdDbSpl = 110.0f; ///< MPO broadband en dB SPL
     bool pinPreset = true;       ///< Si true, fija el pin del preset Smart
+    int enhancementMode = 0;     ///< 0=Bypass, 1=DualDNN, 2=MVDR, 3=DualDNN+MVDR(híbrido)
 };
 
 /// Pipeline DSP principal — procesa bloques de audio en tiempo real.
@@ -528,8 +529,20 @@ private:
     std::atomic<int> lastWdrcRegion_{1};             ///< 0=expansion, 1=linear, 2=compression
 
     // --- Estado interno para el clasificador ---
-    int lastEnvClass_ = 0;  ///< Última clase de entorno aplicada
+    int lastEnvClass_ = 0;  ///< Última clase de entorno (4 clases, solo métricas)
     int currentNrLevel_ = 0; ///< Nivel NR actual (transiciones graduales)
+
+    /// Última SceneClass del SceneAnalyzer (8 clases). Actualizado por
+    /// AudioEngine tras cada sceneAnalyzer_.process(). El pipeline lo lee
+    /// para aplicar la tabla unificada (scene_policy.h).
+    std::atomic<uint8_t> lastSceneClass_{0};  ///< 0=UNKNOWN
+
+public:
+    /// Setter llamado por AudioEngine tras sceneAnalyzer_.process().
+    void setLastSceneClass(uint8_t sc) {
+        lastSceneClass_.store(sc, std::memory_order_relaxed);
+    }
+private:
 
     // --- FIX Causa A (smart-scene-diagnostico-chasquido.md): rampa de WDRC + NR ---
     // Antes el cambio de clase del EnvironmentClassifier sustituía el

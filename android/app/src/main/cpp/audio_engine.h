@@ -101,7 +101,8 @@ struct LatencyMetrics {
 enum class EnhancementEngineMode {
     kBypass = 0,
     kDualChannelDnn = 1,
-    kMvdrBackup = 2
+    kMvdrBackup = 2,
+    kHybridMvdrDnn = 3   ///< MVDR crossover ≤1000 Hz + DualDNN (modo premium)
 };
 
 /// Motor de audio de baja latencia con procesamiento DSP integrado.
@@ -417,6 +418,9 @@ private:
     static constexpr int kMaxBeamBlockSize = MvdrBeamformer::kFftSize;
     float beamCh0_[kMaxBeamBlockSize] = {};
     float beamCh1_[kMaxBeamBlockSize] = {};
+    /// Estado del filtro LP para el crossover del modo híbrido (MVDR ≤1000 Hz).
+    float hybridLpState_ = 0.0f;
+    float hybridLpStateDnn_ = 0.0f;
     /// Flag indicando si el stream de input es realmente estereo.
     /// Se setea en openInputStream() cuando se logra abrir con 2 canales.
     bool stereoInputAvailable_ = false;

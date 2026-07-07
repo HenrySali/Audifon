@@ -23,6 +23,7 @@
 /// - Clasificador activo: Keidser 2017 muestra ventaja SRT del automático
 
 #include "dsp_pipeline.h"
+#include "smart_scene/scene_policy.h"
 
 #include <cmath>
 #include <cstring>
@@ -255,62 +256,38 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     lastInputLevelDb_.store(inputLevelDb, std::memory_order_relaxed);
     wdrcUsesExternalLevel_.store(usesExternalLevel, std::memory_order_relaxed);
 
-    // ─── 3. Environment Classifier (actualiza NR + WDRC en transición) ──
+    // ─── 3. Clasificador unificado (ScenePolicy — reemplaza EnvironmentClassifier) ──
+    // La tabla scene_policy.h mapea cada SceneClass (8 clases del SceneAnalyzer)
+    // a NR + WDRC + TNR + Enhancement + MPO. El EnvironmentClassifier de 4 clases
+    // se mantiene corriendo SOLO para reportar `environmentClass` al diagnóstico
+    // (retrocompatibilidad de métricas), pero ya NO toma decisiones de NR/WDRC.
     if (autoClassifyEnabled_.load(std::memory_order_relaxed)) {
-        // FIX clasificador: SNR REAL desde las estimaciones por banda del NR
-        // (potencias de señal y ruido), en vez del SNR falso (nivel − 30) que
-        // nunca permitía alcanzar NOISE/Ruidoso (colapsaba a QUIET/SPEECH).
-        // Validado en tools/sim_v3/validate_classifier.py.
+        // Mantener el EnvironmentClassifier actualizado para métricas (diagnóstico).
         float sigEst[kNrSubBands];
         float noiEst[kNrSubBands];
         nr_.getSignalEstimate(sigEst, kNrSubBands);
         nr_.getNoiseEstimate(noiEst, kNrSubBands);
         float estimatedSnr = EnvironmentClassifier::estimateSnrFromNr(
             sigEst, noiEst, kNrSubBands);
-
-        // Fase A — Causa B/E: usamos el VAD del SmartScene como entrada
-        // adicional al clasificador. El VAD vive en otro thread (audio
-        // callback del scene analyzer), pero la lectura del flag es un
-        // bool atómico cacheado en el último snapshot publicado, así que
-        // es seguro consumirlo desde acá. El clasificador usa este flag
-        // para:
-        //   1) bloquear bajadas a QUIET durante 1.5 s post-voz (mata el
-        //      flicker SPEECH↔QUIET por pausas naturales);
-        //   2) elevar el techo SPL admisible para SPEECH cuando hay voz
-        //      confirmada (no queremos que voz fuerte caiga en NOISE).
-        // Si autoClassifyEnabled_ se desactiva no leemos el VAD: ahorra
-        // un load atómico y mantiene el comportamiento "manual" puro.
         EnvironmentClass envClass = envClassifier_.update(inputLevelDb,
                                                           estimatedSnr,
                                                           vadActive);
-        int envClassInt = static_cast<int>(envClass);
+        // Solo actualizar la métrica — NO los targets.
+        lastEnvClass_ = static_cast<int>(envClass);
 
-        // Si la clase cambió, actualizar NR y WDRC automáticamente —
-        // pero NO si hay un preset Smart pinned (Fase B' / Causa C +
-        // pin manual). El clasificador sigue corriendo y publica la
-        // clase actual para la UI; sólo se evita machacar los targets
-        // del WDRC + NR que el usuario fijó al aplicar el preset.
-        if (envClassInt != lastEnvClass_) {
-            lastEnvClass_ = envClassInt;
+        // Decisión REAL: usar SceneClass del SceneAnalyzer + tabla unificada.
+        // El SceneAnalyzer corre un bloque atrás (latencia 1 bloque ≈ 5 ms),
+        // pero es la información más reciente disponible sin re-analizar aquí.
+        if (!smartPresetPinned_.load(std::memory_order_acquire)) {
+            const uint8_t sceneClass = lastSceneClass_.load(std::memory_order_relaxed);
+            smart_scene::ScenePolicy policy = smart_scene::getPolicyForClass(sceneClass);
 
-            if (!smartPresetPinned_.load(std::memory_order_acquire)) {
-                // FIX Causa A (smart-scene-diagnostico-chasquido.md):
-                // ANTES: aquí se sustituía el knee, ratio y nrLevel directamente,
-                //        produciendo un escalón en un solo sample → CHASQUIDO.
-                // AHORA: solo fijamos los TARGETS. La rampa exponencial del WDRC
-                //        (kWdrcRampAlpha → ~200 ms) y el step discreto del NR
-                //        (kNrLevelStepBlocks → ~300 ms entre niveles) corren cada
-                //        bloque más abajo, antes de wdrc_.process().
-                EnvWdrcParams wdrcParams = envClassifier_.getRecommendedWdrcParams();
-                wdrcKneeTarget_  = wdrcParams.compressionKnee;
-                wdrcRatioTarget_ = wdrcParams.compressionRatio;
-                nrLevelTarget_   = envClassifier_.getRecommendedNrLevel();
-                nrLevelRampBlocksRemaining_ = kNrLevelInitialDelayBlocks;
-            }
-            // Si está pinned, simplemente actualizamos lastEnvClass_ para
-            // que la UI vea la transición — pero NO tocamos los targets:
-            // los actuales (provenientes del preset Smart manual) se
-            // mantienen vigentes hasta que la UI desactive el pin.
+            // Aplicar targets desde la tabla unificada (con rampas, sin chasquidos).
+            wdrcKneeTarget_  = policy.compressionKnee;
+            wdrcRatioTarget_ = policy.compressionRatio;
+            nrLevelTarget_   = policy.nrLevel;
+            // TNR se aplica directo (sin rampa, es ON/OFF).
+            tnr_.setEnabled(policy.tnrEnabled);
         }
     }
 

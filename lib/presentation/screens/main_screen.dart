@@ -4278,21 +4278,15 @@ class _EnhancementEngineSelectorCardState
         segments: const <ButtonSegment<EnhancementEngineMode>>[
           ButtonSegment<EnhancementEngineMode>(
             value: EnhancementEngineMode.dualChannelDnn,
-            label: Text('Dual-DNN', style: TextStyle(fontSize: 11)),
+            label: Text('DNN (IA)', style: TextStyle(fontSize: 11)),
             icon: Icon(Icons.auto_awesome, size: 16),
             tooltip: 'Realce DNN dual-channel (recomendado)',
-          ),
-          ButtonSegment<EnhancementEngineMode>(
-            value: EnhancementEngineMode.mvdrBackup,
-            label: Text('MVDR', style: TextStyle(fontSize: 11)),
-            icon: Icon(Icons.hearing, size: 16),
-            tooltip: 'Beamformer MVDR clásico (respaldo)',
           ),
           ButtonSegment<EnhancementEngineMode>(
             value: EnhancementEngineMode.bypass,
             label: Text('Bypass', style: TextStyle(fontSize: 11)),
             icon: Icon(Icons.block, size: 16),
-            tooltip: 'Sin realce',
+            tooltip: 'Sin realce — audio directo del micrófono',
           ),
         ],
         selected: <EnhancementEngineMode>{_mode},
