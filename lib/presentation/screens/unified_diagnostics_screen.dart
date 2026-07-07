@@ -147,6 +147,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   };
   static bool _allRunning = false;
   static bool _cancelled = false;
+  static AmplificationBloc? _bloc;
   static final StreamController<void> _changeController =
       StreamController<void>.broadcast();
 
@@ -262,13 +263,17 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
 
   Future<void> _runAll() async {
     _allRunning = true;
+    _cancelled = false;
+    _bloc = context.read<AmplificationBloc>();
     _changeController.add(null);
 
     for (final id in DiagTestId.all) {
+      if (_cancelled) break;
       await _runTest(id);
     }
 
     _allRunning = false;
+    _bloc = null;
     _changeController.add(null);
   }
 
@@ -384,7 +389,8 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   /// Diagnóstico DSP: grabación real de 15 s de audio dual-channel.
   /// Inicia la grabación nativa, polea el progreso a 1 Hz, y reporta resultado.
   Future<Map<String, dynamic>> _testDspRecording() async {
-    final bloc = context.read<AmplificationBloc>();
+    final bloc = _bloc;
+    if (bloc == null) return {'status': 'Bloc no disponible', 'canRecord': false};
     final active = bloc.state is AmplificationActive;
     if (!active) {
       return {'status': 'Motor no activo', 'canRecord': false};
@@ -466,7 +472,8 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   /// Registro de Sesión: arranca el servicio, captura durante 10 s,
   /// detiene, y reporta los eventos capturados.
   Future<Map<String, dynamic>> _testSessionLog() async {
-    final bloc = context.read<AmplificationBloc>();
+    final bloc = _bloc;
+    if (bloc == null) return {'status': 'Bloc no disponible'};
 
     // Si ya está grabando, solo reportamos estado actual
     if (_sessionSvc.isRecording) {
@@ -990,7 +997,8 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   /// produciendo un WAV independiente por modo. Permite comparar auditivamente
   /// la calidad de cada motor de realce en el mismo ambiente.
   Future<Map<String, dynamic>> _testAbComparative() async {
-    final bloc = context.read<AmplificationBloc>();
+    final bloc = _bloc;
+    if (bloc == null) return {'status': 'Bloc no disponible', 'canRecord': false};
     final active = bloc.state is AmplificationActive;
     if (!active) {
       return {'status': 'Motor no activo', 'canRecord': false};
@@ -1293,7 +1301,10 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
                     tooltip: 'Ejecutar test',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    onPressed: () => _runTest(id),
+                    onPressed: () {
+                      _bloc ??= context.read<AmplificationBloc>();
+                      _runTest(id);
+                    },
                   ),
                 if (isCompleted || isError)
                   IconButton(

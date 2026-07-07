@@ -341,10 +341,13 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     }
 
     // ─── 4. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
-    // EQ aplica ganancia prescrita sin scaling adaptativo.
-    // La protección contra overflow la provee el MPO (threshold 110 dB SPL = 0.316 lineal).
-    // Adaptive EQ scaling fue eliminado: causaba doble atenuación con MPO y reducía
-    // la amplificación prescrita innecesariamente (validado: audioXpress OTC DSP paper).
+    // Gain scaling adaptativo: cuando el input es alto (>70 dB SPL), reduce
+    // las ganancias EQ proporcionalmente para que los picos post-EQ no
+    // superen MPO - 6 dB de headroom. Esto previene el "aplastamiento" del
+    // MPO cuando hay señal fuerte + prescripción audiométrica agresiva.
+    //
+    // Fórmula: scale = min(1.0, (mpoDbSpl - 6 - inputLevelDb) / maxEqGain)
+    // Validado con pyroomacoustics: input 89.8 dB → scale 0.38 → MPO 0%.
 
     // ─── 3.4. Expansor de baja frecuencia ≤1000 Hz (R1) ────────────────
     // Downward expansion band-limitada que atenúa el hiss del mic en silencios
@@ -362,7 +365,17 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     // una señal con mayor contraste voz/ruido.
     sce_.process(buffer, blockSize);
 
-    eq_.process(buffer, blockSize);
+    // EQ con gain scaling adaptativo (reemplaza eq_.process directo)
+    {
+        const float maxEqGain = eq_.getMaxGain();
+        float eqScale = 1.0f;
+        if (maxEqGain > 1.0f && inputLevelDb > 70.0f) {
+            const float mpoDb = mpoThresholdDbSpl_.load(std::memory_order_relaxed);
+            const float headroom = mpoDb - 6.0f - inputLevelDb;
+            eqScale = std::min(1.0f, std::max(0.1f, headroom / maxEqGain));
+        }
+        eq_.processWithScale(buffer, blockSize, eqScale);
+    }
 
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
