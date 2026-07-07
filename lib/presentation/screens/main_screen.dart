@@ -892,7 +892,7 @@ class _StatusBar extends StatelessWidget {
                   // botones individuales (DSP, Sesión, Spectrum, Subsistemas).
                   Builder(
                     builder: (context) => IconButton(
-                      icon: const Icon(Icons.medical_services,
+                      icon: const Icon(Icons.biotech,
                           color: Colors.cyanAccent, size: 21),
                       tooltip: 'Diagnóstico Completo',
                       padding: EdgeInsets.zero,

@@ -80,7 +80,7 @@ class TestResult {
 }
 
 
-// ─── IDs de los 12 tests ────────────────────────────────────────────────────
+// ─── IDs de los 13 tests ────────────────────────────────────────────────────
 class DiagTestId {
   static const String smartScene = 'smart_scene';
   static const String dspRecording = 'dsp_recording';
@@ -94,11 +94,13 @@ class DiagTestId {
   static const String protection = 'protection';
   static const String routing = 'audio_routing';
   static const String health = 'system_health';
+  static const String abComparative = 'ab_comparative';
 
   static const List<String> all = [
     smartScene, dspRecording, sessionLog, spectrum,
     enhancement, latency, dnnDenoiser, wdrc,
     mpoLimiter, protection, routing, health,
+    abComparative,
   ];
 
   static String displayName(String id) {
@@ -115,6 +117,7 @@ class DiagTestId {
       case protection: return '10. Protección';
       case routing: return '11. Audio Routing';
       case health: return '12. Salud del Sistema';
+      case abComparative: return '13. Comparativa A/B (WAV)';
       default: return id;
     }
   }
@@ -168,6 +171,34 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
 
   // ─── Ejecutar UN test ─────────────────────────────────────────────────────
 
+  /// Helper: inicia grabación WAV para un test individual.
+  /// Retorna el nombre del archivo o null si no se pudo iniciar.
+  Future<String?> _startTestWav(String testId) async {
+    final now = DateTime.now();
+    final ts = '${now.year}${_pad2(now.month)}${_pad2(now.day)}'
+        '_${_pad2(now.hour)}${_pad2(now.minute)}${_pad2(now.second)}';
+    final fileName = 'diag_${testId}_$ts.wav';
+    try {
+      final started = await _channel.invokeMethod<bool>(
+            'startDiagnosticRecording',
+            {'filePath': fileName},
+          ) ?? false;
+      return started ? fileName : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Helper: detiene la grabación WAV en curso.
+  /// Retorna el código de stop (0=ok, -1=error).
+  Future<int> _stopTestWav() async {
+    try {
+      return await _channel.invokeMethod<int>('stopDiagnosticRecording') ?? -1;
+    } catch (_) {
+      return -1;
+    }
+  }
+
   Future<void> _runTest(String id) async {
     setState(() {
       _results[id] = _results[id]!.copyWith(
@@ -177,16 +208,41 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     });
 
     try {
+      // Tests que manejan su propia grabación WAV internamente
+      final selfRecording = {
+        DiagTestId.dspRecording,
+        DiagTestId.abComparative,
+        DiagTestId.routing,
+      };
+
+      String? wavFile;
+      if (!selfRecording.contains(id)) {
+        wavFile = await _startTestWav(id);
+      }
+
       final data = await _executeTest(id);
+
+      if (wavFile != null) {
+        await _stopTestWav();
+      }
+
       if (!mounted) return;
+      // Agregar nombre del WAV al resultado si se grabó
+      final finalData = wavFile != null
+          ? {...data, 'wavExportado': wavFile}
+          : data;
+
       setState(() {
         _results[id] = _results[id]!.copyWith(
           status: TestStatus.completed,
-          data: data,
+          data: finalData,
           completedAt: DateTime.now(),
         );
       });
     } catch (e) {
+      // Intentar detener WAV si quedó abierto
+      try { await _stopTestWav(); } catch (_) {}
+
       if (!mounted) return;
       setState(() {
         _results[id] = _results[id]!.copyWith(
@@ -198,13 +254,16 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     }
   }
 
-  // ─── Ejecutar TODOS en paralelo ───────────────────────────────────────────
+  // ─── Ejecutar TODOS en secuencia (cada test graba su WAV) ──────────────────
 
   Future<void> _runAll() async {
     setState(() => _allRunning = true);
 
-    final futures = DiagTestId.all.map((id) => _runTest(id));
-    await Future.wait(futures);
+    // Secuencial: cada test graba su propio WAV, el motor solo permite 1 a la vez
+    for (final id in DiagTestId.all) {
+      if (!mounted) break;
+      await _runTest(id);
+    }
 
     if (!mounted) return;
     setState(() => _allRunning = false);
@@ -239,6 +298,8 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
         return _testRouting();
       case DiagTestId.health:
         return _testHealth();
+      case DiagTestId.abComparative:
+        return _testAbComparative();
       default:
         return {'error': 'Test desconocido: $id'};
     }
@@ -922,6 +983,115 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     };
   }
 
+  /// Test #13: Comparativa A/B — graba 5 s en cada modo (Bypass, DualDNN, MVDR)
+  /// produciendo un WAV independiente por modo. Permite comparar auditivamente
+  /// la calidad de cada motor de realce en el mismo ambiente.
+  Future<Map<String, dynamic>> _testAbComparative() async {
+    final bloc = context.read<AmplificationBloc>();
+    final active = bloc.state is AmplificationActive;
+    if (!active) {
+      return {'status': 'Motor no activo', 'canRecord': false};
+    }
+
+    final now = DateTime.now();
+    final ts = '${now.year}${_pad2(now.month)}${_pad2(now.day)}'
+        '_${_pad2(now.hour)}${_pad2(now.minute)}${_pad2(now.second)}';
+
+    final modes = [
+      {'name': 'Bypass', 'mode': 0, 'file': 'ab_bypass_$ts.wav'},
+      {'name': 'DualDNN', 'mode': 1, 'file': 'ab_dualdnn_$ts.wav'},
+      {'name': 'MVDR', 'mode': 2, 'file': 'ab_mvdr_$ts.wav'},
+    ];
+
+    // Guardar modo actual para restaurar al final
+    final originalMode = await _channel.invokeMethod<int>('getEnhancementEngineMode') ?? 0;
+
+    final results = <String, String>{};
+    int successCount = 0;
+
+    for (final m in modes) {
+      if (!mounted) break;
+      final modeName = m['name'] as String;
+      final modeInt = m['mode'] as int;
+      final fileName = m['file'] as String;
+
+      // Cambiar modo
+      try {
+        await _channel.invokeMethod<void>('setEnhancementEngineMode', {'mode': modeInt});
+      } catch (_) {
+        results['${modeName}'] = 'Error al cambiar modo';
+        continue;
+      }
+
+      // Esperar 500 ms para que el cambio se estabilice
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Iniciar grabación de 5 s
+      bool started = false;
+      try {
+        started = await _channel.invokeMethod<bool>(
+              'startDiagnosticRecording',
+              {'filePath': fileName},
+            ) ?? false;
+      } catch (_) {
+        started = false;
+      }
+
+      if (!started) {
+        results[modeName] = 'Error al iniciar grabación';
+        continue;
+      }
+
+      // Esperar 5 s
+      for (int i = 0; i < 6; i++) {
+        if (!mounted) break;
+        await Future.delayed(const Duration(seconds: 1));
+        try {
+          final progress = await _channel.invokeMethod<int>(
+                'getDiagnosticRecordingProgress',
+              ) ?? -1;
+          if (progress < 0) break;
+          if (progress >= 5000) break;
+        } catch (_) {
+          break;
+        }
+      }
+
+      // Detener grabación
+      int stopResult = -1;
+      try {
+        stopResult = await _channel.invokeMethod<int>(
+              'stopDiagnosticRecording',
+            ) ?? -1;
+      } catch (_) {
+        stopResult = -1;
+      }
+
+      if (stopResult == 0) {
+        results[modeName] = fileName;
+        successCount++;
+      } else {
+        results[modeName] = 'Stop code: $stopResult';
+      }
+
+      // Pausa entre modos
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+
+    // Restaurar modo original
+    try {
+      await _channel.invokeMethod<void>('setEnhancementEngineMode', {'mode': originalMode});
+    } catch (_) {}
+
+    return {
+      'completada': successCount == 3,
+      'archivosGrabados': successCount,
+      'duración': '5 s por modo (15 s total)',
+      ...results,
+      'modoRestaurado': originalMode,
+    };
+  }
+
 
   // ─── Copiar resultados ────────────────────────────────────────────────────
 
@@ -1054,7 +1224,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
           const SizedBox(width: 16),
           // Contador
           Text(
-            '$completed/12 completados',
+            '$completed/13 completados',
             style: const TextStyle(color: _kTextDim, fontSize: 13),
           ),
           if (errors > 0) ...[
