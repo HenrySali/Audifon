@@ -135,26 +135,34 @@ class UnifiedDiagnosticsScreen extends StatefulWidget {
 
 class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
-  final SpectrumBridge _spectrumBridge = SpectrumBridge();
+  static final SpectrumBridge _spectrumBridge = SpectrumBridge();
 
-  // ─── Resultados por test ──────────────────────────────────────────────────
-  late Map<String, TestResult> _results;
-
-  // ─── Estado global ────────────────────────────────────────────────────────
-  bool _allRunning = false;
-  Timer? _parallelTimer;
+  // ─── Estado ESTÁTICO: sobrevive al cierre de la pantalla ──────────────────
+  // Los resultados y el flag de ejecución son static — si el usuario cierra
+  // la pantalla y vuelve a abrirla, ve los resultados parciales/finales.
+  // La ejecución async NO se cancela al hacer dispose() del widget.
+  static Map<String, TestResult> _results = {
+    for (final id in DiagTestId.all)
+      id: TestResult(testName: DiagTestId.displayName(id)),
+  };
+  static bool _allRunning = false;
+  static bool _cancelled = false;
+  static final StreamController<void> _changeController =
+      StreamController<void>.broadcast();
 
   // ─── Session log service ──────────────────────────────────────────────────
   SessionLogService get _sessionSvc => SessionLogService.instance;
   StreamSubscription<void>? _sessionSub;
+  StreamSubscription<void>? _changeSub;
 
   @override
   void initState() {
     super.initState();
-    _results = {
-      for (final id in DiagTestId.all)
-        id: TestResult(testName: DiagTestId.displayName(id)),
-    };
+    // Suscribirse al stream de cambios del runner estático.
+    // Si los tests están corriendo en background, el widget se refresca.
+    _changeSub = _changeController.stream.listen((_) {
+      if (mounted) setState(() {});
+    });
     _sessionSub = _sessionSvc.onChange.listen((_) {
       if (mounted) setState(() {});
     });
@@ -162,9 +170,10 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
 
   @override
   void dispose() {
-    _parallelTimer?.cancel();
+    _changeSub?.cancel();
     _sessionSub?.cancel();
-    _spectrumBridge.stopAnalysis();
+    // NO cancelamos la ejecución — sigue en background.
+    // NO paramos el spectrum bridge — los tests lo manejan.
     super.dispose();
   }
 
@@ -200,12 +209,11 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   }
 
   Future<void> _runTest(String id) async {
-    setState(() {
-      _results[id] = _results[id]!.copyWith(
-        status: TestStatus.running,
-        errorMessage: null,
-      );
-    });
+    _results[id] = _results[id]!.copyWith(
+      status: TestStatus.running,
+      errorMessage: null,
+    );
+    _changeController.add(null);
 
     try {
       // Tests que manejan su propia grabación WAV internamente
@@ -226,47 +234,42 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
         await _stopTestWav();
       }
 
-      if (!mounted) return;
       // Agregar nombre del WAV al resultado si se grabó
       final finalData = wavFile != null
           ? {...data, 'wavExportado': wavFile}
           : data;
 
-      setState(() {
-        _results[id] = _results[id]!.copyWith(
-          status: TestStatus.completed,
-          data: finalData,
-          completedAt: DateTime.now(),
-        );
-      });
+      _results[id] = _results[id]!.copyWith(
+        status: TestStatus.completed,
+        data: finalData,
+        completedAt: DateTime.now(),
+      );
     } catch (e) {
       // Intentar detener WAV si quedó abierto
       try { await _stopTestWav(); } catch (_) {}
 
-      if (!mounted) return;
-      setState(() {
-        _results[id] = _results[id]!.copyWith(
-          status: TestStatus.error,
-          errorMessage: e.toString(),
-          completedAt: DateTime.now(),
-        );
-      });
+      _results[id] = _results[id]!.copyWith(
+        status: TestStatus.error,
+        errorMessage: e.toString(),
+        completedAt: DateTime.now(),
+      );
     }
+    _changeController.add(null);
   }
 
   // ─── Ejecutar TODOS en secuencia (cada test graba su WAV) ──────────────────
+  // Corre en background — NO depende de mounted. Emite a _changeController.
 
   Future<void> _runAll() async {
-    setState(() => _allRunning = true);
+    _allRunning = true;
+    _changeController.add(null);
 
-    // Secuencial: cada test graba su propio WAV, el motor solo permite 1 a la vez
     for (final id in DiagTestId.all) {
-      if (!mounted) break;
       await _runTest(id);
     }
 
-    if (!mounted) return;
-    setState(() => _allRunning = false);
+    _allRunning = false;
+    _changeController.add(null);
   }
 
 
@@ -326,7 +329,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int parseErrors = 0;
 
     for (int i = 0; i < expectedSamples; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       final raw = await _channel.invokeMethod<Uint8List>('getSceneSnapshot');
       if (raw != null && raw.isNotEmpty) {
         final snap = SceneSnapshot.fromBytes(raw);
@@ -416,7 +419,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     const int maxPolls = 18;
     int lastProgressMs = 0;
     for (int i = 0; i < maxPolls; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       await Future.delayed(const Duration(seconds: 1));
       try {
         final progress = await _channel.invokeMethod<int>(
@@ -481,7 +484,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     // Esperar 10 s capturando eventos
     const int durationSec = 10;
     for (int i = 0; i < durationSec; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       await Future.delayed(const Duration(seconds: 1));
     }
 
@@ -528,7 +531,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int nullCount = 0;
 
     for (int i = 0; i < expectedSamples; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       final snap = await _spectrumBridge.getCurrentSpectrum();
       if (snap != null) {
         inputLevels.add(snap.inputLevelDb);
@@ -578,7 +581,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final mode = await _channel.invokeMethod<int>('getEnhancementEngineMode') ?? 0;
         final bf = await _channel.invokeMethod<bool>('getBeamformingActive') ?? false;
@@ -641,7 +644,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final m = await _channel.invokeMethod<Map>('getLatencyMetrics');
         if (m != null) {
@@ -700,7 +703,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final active = await _channel.invokeMethod<bool>('getDnnIsActive') ?? false;
         final lat = await _channel.invokeMethod<Map>('getLatencyMetrics');
@@ -749,7 +752,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
         if (m != null) {
@@ -811,7 +814,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
         if (m != null) {
@@ -865,7 +868,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final m = await _channel.invokeMethod<Map>('getDspStageMetrics');
         if (m != null) {
@@ -947,7 +950,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int samples = 0;
 
     for (int i = 0; i < expected; i++) {
-      if (!mounted) break;
+      if (_cancelled) break;
       try {
         final m = await _channel.invokeMethod<Map>('getLatencyMetrics');
         if (m != null) {
@@ -1010,7 +1013,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
     int successCount = 0;
 
     for (final m in modes) {
-      if (!mounted) break;
+      if (_cancelled) break;
       final modeName = m['name'] as String;
       final modeInt = m['mode'] as int;
       final fileName = m['file'] as String;
@@ -1044,7 +1047,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
 
       // Esperar 5 s
       for (int i = 0; i < 6; i++) {
-        if (!mounted) break;
+        if (_cancelled) break;
         await Future.delayed(const Duration(seconds: 1));
         try {
           final progress = await _channel.invokeMethod<int>(
