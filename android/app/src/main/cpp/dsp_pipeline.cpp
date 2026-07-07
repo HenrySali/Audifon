@@ -371,8 +371,11 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
         float eqScale = 1.0f;
         if (maxEqGain > 1.0f && inputLevelDb > 70.0f) {
             const float mpoDb = mpoThresholdDbSpl_.load(std::memory_order_relaxed);
-            const float headroom = mpoDb - 6.0f - inputLevelDb;
-            eqScale = std::min(1.0f, std::max(0.1f, headroom / maxEqGain));
+            // Guard: si mpoDb es NaN (no seteado aún), no escalar.
+            if (std::isfinite(mpoDb) && mpoDb > 0.0f) {
+                const float headroom = mpoDb - 6.0f - inputLevelDb;
+                eqScale = std::min(1.0f, std::max(0.3f, headroom / maxEqGain));
+            }
         }
         eq_.processWithScale(buffer, blockSize, eqScale);
     }
