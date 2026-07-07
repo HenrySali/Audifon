@@ -282,12 +282,20 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
             const uint8_t sceneClass = lastSceneClass_.load(std::memory_order_relaxed);
             smart_scene::ScenePolicy policy = smart_scene::getPolicyForClass(sceneClass);
 
-            // Aplicar targets desde la tabla unificada (con rampas, sin chasquidos).
+            // Aplicar WDRC targets (siempre).
             wdrcKneeTarget_  = policy.compressionKnee;
             wdrcRatioTarget_ = policy.compressionRatio;
-            nrLevelTarget_   = policy.nrLevel;
             // TNR se aplica directo (sin rampa, es ON/OFF).
             tnr_.setEnabled(policy.tnrEnabled);
+
+            // NR: solo aplicar si la DNN NO está activa (evitar doble
+            // atenuación). Cuando DNN corre, setDnnEnabled(true) ya puso
+            // nrBypassed_=true; si ScenePolicy pisara nrLevelTarget_ aquí,
+            // la rampa reactiva el NR Wiener sobre la señal ya limpiada
+            // por la DNN → la voz desaparece.
+            if (!nrBypassed_.load(std::memory_order_acquire)) {
+                nrLevelTarget_ = policy.nrLevel;
+            }
         }
     }
 
