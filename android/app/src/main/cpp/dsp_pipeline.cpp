@@ -365,20 +365,8 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     // una señal con mayor contraste voz/ruido.
     sce_.process(buffer, blockSize);
 
-    // EQ con gain scaling adaptativo (reemplaza eq_.process directo)
-    {
-        const float maxEqGain = eq_.getMaxGain();
-        float eqScale = 1.0f;
-        if (maxEqGain > 1.0f && inputLevelDb > 70.0f) {
-            const float mpoDb = mpoThresholdDbSpl_.load(std::memory_order_relaxed);
-            // Guard: si mpoDb es NaN (no seteado aún), no escalar.
-            if (std::isfinite(mpoDb) && mpoDb > 0.0f) {
-                const float headroom = mpoDb - 6.0f - inputLevelDb;
-                eqScale = std::min(1.0f, std::max(0.3f, headroom / maxEqGain));
-            }
-        }
-        eq_.processWithScale(buffer, blockSize, eqScale);
-    }
+    // EQ aplica ganancia prescrita directamente.
+    eq_.process(buffer, blockSize);
 
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
