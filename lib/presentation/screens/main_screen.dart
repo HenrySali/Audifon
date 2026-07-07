@@ -1207,9 +1207,10 @@ class _ActiveView extends StatelessWidget {
             },
           ),
           const SizedBox(height: 16),
-          // Selector de motor de realce de voz (Dual-DNN / MVDR / Bypass)
-          // — spec gtcrn-dual-channel, tareas 5.1–5.3
-          const _EnhancementEngineSelectorCard(),
+          // Control unificado de limpieza de ruido IA — reemplaza el
+          // selector de motor separado + el limpiador DNN como 2 controles.
+          // Toggle ON = DualDNN activo. Toggle OFF = Bypass. Slider = intensidad.
+          const _DnnNoiseCleanerCard(),
           const SizedBox(height: 20),
           // Selector de modo de prescriptor (Smart-NL2 / Smart-NL3) — Req 5.1–5.5
           PrescriberModeSelector(
@@ -1316,9 +1317,6 @@ class _ActiveView extends StatelessWidget {
           ],
           // Selector de perfil — Req 8.1
           _ProfileSelector(activeProfile: state.activeProfile),
-          const SizedBox(height: 16),
-          // Limpiador de ruido DNN (IA) — anti "tktktkt"
-          const _DnnNoiseCleanerCard(),
           const SizedBox(height: 16),
           // Visualización del EQ activo (ganancias realmente aplicadas al DSP).
           // Prioriza `activeEqGains` (preset aplicado, ej: Smart Scene) sobre
@@ -3955,7 +3953,19 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
   Future<void> _setEnabled(bool enabled) async {
     setState(() => _enabled = enabled);
     try {
+      // Activar/desactivar DNN mono (limpieza directa del pipeline)
       await _channel.invokeMethod<void>('setDnnEnabled', {'enabled': enabled});
+      // Activar/desactivar DualDNN (motor de realce dual-channel)
+      // 1 = DualChannelDnn, 0 = Bypass
+      await _channel.invokeMethod<void>(
+        'setEnhancementEngineMode',
+        {'mode': enabled ? 1 : 0},
+      );
+    } catch (_) {}
+    // Persistir el modo en Hive para que se restaure al reiniciar
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      await box.put('enhancementEngineMode', enabled ? 1 : 0);
     } catch (_) {}
   }
 
