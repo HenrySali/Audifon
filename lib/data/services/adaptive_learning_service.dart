@@ -63,7 +63,8 @@ class AdaptiveLearningService {
   }
 
   /// Si es true, Hermes aplica automáticamente las sugerencias al recibirlas.
-  bool autoApply = false;
+  /// DEFAULT: true (activo por defecto para experiencia plug-and-play).
+  bool autoApply = true;
 
   final StreamController<void> _changeController =
       StreamController<void>.broadcast();
@@ -106,7 +107,7 @@ class AdaptiveLearningService {
     if (_initialized) return;
     try {
       final box = await _openBox();
-      autoApply = box.get('auto_apply', defaultValue: false) as bool;
+      autoApply = box.get('auto_apply', defaultValue: true) as bool;
       final entries = box.values.toList();
       _observations.clear();
       for (final raw in entries) {
@@ -487,5 +488,90 @@ class AdaptiveLearningService {
     if (v is int) return v;
     if (v is num) return v.toInt();
     return 0;
+  }
+
+  // ─── Captura automática (sin intervención del técnico) ──────────────────
+
+  StreamSubscription<AmplificationState>? _autoCaptureSub;
+  Timer? _implicitFeedbackTimer;
+  int? _lastAppliedObsId;
+  DateTime? _lastAppliedAt;
+
+  /// Activa la captura automática: se suscribe al bloc y registra
+  /// cada cambio de preset/volumen/NR como observación automática.
+  /// Llamar después de init() cuando el bloc esté disponible.
+  void startAutoCapture(AmplificationBloc bloc) {
+    _autoCaptureSub?.cancel();
+    _autoCaptureSub = bloc.stream.listen((state) {
+      if (state is AmplificationActive) {
+        _onStateChanged(state, bloc);
+      }
+    });
+    // Timer para feedback implícito: revisa cada 60 s
+    _implicitFeedbackTimer?.cancel();
+    _implicitFeedbackTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _checkImplicitFeedback(),
+    );
+  }
+
+  /// Detiene la captura automática.
+  void stopAutoCapture() {
+    _autoCaptureSub?.cancel();
+    _autoCaptureSub = null;
+    _implicitFeedbackTimer?.cancel();
+    _implicitFeedbackTimer = null;
+  }
+
+  // Estado anterior para detectar cambios
+  int? _prevNrLevel;
+  double? _prevVolumeDb;
+  String? _prevPresetName;
+
+  void _onStateChanged(AmplificationActive state, AmplificationBloc bloc) {
+    // Detectar cambios significativos
+    final nrChanged = _prevNrLevel != null && state.activeNrLevel != _prevNrLevel;
+    final volChanged = _prevVolumeDb != null &&
+        (state.volumeDb - _prevVolumeDb!).abs() > 2.0;
+    final presetChanged = _prevPresetName != null &&
+        state.activeEqPreset != _prevPresetName;
+
+    _prevNrLevel = state.activeNrLevel;
+    _prevVolumeDb = state.volumeDb;
+    _prevPresetName = state.activeEqPreset;
+
+    // Si algo cambió, registrar observación automática
+    if (nrChanged || volChanged || presetChanged) {
+      final changes = <String>[];
+      if (nrChanged) changes.add('NR→${state.activeNrLevel}');
+      if (volChanged) changes.add('Vol→${state.volumeDb.toStringAsFixed(0)}dB');
+      if (presetChanged) changes.add('Preset→${state.activeEqPreset}');
+
+      addObservation(
+        userText: '[Auto] ${changes.join(", ")}',
+        bloc: bloc,
+      );
+    }
+  }
+
+  // ─── Feedback implícito (5 min sin cambiar = aceptado) ──────────────────
+
+  void _checkImplicitFeedback() {
+    if (_lastAppliedObsId == null || _lastAppliedAt == null) return;
+
+    final elapsed = DateTime.now().difference(_lastAppliedAt!);
+    if (elapsed.inMinutes >= 5) {
+      // 5 minutos sin cambios → feedback positivo implícito
+      addFeedback(_lastAppliedObsId!, positive: true);
+      _lastAppliedObsId = null;
+      _lastAppliedAt = null;
+    }
+  }
+
+  /// Override de applySuggestion para trackear el timestamp.
+  Future<void> applySuggestionTracked(int observationId, AmplificationBloc bloc) async {
+    await applySuggestion(observationId, bloc);
+    _lastAppliedObsId = observationId;
+    _lastAppliedAt = DateTime.now();
   }
 }

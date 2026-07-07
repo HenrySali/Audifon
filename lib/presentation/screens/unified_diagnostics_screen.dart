@@ -26,6 +26,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../data/bridges/spectrum_bridge.dart';
+import '../../data/services/analyzer_inbox_service.dart';
 import '../../data/services/session_log_service.dart';
 import '../../domain/entities/spectrum_snapshot.dart';
 import '../../scene/scene_snapshot.dart';
@@ -239,6 +240,11 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
       final finalData = wavFile != null
           ? {...data, 'wavExportado': wavFile}
           : data;
+
+      // Enviar el WAV al inbox del Analizador
+      if (wavFile != null) {
+        AnalyzerInboxService.instance.addWav(wavFile);
+      }
 
       _results[id] = _results[id]!.copyWith(
         status: TestStatus.completed,

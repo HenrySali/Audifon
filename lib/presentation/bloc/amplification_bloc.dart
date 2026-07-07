@@ -9,6 +9,7 @@ import 'package:hive/hive.dart';
 
 import '../../data/bridges/audio_bridge.dart';
 import '../../data/repositories/settings_repository_impl.dart';
+import '../../data/services/adaptive_learning_service.dart';
 import '../../domain/audiogram_driven_presets/audiogram_driven_bundle.dart';
 import '../../domain/audiogram_driven_presets/bundle_builder.dart';
 import '../../domain/audiogram_driven_presets/environment_profile_mapper.dart';
@@ -793,8 +794,11 @@ class AmplificationBloc
     // retornó éxito para no perder eventos tempranos del motor.
     _subscribeToStreams();
 
+    // Hermes: arrancar captura automática de observaciones (activo por default).
+    AdaptiveLearningService.instance.startAutoCapture(this);
+
     // ─────────────────────────────────────────────────────────────
-    // Fase 3 — Delay de 200 ms (Req 3.3).
+    // Fase 3 — Delay de 200 ms (Req 3.3).    AdaptiveLearningService.instance.startAutoCapture(this);
     // ─────────────────────────────────────────────────────────────
     await Future<void>.delayed(_bootDelay);
 
