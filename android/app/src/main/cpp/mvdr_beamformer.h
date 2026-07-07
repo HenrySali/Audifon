@@ -7,7 +7,8 @@
 ///   - PMC7545265: VAD-assisted MVDR en smartphone
 ///   - PMC7398114: MVDR + DNN para hearing aids
 ///   - PMC7928060: Efficient two-microphone speech enhancement
-///   - Ephraim & Malah (1984): decision-directed a priori SNR (post-filtro).
+///   - Ephraim & Malah (1984): decision-directed a priori SNR.
+///   - Lotter & Vary (2005): SGJMAP speech estimator (super-Gaussian prior).
 ///   - Cox et al.: robust MVDR / diagonal loading.
 ///
 /// Uso:
@@ -33,11 +34,12 @@
 ///           Resultado sim: updates-durante-voz 58 -> 0; correlacion de voz
 ///           0.374 -> 0.497; SNR de voz -7.9 dB -> -4.8 dB.
 ///
-///   FIX #2  POST-FILTRO WIENER single-channel decision-directed (Ephraim-
-///           Malah) tras el MVDR (=> MWF de facto). Ganancia con SNR a
-///           posteriori/priori (ddBeta=0.98), piso gMinDb=-12 dB. La potencia
-///           de ruido a la salida sale de w^H*Rnn*w. Baja el musical-noise
-///           107.6 -> 64.2.
+///   FIX #2  POST-FILTRO SGJMAP (Super-Gaussian JMAP estimator) tras el
+///           MVDR. Reemplaza al Wiener DD por preservar 3× mas los onsets
+///           (30.9% vs 10.5%, validado en mvdr_run_sgjmap.m). Ganancia:
+///           G = max(1 - mu/(2*gamma*sqrt(xi)), Gmin). xi se estima con DD
+///           suave (sgjBeta=0.5). Piso gMinDb=-12 dB. La potencia de ruido
+///           a la salida sale de w^H*Rnn*w.
 ///
 ///   FIX #3  DIAGONAL LOADING ADAPTATIVO = loadMu*trace(Rnn)/2 (loadMu=1.0),
 ///           con piso 1e-9, en vez del kReg=1e-3 fijo. Acota el white-noise-
@@ -134,7 +136,7 @@ public:
             revPowerPrev_[k] = 0.0f;
             drGain_[k] = 1.0f;          // FIX #4: ganancia dereverb suavizada
             prevLmag_[k] = 0.0f;        // FIX #1: log-mag previo (flujo espectral)
-            Gprev_[k] = 1.0f;           // FIX #2: ganancia Wiener previa (DD)
+            Gprev_[k] = 1.0f;           // FIX #2: ganancia SGJMAP previa (DD)
             gammaPrev_[k] = 1.0f;       // FIX #2: SNR a posteriori previo (DD)
         }
 
@@ -258,25 +260,33 @@ public:
         loadMu_.store(mu, std::memory_order_relaxed);
     }
 
-    // ─── FIX #2: post-filtro Wiener decision-directed ────────────────────
-    /// Toggle del post-filtro Wiener. Default ON.
+    // ─── FIX #2: post-filtro SGJMAP (reemplaza Wiener DD) ───────────────
+    /// Toggle del post-filtro SGJMAP. Default ON.
     void setWienerEnabled(bool e) {
         wienerEnabled_.store(e, std::memory_order_release);
     }
     bool isWienerEnabled() const {
         return wienerEnabled_.load(std::memory_order_acquire);
     }
-    /// Piso de ganancia Wiener en dB. Default -12 dB.
+    /// Piso de ganancia SGJMAP en dB. Default -12 dB.
     void setWienerGMinDb(float db) {
         if (db > 0.0f) db = 0.0f;
         if (db < -60.0f) db = -60.0f;
         wienerGMinDb_.store(db, std::memory_order_relaxed);
     }
-    /// Factor decision-directed (a priori SNR). Default 0.98.
-    void setWienerDdBeta(float b) {
+    /// Factor decision-directed suave para xi (a priori SNR). Default 0.5.
+    /// Mas bajo que Wiener DD (0.98) para preservar onsets.
+    void setSgjBeta(float b) {
         if (b < 0.0f) b = 0.0f;
-        if (b > 0.9999f) b = 0.9999f;
-        wienerDdBeta_.store(b, std::memory_order_relaxed);
+        if (b > 0.99f) b = 0.99f;
+        sgjBeta_.store(b, std::memory_order_relaxed);
+    }
+    /// Parametro de forma super-Gaussiana (mu). Default 1.0, rango [0.1, 3.0].
+    /// mu=1 ~ Laplaciano; mu>1 mas agresivo; mu<1 mas conservador.
+    void setSgjMu(float mu) {
+        if (mu < 0.1f) mu = 0.1f;
+        if (mu > 3.0f) mu = 3.0f;
+        sgjMu_.store(mu, std::memory_order_relaxed);
     }
 
     /// Procesa un bloque de audio estereo y produce salida mono beamformed.
@@ -474,7 +484,7 @@ private:
 
         // --- Calcular y aplicar pesos MVDR por bin ---
         // noisePow[k] = potencia de ruido a la salida (w^H*Rnn*w), la usa el
-        // post-filtro Wiener (FIX #2).
+        // post-filtro SGJMAP (FIX #2).
         float noisePow[kNumBins];
         for (int k = 0; k < kNumBins; ++k) {
             if (!rnnInitialized_) {
@@ -497,24 +507,29 @@ private:
             }
         }
 
-        // --- FIX #2: post-filtro Wiener single-channel (decision-directed) ---
-        // Ephraim-Malah: xi (a priori) = ddBeta*(Gprev^2*gammaPrev) +
-        // (1-ddBeta)*max(gamma-1,0); G = xi/(1+xi), con piso Gmin (=-12 dB).
-        // Convierte el MVDR en un MWF de facto y suprime el ruido residual
-        // sin musical-noise excesivo (RESUMEN: musical-noise 107.6 -> 64.2).
+        // --- FIX #2: post-filtro SGJMAP (Super-Gaussian JMAP estimator) ------
+        // Reemplaza Wiener DD. Preserva 3× mas onsets (30.9% vs 10.5%,
+        // validado en mvdr_run_sgjmap.m).
+        // Ganancia: G = max(1 - mu / (2*gamma*sqrt(xi)), Gmin)
+        //   gamma = |Y|^2 / noisePow        (SNR a posteriori, instantaneo)
+        //   xi = sgjBeta*(Gprev^2*gammaPrev) + (1-sgjBeta)*max(gamma-1,0)
+        //        (DD suave, beta=0.5 << 0.98 del Wiener => onsets rapidos)
         if (wienerEnabled_.load(std::memory_order_acquire) && rnnInitialized_) {
-            const float gMinDb = wienerGMinDb_.load(std::memory_order_relaxed);
-            const float ddBeta = wienerDdBeta_.load(std::memory_order_relaxed);
-            const float Gmin   = std::pow(10.0f, gMinDb / 20.0f);   // piso en amplitud
-            const float xiMin  = (Gmin * Gmin) / (1.0f - Gmin * Gmin + 1e-9f);
+            const float gMinDb  = wienerGMinDb_.load(std::memory_order_relaxed);
+            const float beta    = sgjBeta_.load(std::memory_order_relaxed);
+            const float mu      = sgjMu_.load(std::memory_order_relaxed);
+            const float Gmin    = std::pow(10.0f, gMinDb / 20.0f);   // piso en amplitud
             for (int k = 0; k < kNumBins; ++k) {
                 const float Ypow  = Y[k].real() * Y[k].real() + Y[k].imag() * Y[k].imag();
                 const float gamma = Ypow / (noisePow[k] + 1e-12f);   // a posteriori
-                float xi = ddBeta * (Gprev_[k] * Gprev_[k] * gammaPrev_[k])
-                         + (1.0f - ddBeta) * std::max(gamma - 1.0f, 0.0f);   // a priori (DD)
-                if (xi < xiMin) xi = xiMin;
-                float G = xi / (1.0f + xi);
+                // xi: a priori SNR con DD suave (beta=0.5)
+                float xi = beta * (Gprev_[k] * Gprev_[k] * gammaPrev_[k])
+                         + (1.0f - beta) * std::max(gamma - 1.0f, 0.0f);
+                if (xi < 1e-6f) xi = 1e-6f;   // proteccion sqrt
+                // SGJMAP gain
+                float G = 1.0f - mu / (2.0f * gamma * sqrtf(xi) + 1e-9f);
                 if (G < Gmin) G = Gmin;
+                if (G > 1.0f) G = 1.0f;
                 Y[k] *= G;
                 Gprev_[k] = G;
                 gammaPrev_[k] = gamma;
@@ -800,8 +815,14 @@ private:
     // Steering vector por bin [kNumBins][2]
     Complex steeringVec_[kNumBins][2] = {};
 
-    // Angulo de steering (grados). Default 0 = broadside frontal (ver Fix #6).
-    float steeringAngleDeg_ = 0.0f;
+    // Angulo de steering (grados). Cambiado de 0 (broadside) a 90 (endfire):
+    // En el Moto G32 los mics estan arriba y abajo (eje vertical). Con 0 deg
+    // la separacion era minima (~3.78 dB en la sim). Con 90 deg (endfire) la
+    // fuente esta en el eje de mics → maxima diferencia de tiempo → mejor
+    // rechazo de ruido lateral. Paper (ResearchGate 2024): "el desempeno
+    // optimo del MVDR ocurre en la direccion endfire". El usuario habla frente
+    // al telefono (mic inferior apuntando a la boca) → ~90 deg es correcto.
+    float steeringAngleDeg_ = 90.0f;
 
     // Matriz de correlacion del ruido [kNumBins][2][2]
     Complex rnn_[kNumBins][2][2] = {};
@@ -836,11 +857,12 @@ private:
     // ─── FIX #3: diagonal loading adaptativo ─────────────────────────────
     std::atomic<float> loadMu_{1.0f};  ///< reg = loadMu*trace(Rnn)/2 (<=0 => kReg)
 
-    // ─── FIX #2: post-filtro Wiener decision-directed ────────────────────
-    std::atomic<bool>  wienerEnabled_{true};    ///< toggle (default ON)
+    // ─── FIX #2: post-filtro SGJMAP (reemplaza Wiener DD) ───────────────
+    std::atomic<bool>  wienerEnabled_{true};    ///< toggle post-filtro (default ON)
     std::atomic<float> wienerGMinDb_{-12.0f};   ///< piso de ganancia (dB)
-    std::atomic<float> wienerDdBeta_{0.98f};    ///< factor decision-directed
-    float Gprev_[kNumBins] = {};                ///< ganancia Wiener previa (DD)
+    std::atomic<float> sgjBeta_{0.5f};          ///< DD suave para xi (0.5 preserva onsets)
+    std::atomic<float> sgjMu_{1.0f};            ///< forma super-Gaussiana (1.0=Laplaciano)
+    float Gprev_[kNumBins] = {};                ///< ganancia SGJMAP previa (DD)
     float gammaPrev_[kNumBins] = {};            ///< SNR a posteriori previo (DD)
 };
 

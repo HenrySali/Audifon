@@ -135,8 +135,15 @@ private:
     /// recorte sin sacrificar headroom clínico. 0 → hard-clamp clásico.
     std::atomic<float> kneeWidthDb_{kDefaultKneeWidthDb};
 
-    /// Ancho de rodilla por defecto (dB).
-    static constexpr float kDefaultKneeWidthDb = 6.0f;
+    /// Ancho de rodilla por defecto (dB). Subido de 6 a 12 dB: con 6 dB los
+    /// picos que exceden el techo por ~7 dB (medido en dispositivo) todavía
+    /// entran al hard-clamp y distorsionan. Con 12 dB la rodilla empieza a
+    /// comprimir 6 dB ANTES del techo → captura los 7 dB de exceso dentro de
+    /// la zona de compresión progresiva sin recortar la onda (AGCo de salida,
+    /// PMC4172289/PMC4172235: compression limiting preferido sobre peak clipping
+    /// por menor distorsión armónica y mejor inteligibilidad; DSL v5 pediátrico
+    /// recomienda ratios bajos + compression limiting para minimizar distorsión).
+    static constexpr float kDefaultKneeWidthDb = 12.0f;
 
     // --- Estado interno (solo accedido desde hilo de audio) ---
 
