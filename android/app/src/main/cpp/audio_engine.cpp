@@ -1143,7 +1143,6 @@ bool AudioEngine::stopDiagnosticRecording() {
 bool AudioEngine::stopDiagnosticRecordingKeep() {
     return diagnosticRecorder_.stopAndKeep();
 }
-}
 
 double AudioEngine::getDiagnosticRecordingProgress() const {
     auto state = diagnosticRecorder_.getState();
