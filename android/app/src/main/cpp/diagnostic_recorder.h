@@ -56,6 +56,12 @@ public:
     /// Detiene la grabación. Si no se completaron 15s, descarta y borra el archivo.
     void stop();
 
+    /// Detiene la grabación y CONSERVA el archivo WAV parcial.
+    /// Finaliza el encabezado WAV con la duración real alcanzada.
+    /// Retorna true si el archivo se conservó exitosamente, false si no había datos.
+    /// Diseñado para grabaciones intencionalmente cortas (test A/B, 5s por modo).
+    bool stopAndKeep();
+
     /// Alimenta muestras pre-DSP desde el callback de audio (float32 mono).
     /// Debe llamarse SOLO desde el hilo de audio.
     void feedPreDsp(const float* data, int numFrames);

@@ -1140,6 +1140,11 @@ bool AudioEngine::stopDiagnosticRecording() {
     return diagnosticRecorder_.getState() == DiagRecorderState::COMPLETED;
 }
 
+bool AudioEngine::stopDiagnosticRecordingKeep() {
+    return diagnosticRecorder_.stopAndKeep();
+}
+}
+
 double AudioEngine::getDiagnosticRecordingProgress() const {
     auto state = diagnosticRecorder_.getState();
     if (state == DiagRecorderState::COMPLETED || state == DiagRecorderState::FINALIZING) {

@@ -126,17 +126,34 @@ class DiagnosticReportGenerator {
     final mode = d['modoDominante'] as String? ?? 'Desconocido';
     final stable = d['estable'] == true;
     final dnnPct = d['dnnActivo%'] as String? ?? '0%';
+    final mvdrPct = d['mvdrActivo%'] as String? ?? '0%';
+
+    // El "modo" se refiere al subsistema de beamforming (MVDR), NO al pipeline
+    // completo. La DNN corre independiente del beamformer.
+    // IEC 60118-2: el AGC puede tener múltiples etapas independientes.
+    String userMsg;
+    if (mode == 'Bypass' && dnnPct != '0%') {
+      userMsg = 'Reducción de ruido por IA activa ($dnnPct), '
+          'beamformer desactivado';
+    } else if (mode == 'MVDR Beamformer') {
+      userMsg = 'Beamformer MVDR activo ($mvdrPct) + DNN ($dnnPct)';
+    } else {
+      userMsg = 'Motor de realce en modo $mode (DNN $dnnPct)';
+    }
+
+    if (!stable) {
+      userMsg += ' — cambios de modo detectados';
+    }
 
     findings.add(DiagnosticFinding(
       title: 'Motor de realce',
-      userMessage: 'Reducción de ruido activa en modo $mode'
-          '${stable ? '' : ' (inestable)'}',
+      userMessage: userMsg,
       technicalDetail:
-          'Enhancement: mode=$mode, stable=$stable, DNN=$dnnPct, '
-          'MVDR=${d['mvdrActivo%']}',
+          'Enhancement: beamformerMode=$mode, stable=$stable, DNN=$dnnPct, '
+          'MVDR=$mvdrPct',
       severity: stable ? FindingSeverity.ok : FindingSeverity.warning,
       recommendation:
-          stable ? null : 'El motor cambia de modo frecuentemente — '
+          stable ? null : 'El beamformer cambia de modo frecuentemente — '
               'verificar condiciones de audio',
     ));
   }
@@ -244,18 +261,42 @@ class DiagnosticReportGenerator {
         double.tryParse(limitingStr.replaceAll('%', '')) ?? 0;
     final clips = d['clipsAcumulados'] as int? ?? 0;
     final sustained = d['sostenido%'] as String? ?? '0%';
+    final peakStr = d['peakMáximo'] as String? ?? '0';
+    final peak = double.tryParse(peakStr) ?? 0;
 
-    if (limitingPct > 30) {
+    // Lógica inteligente basada en Giannoulis/Massberg/Reiss (2012):
+    // El limitador basado en envolvente reporta activación incluso cuando
+    // el hard-clamp no actúa (ganancia reducida previene el clip).
+    // Diferenciar: "protegiendo exitosamente" vs "saturado con distorsión".
+
+    if (clips > 0) {
+      // CASO CRÍTICO: hay clipping real → distorsión audible.
       findings.add(DiagnosticFinding(
-        title: 'MPO activándose mucho',
+        title: 'MPO saturado — distorsión',
         userMessage:
-            'El protector de volumen máximo se activa $limitingStr del tiempo '
-            '— el sonido puede estar distorsionado',
+            'El protector de volumen se satura ($clips clips detectados) '
+            '— hay distorsión audible',
         technicalDetail:
             'MPO: limiting=$limitingStr, sustained=$sustained, clips=$clips, '
-            'peak=${d['peakMáximo']}',
+            'peak=$peakStr — hard-clamp activo',
         severity: FindingSeverity.critical,
-        recommendation: 'Reducir ganancias del EQ en 3-5 dB o bajar volumen',
+        recommendation: 'Reducir ganancias del EQ en 5 dB o bajar volumen',
+      ));
+    } else if (limitingPct > 30) {
+      // Sin clips pero el limitador trabaja mucho → protección activa.
+      // IEC 60118-0: el SSPL debe mantenerse sin exceder LDL del usuario.
+      // Si no hay clips, el limitador está cumpliendo su función.
+      findings.add(DiagnosticFinding(
+        title: 'Limitador MPO muy activo',
+        userMessage:
+            'El protector de volumen está trabajando $limitingStr del tiempo '
+            '(sin distorsión, protegiendo correctamente)',
+        technicalDetail:
+            'MPO: limiting=$limitingStr, sustained=$sustained, clips=0, '
+            'peak=$peakStr — envolvente activa, hard-clamp inactivo',
+        severity: FindingSeverity.warning,
+        recommendation:
+            'Considerar reducir ganancias en 3 dB para dar más headroom',
       ));
     } else if (limitingPct > 10) {
       findings.add(DiagnosticFinding(
@@ -264,8 +305,7 @@ class DiagnosticReportGenerator {
             'El protector de volumen se activa ocasionalmente ($limitingStr)',
         technicalDetail:
             'MPO: limiting=$limitingStr, sustained=$sustained, clips=$clips',
-        severity: FindingSeverity.warning,
-        recommendation: 'Considerar reducir ganancias altas en 2 dB',
+        severity: FindingSeverity.info,
       ));
     } else {
       findings.add(DiagnosticFinding(

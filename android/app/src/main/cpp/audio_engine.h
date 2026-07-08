@@ -261,6 +261,8 @@ public:
     // ─── Diagnostic Recorder (dual-channel pre/post DSP) ────────────────
     bool startDiagnosticRecording(const std::string& filePath);
     bool stopDiagnosticRecording();
+    /// Detiene y conserva el WAV parcial (para grabaciones cortas intencionales).
+    bool stopDiagnosticRecordingKeep();
     double getDiagnosticRecordingProgress() const;
 
     // ─── Callback de nivel para UI ──────────────────────────────────────

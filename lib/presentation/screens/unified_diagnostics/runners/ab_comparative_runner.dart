@@ -77,8 +77,9 @@ class AbComparativeRunner extends TestRunnerBase {
 
       int stopResult = -1;
       try {
+        // Usar stopKeep (conserva WAV parcial) en vez de stop (borra <15s).
         stopResult = await TestRunnerBase.channel
-                .invokeMethod<int>('stopDiagnosticRecording') ??
+                .invokeMethod<int>('stopDiagnosticRecordingKeep') ??
             -1;
       } catch (_) {
         stopResult = -1;

@@ -222,6 +222,67 @@ void DiagnosticRecorder::stop() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// stopAndKeep() — detiene la grabación y CONSERVA el archivo WAV parcial.
+//
+// A diferencia de stop(), finaliza correctamente el encabezado WAV con la
+// duración real alcanzada. Diseñado para grabaciones intencionalmente cortas
+// (ej: test A/B Comparative que graba 5 s por modo en vez de 15 s completos).
+//
+// Referencia: IEC 60118-0:2022 no prescribe duración mínima para mediciones
+// de diagnóstico; la duración depende del propósito de la prueba.
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool DiagnosticRecorder::stopAndKeep() {
+    DiagRecorderState currentState = state_.load(std::memory_order_acquire);
+    if (currentState != DiagRecorderState::RECORDING) {
+        return false;
+    }
+
+    // Señalar al hilo escritor que debe detenerse
+    stopRequested_.store(true, std::memory_order_release);
+    writerRunning_.store(false, std::memory_order_release);
+
+    // Esperar a que el hilo escritor termine
+    if (writerThread_.joinable()) {
+        writerThread_.join();
+    }
+
+    // Verificar que se haya escrito al menos algo
+    int64_t written = samplesWritten_.load(std::memory_order_acquire);
+    if (written == 0) {
+        // Sin datos — no tiene sentido conservar un WAV vacío
+        if (wavFile_) {
+            std::fclose(wavFile_);
+            wavFile_ = nullptr;
+        }
+        if (!filePath_.empty()) {
+            std::remove(filePath_.c_str());
+        }
+        state_.store(DiagRecorderState::IDLE, std::memory_order_release);
+        return false;
+    }
+
+    // Finalizar encabezado WAV con tamaños reales (duración parcial)
+    state_.store(DiagRecorderState::FINALIZING, std::memory_order_release);
+
+    if (finalizeWavHeader()) {
+        std::fclose(wavFile_);
+        wavFile_ = nullptr;
+        state_.store(DiagRecorderState::COMPLETED, std::memory_order_release);
+        return true;
+    } else {
+        // Error al finalizar — descartar
+        std::fclose(wavFile_);
+        wavFile_ = nullptr;
+        if (!filePath_.empty()) {
+            std::remove(filePath_.c_str());
+        }
+        state_.store(DiagRecorderState::ERROR, std::memory_order_release);
+        return false;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Accessors
 // ─────────────────────────────────────────────────────────────────────────────
 

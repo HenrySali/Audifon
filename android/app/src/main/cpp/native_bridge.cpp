@@ -1458,6 +1458,24 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStopDiagnosticRecording(
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
+/// Detiene la grabación diagnóstica y CONSERVA el archivo WAV parcial.
+/// Finaliza el encabezado WAV con la duración real alcanzada.
+/// Diseñado para grabaciones intencionalmente cortas (test A/B, 5s por modo).
+/// @return true si el archivo se conservó correctamente.
+JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStopDiagnosticRecordingKeep(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+
+    bool ok = g_engine->stopDiagnosticRecordingKeep();
+    LOGI("nativeStopDiagnosticRecordingKeep: %s", ok ? "KEPT" : "DISCARDED");
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 /// Obtiene el progreso de la grabación diagnóstica.
 /// @return Progreso [0.0, 1.0], o -1.0 si no hay grabación activa.
 JNIEXPORT jdouble JNICALL

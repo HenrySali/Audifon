@@ -405,6 +405,12 @@ class AudioMethodChannel(
                     // exactamente como el paciente: ok→0, err→-1.
                     result.success(if (ok) 0 else -1)
                 }
+                "stopDiagnosticRecordingKeep" -> {
+                    val ok = nativeBridge.nativeStopDiagnosticRecordingKeep()
+                    // ok=true → WAV parcial conservado exitosamente (0)
+                    // ok=false → sin datos o error de finalización (-1)
+                    result.success(if (ok) 0 else -1)
+                }
                 "getDiagnosticRecordingProgress" -> {
                     val progress = nativeBridge.nativeGetDiagnosticRecordingProgress()
                     result.success(progress.toInt())

@@ -22,10 +22,13 @@ class WdrcRunner extends TestRunnerBase {
             .invokeMethod<Map>('getDspStageMetrics');
         if (m != null) {
           final data = Map<String, dynamic>.from(m);
-          final region = data['wdrcRegion'];
+          final regionRaw = data['wdrcRegion'];
           final gain = data['wdrcGainFactor'];
           final postWdrc = data['postWdrcLevel'];
-          if (region is int) regions.add(region);
+          // Kotlin devuelve String ("expansion"/"linear"/"compression"),
+          // no int. Mapeamos para compatibilidad.
+          final region = _parseRegion(regionRaw);
+          if (region != null) regions.add(region);
           if (gain is num) gains.add(gain.toDouble());
           if (postWdrc is num) postWdrcLevels.add(postWdrc.toDouble());
           samples++;
@@ -59,5 +62,21 @@ class WdrcRunner extends TestRunnerBase {
       'postWdrc (min/avg/max)':
           '${TestRunnerBase.min(postWdrcLevels).toStringAsFixed(1)} / ${TestRunnerBase.avg(postWdrcLevels).toStringAsFixed(1)} / ${TestRunnerBase.max(postWdrcLevels).toStringAsFixed(1)} dB',
     };
+  }
+
+  /// Parsea wdrcRegion que puede venir como int O como String de Kotlin.
+  static int? _parseRegion(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is String) {
+      switch (raw) {
+        case 'expansion':
+          return 0;
+        case 'linear':
+          return 1;
+        case 'compression':
+          return 2;
+      }
+    }
+    return null;
   }
 }

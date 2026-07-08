@@ -575,6 +575,14 @@ class NativeAudioBridge {
     external fun nativeStopDiagnosticRecording(): Boolean
 
     /**
+     * Detiene la grabación diagnóstica y CONSERVA el archivo WAV parcial.
+     * Finaliza el encabezado WAV con la duración real alcanzada.
+     * Diseñado para grabaciones intencionalmente cortas (test A/B, 5s por modo).
+     * @return true si el archivo se conservó correctamente.
+     */
+    external fun nativeStopDiagnosticRecordingKeep(): Boolean
+
+    /**
      * Obtiene el progreso de la grabación diagnóstica.
      * @return Progreso como fracción [0.0, 1.0], o -1 si no hay grabación activa.
      */
