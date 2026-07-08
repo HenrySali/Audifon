@@ -23,6 +23,14 @@ class SummaryTab extends StatelessWidget {
       children: [
         _MetadataCard(result: r),
         const SizedBox(height: 12),
+        // Resumen general en texto
+        _SummaryTextCard(summary: r.recommendations.summary),
+        const SizedBox(height: 12),
+        // Veredictos por etapa
+        if (r.recommendations.stageVerdicts.isNotEmpty)
+          _StageVerdictsCard(verdicts: r.recommendations.stageVerdicts),
+        if (r.recommendations.stageVerdicts.isNotEmpty)
+          const SizedBox(height: 12),
         _MetricsCard(result: r),
         const SizedBox(height: 12),
         if (flags.isNotEmpty) _InsufficientBanner(flags: flags),
@@ -226,10 +234,24 @@ class _RecommendationTile extends StatelessWidget {
                         color: color,
                         fontSize: 12,
                         fontWeight: FontWeight.w700)),
+                if (item.stage != null) ...[
+                  Text(item.stage!,
+                      style: TextStyle(
+                          color: color.withOpacity(0.7),
+                          fontSize: 11)),
+                ],
                 const SizedBox(height: 2),
                 Text(item.message,
                     style: const TextStyle(
                         color: Colors.white, fontSize: 13)),
+                if (item.suggestion != null) ...[
+                  const SizedBox(height: 4),
+                  Text('→ ${item.suggestion!}',
+                      style: TextStyle(
+                          color: Colors.cyanAccent.withOpacity(0.9),
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic)),
+                ],
               ],
             ),
           ),
@@ -269,5 +291,82 @@ class _RecommendationTile extends StatelessWidget {
       case RecommendationSeverity.error:
         return 'ERROR';
     }
+  }
+}
+
+class _SummaryTextCard extends StatelessWidget {
+  final String summary;
+  const _SummaryTextCard({required this.summary});
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF16213e),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Resumen del análisis',
+                style: TextStyle(color: Colors.cyanAccent, fontSize: 14, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(summary, style: const TextStyle(color: Colors.white, fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StageVerdictsCard extends StatelessWidget {
+  final Map<String, String> verdicts;
+  const _StageVerdictsCard({required this.verdicts});
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF16213e),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Estado por etapa',
+                style: TextStyle(color: Colors.cyanAccent, fontSize: 14, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            ...verdicts.entries.map((e) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(e.key, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                  _VerdictChip(verdict: e.value),
+                ],
+              ),
+            )),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VerdictChip extends StatelessWidget {
+  final String verdict;
+  const _VerdictChip({required this.verdict});
+  @override
+  Widget build(BuildContext context) {
+    final (color, icon) = switch (verdict) {
+      'OK' => (Colors.greenAccent, Icons.check_circle),
+      'WARN' => (Colors.amber, Icons.warning_amber),
+      'ERROR' => (Colors.redAccent, Icons.error),
+      _ => (Colors.white38, Icons.help_outline),
+    };
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 16),
+        const SizedBox(width: 4),
+        Text(verdict, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+      ],
+    );
   }
 }

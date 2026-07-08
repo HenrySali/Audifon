@@ -34,18 +34,21 @@ class DiagnosticHeuristics {
     // 14.1 — DNN agresiva.
     if (!snr.snrImprovementDb.isNaN &&
         snr.snrImprovementDb < kSnrImprovementWarnDb) {
-      items.add(const Recommendation(
+      items.add(Recommendation(
         severity: RecommendationSeverity.warn,
-        message: 'DNN agresiva, considerar bajar intensidad del denoiser',
+        stage: 'Limpiador de ruido',
+        message: 'DNN agresiva — el SNR empeoró ${snr.snrImprovementDb.toStringAsFixed(1)} dB',
+        suggestion: 'Bajar intensidad del limpiador de ruido (slider) al 60% o menos',
       ));
     }
 
     // 14.2 — THD > 5%.
     if (!thd.thdPercent.isNaN && thd.thdPercent > kThdLimitPercent) {
-      items.add(const Recommendation(
+      items.add(Recommendation(
         severity: RecommendationSeverity.error,
-        message:
-            'Distorsión alta (THD > 5%), posible saturación del MPO o WDRC',
+        stage: 'MPO / Distorsión',
+        message: 'Distorsión alta (THD ${thd.thdPercent.toStringAsFixed(1)}%)',
+        suggestion: 'Reducir ganancias EQ en agudos o subir threshold MPO',
       ));
     }
 
@@ -58,10 +61,12 @@ class DiagnosticHeuristics {
       }
     }
     if (affectedBands.isNotEmpty) {
+      final bandsStr = affectedBands.map((f) => '${f >= 1000 ? "${f ~/ 1000}k" : "$f"} Hz').join(', ');
       items.add(Recommendation(
         severity: RecommendationSeverity.warn,
-        message:
-            'Ganancia medida muy distinta a la prescrita en banda(s) ${affectedBands.join(', ')}',
+        stage: 'EQ (prescripción)',
+        message: 'Ganancia medida difiere de la prescrita en: $bandsStr',
+        suggestion: 'Ajustar EQ en esas bandas o recalibrar el audiograma',
       ));
     }
 
@@ -72,26 +77,32 @@ class DiagnosticHeuristics {
         obs.isFinite &&
         !cfg.isNaN &&
         obs - cfg > kCompressionRatioWarnDelta) {
-      items.add(const Recommendation(
+      items.add(Recommendation(
         severity: RecommendationSeverity.warn,
-        message: 'WDRC sobre-comprime, ratio observado mayor al configurado',
+        stage: 'WDRC',
+        message: 'WDRC sobre-comprime (ratio observado ${obs.toStringAsFixed(1)} vs configurado ${cfg.toStringAsFixed(1)})',
+        suggestion: 'Reducir compression ratio o subir compression knee',
       ));
     }
 
     // 14.5 — Clipping post ≥ 0.01%.
     if (!quality.clippingPostPercent.isNaN &&
         quality.clippingPostPercent >= kClippingPostErrorPercent) {
-      items.add(const Recommendation(
+      items.add(Recommendation(
         severity: RecommendationSeverity.error,
-        message: 'Clipping en señal post-DSP, revisar MPO',
+        stage: 'MPO / Distorsión',
+        message: 'Clipping detectado (${quality.clippingPostPercent.toStringAsFixed(2)}% de muestras)',
+        suggestion: 'Bajar volumen o reducir ganancias EQ en agudos',
       ));
     }
 
     // 14.6 — Latency > 20 ms.
     if (!latency.latencyMs.isNaN && latency.latencyMs > kLatencyWarnMs) {
-      items.add(const Recommendation(
+      items.add(Recommendation(
         severity: RecommendationSeverity.warn,
-        message: 'Latencia alta (> 20 ms), riesgo de eco perceptible',
+        stage: 'Latencia',
+        message: 'Latencia alta (${latency.latencyMs.toStringAsFixed(0)} ms)',
+        suggestion: 'Reducir tamaño de bloque DNN o desactivar módulos pesados',
       ));
     }
 
@@ -99,8 +110,9 @@ class DiagnosticHeuristics {
     if (_ltassDeviates(psdPre)) {
       items.add(const Recommendation(
         severity: RecommendationSeverity.info,
-        message:
-            'Grabación no es speech-like (LTASS), las métricas SNR/THD pueden no ser representativas',
+        stage: 'Ambiente',
+        message: 'La grabación no tiene perfil speech-like (LTASS)',
+        suggestion: 'Repetir el test con voz humana activa para métricas representativas',
       ));
     }
 
@@ -108,12 +120,106 @@ class DiagnosticHeuristics {
     if (metadata.wdrcLevelSource == 'local') {
       items.add(const Recommendation(
         severity: RecommendationSeverity.info,
-        message:
-            'Nivel del WDRC medido localmente (modo legacy), el ratio efectivo puede no reflejar la cadena pre-DNN',
+        stage: 'WDRC',
+        message: 'Nivel del WDRC medido localmente (modo legacy)',
+        suggestion: 'El ratio efectivo puede no reflejar la cadena pre-DNN',
       ));
     }
 
-    return RecommendationsResult(items: List<Recommendation>.unmodifiable(items));
+    return RecommendationsResult(
+      items: List<Recommendation>.unmodifiable(items),
+      summary: _buildSummary(items),
+      stageVerdicts: _buildVerdicts(snr, thd, bandGain, wdrc, quality, latency),
+    );
+  }
+
+  /// Genera un resumen en texto del estado general.
+  String _buildSummary(List<Recommendation> items) {
+    final errors = items.where((r) => r.severity == RecommendationSeverity.error).length;
+    final warns = items.where((r) => r.severity == RecommendationSeverity.warn).length;
+    if (errors > 0) {
+      return 'Se detectaron $errors problemas críticos y $warns advertencias. '
+          'El sistema necesita ajustes para funcionar correctamente.';
+    } else if (warns > 0) {
+      return 'El sistema funciona pero tiene $warns advertencias que pueden '
+          'mejorar la calidad de audio. Revisar las sugerencias.';
+    } else {
+      return 'El sistema funciona correctamente. No se detectaron problemas '
+          'significativos en ninguna etapa del pipeline.';
+    }
+  }
+
+  /// Genera veredictos por etapa del pipeline.
+  Map<String, String> _buildVerdicts(
+    SnrResult snr,
+    ThdResult thd,
+    BandGainResult bandGain,
+    WdrcIoResult wdrc,
+    QualityResult quality,
+    LatencyResult latency,
+  ) {
+    final v = <String, String>{};
+
+    // Limpiador de ruido (DNN/NR)
+    if (snr.snrImprovementDb.isNaN || snr.insufficientVad) {
+      v['Limpiador de ruido'] = 'SIN DATOS';
+    } else if (snr.snrImprovementDb < 0) {
+      v['Limpiador de ruido'] = 'ERROR';
+    } else if (snr.snrImprovementDb < kSnrImprovementWarnDb) {
+      v['Limpiador de ruido'] = 'WARN';
+    } else {
+      v['Limpiador de ruido'] = 'OK';
+    }
+
+    // EQ (prescripción)
+    final maxDev = bandGain.absoluteDeviationsDb
+        .where((d) => !d.isNaN)
+        .fold(0.0, (a, b) => a > b ? a : b);
+    if (maxDev > kBandDeviationWarnDb) {
+      v['EQ (prescripción)'] = 'WARN';
+    } else if (maxDev > kBandDeviationWarnDb * 2) {
+      v['EQ (prescripción)'] = 'ERROR';
+    } else {
+      v['EQ (prescripción)'] = 'OK';
+    }
+
+    // WDRC
+    final obsRatio = wdrc.observedCompressionRatio;
+    final cfgRatio = wdrc.configuredCompressionRatio;
+    if (obsRatio.isNaN || !obsRatio.isFinite) {
+      v['WDRC'] = 'SIN DATOS';
+    } else if ((obsRatio - cfgRatio).abs() > kCompressionRatioWarnDelta) {
+      v['WDRC'] = 'WARN';
+    } else {
+      v['WDRC'] = 'OK';
+    }
+
+    // MPO / Distorsión
+    if (!thd.thdPercent.isNaN && thd.thdPercent > kThdLimitPercent) {
+      v['MPO / Distorsión'] = 'ERROR';
+    } else if (!quality.clippingPostPercent.isNaN && quality.clippingPostPercent > 0) {
+      v['MPO / Distorsión'] = 'WARN';
+    } else {
+      v['MPO / Distorsión'] = 'OK';
+    }
+
+    // Latencia
+    if (latency.latencyMs.isNaN || latency.lowConfidence) {
+      v['Latencia'] = 'SIN DATOS';
+    } else if (latency.latencyMs > kLatencyWarnMs) {
+      v['Latencia'] = 'WARN';
+    } else {
+      v['Latencia'] = 'OK';
+    }
+
+    // Calidad general
+    if (!quality.clippingPostPercent.isNaN && quality.clippingPostPercent >= kClippingPostErrorPercent) {
+      v['Calidad general'] = 'ERROR';
+    } else {
+      v['Calidad general'] = 'OK';
+    }
+
+    return v;
   }
 
   /// Returns true when the pre-channel PSD differs from the LTASS
