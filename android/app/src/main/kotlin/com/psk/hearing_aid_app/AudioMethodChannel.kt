@@ -394,7 +394,9 @@ class AudioMethodChannel(
                         )
                     val fullPath = "${dir.absolutePath}/$filePath"
                     val ok = nativeBridge.nativeStartDiagnosticRecording(fullPath)
-                    result.success(ok)
+                    // Devolver el fullPath real para que Dart no tenga que reconstruirlo.
+                    // Si ok=false, devolver null para indicar fallo.
+                    result.success(if (ok) fullPath else null)
                 }
                 "stopDiagnosticRecording" -> {
                     val ok = nativeBridge.nativeStopDiagnosticRecording()

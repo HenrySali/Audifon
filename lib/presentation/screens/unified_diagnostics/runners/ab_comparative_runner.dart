@@ -1,6 +1,9 @@
 import 'test_runner_base.dart';
 
 /// Comparativa A/B: graba 5 s en cada modo (Bypass, DualDNN, MVDR).
+///
+/// Devuelve 'wavFullPaths' (List<String>) para que el orquestador los
+/// registre en el AnalyzerInboxService.
 class AbComparativeRunner extends TestRunnerBase {
   final bool isMotorActive;
 
@@ -32,6 +35,7 @@ class AbComparativeRunner extends TestRunnerBase {
         0;
 
     final results = <String, String>{};
+    final wavFullPaths = <String>[];
     int successCount = 0;
 
     for (final m in modes) {
@@ -50,18 +54,9 @@ class AbComparativeRunner extends TestRunnerBase {
 
       await Future.delayed(const Duration(milliseconds: 500));
 
-      bool started = false;
-      try {
-        started = await TestRunnerBase.channel.invokeMethod<bool>(
-              'startDiagnosticRecording',
-              {'filePath': fileName},
-            ) ??
-            false;
-      } catch (_) {
-        started = false;
-      }
-
-      if (!started) {
+      // Kotlin devuelve fullPath real o null.
+      final fullPath = await TestRunnerBase.startRecording(fileName);
+      if (fullPath == null) {
         results[modeName] = 'Error al iniciar grabación';
         continue;
       }
@@ -91,6 +86,7 @@ class AbComparativeRunner extends TestRunnerBase {
 
       if (stopResult == 0) {
         results[modeName] = fileName;
+        wavFullPaths.add(fullPath);
         successCount++;
       } else {
         results[modeName] = 'Stop code: $stopResult';
@@ -110,6 +106,8 @@ class AbComparativeRunner extends TestRunnerBase {
       'duración': '5 s por modo (15 s total)',
       ...results,
       'modoRestaurado': originalMode,
+      // Clave especial: el orquestador registra estos en el inbox.
+      'wavFullPaths': wavFullPaths,
     };
   }
 }

@@ -1,6 +1,9 @@
 import 'test_runner_base.dart';
 
 /// Diagnóstico DSP: grabación real de 15 s de audio dual-channel.
+///
+/// Devuelve 'wavFullPath' en el resultado para que el orquestador lo
+/// registre en el AnalyzerInboxService.
 class DspRecordingRunner extends TestRunnerBase {
   final bool isMotorActive;
 
@@ -21,18 +24,9 @@ class DspRecordingRunner extends TestRunnerBase {
         '${TestRunnerBase.pad2(now.minute)}${TestRunnerBase.pad2(now.second)}';
     final wavFilename = '$baseName.wav';
 
-    bool started = false;
-    try {
-      started = await TestRunnerBase.channel.invokeMethod<bool>(
-            'startDiagnosticRecording',
-            {'filePath': wavFilename},
-          ) ??
-          false;
-    } catch (_) {
-      started = false;
-    }
-
-    if (!started) {
+    // Kotlin devuelve el fullPath real o null si falla.
+    final fullPath = await TestRunnerBase.startRecording(wavFilename);
+    if (fullPath == null) {
       return {'status': 'No se pudo iniciar la grabación', 'canRecord': false};
     }
 
@@ -74,6 +68,8 @@ class DspRecordingRunner extends TestRunnerBase {
       'archivo': wavFilename,
       'formato': 'WAV dual-channel (pre/post DSP)',
       'stopCode': stopResult,
+      // Clave especial: el orquestador la usa para registrar en el inbox.
+      'wavFullPath': stopResult == 0 ? fullPath : null,
     };
   }
 }

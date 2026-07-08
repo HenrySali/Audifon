@@ -18,6 +18,7 @@ import '../../bloc/amplification_bloc.dart';
 import '../../bloc/amplification_state.dart';
 import 'models/diag_test_id.dart';
 import 'models/test_result.dart';
+import 'report/diagnostic_report_generator.dart';
 import 'runners/ab_comparative_runner.dart';
 import 'runners/dnn_runner.dart';
 import 'runners/dsp_recording_runner.dart';
@@ -164,8 +165,21 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
       final finalData =
           wavFile != null ? {...data, 'wavExportado': wavFile} : data;
 
+      // Registrar WAVs en el AnalyzerInboxService:
+      // 1. Tests normales: wavFile del startTestWav
       if (wavFile != null) {
         AnalyzerInboxService.instance.addWav(wavFile);
+      }
+      // 2. Self-recording: extraer paths del resultado
+      final selfWav = data['wavFullPath'];
+      if (selfWav is String) {
+        AnalyzerInboxService.instance.addWav(selfWav);
+      }
+      final selfWavList = data['wavFullPaths'];
+      if (selfWavList is List) {
+        for (final p in selfWavList) {
+          if (p is String) AnalyzerInboxService.instance.addWav(p);
+        }
       }
 
       _results[id] = _results[id]!.copyWith(
@@ -195,6 +209,14 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
       if (_cancelled) break;
       await _runTest(id);
     }
+
+    // Generar reporte unificado y enviarlo al Analizador
+    final inbox = AnalyzerInboxService.instance;
+    final report = DiagnosticReportGenerator.generate(
+      results: _results,
+      wavFiles: inbox.pendingWavs.toList(),
+    );
+    inbox.setReport(report);
 
     _allRunning = false;
     _bloc = null;

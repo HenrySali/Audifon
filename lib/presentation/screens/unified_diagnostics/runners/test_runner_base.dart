@@ -1,5 +1,4 @@
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 
 /// Clase base con helpers compartidos para todos los runners de tests.
 abstract class TestRunnerBase {
@@ -17,24 +16,33 @@ abstract class TestRunnerBase {
   // ─── Helpers compartidos ────────────────────────────────────────────────
 
   /// Inicia grabación WAV para un test.
-  /// Retorna la ruta completa del archivo o null si no se pudo iniciar.
+  /// Retorna la ruta COMPLETA REAL del archivo (devuelta por Kotlin) o null.
   Future<String?> startTestWav(String testId) async {
     final now = DateTime.now();
     final ts = '${now.year}${pad2(now.month)}${pad2(now.day)}'
         '_${pad2(now.hour)}${pad2(now.minute)}${pad2(now.second)}';
     final fileName = 'diag_${testId}_$ts.wav';
     try {
-      final started = await channel.invokeMethod<bool>(
-            'startDiagnosticRecording',
-            {'filePath': fileName},
-          ) ??
-          false;
-      if (!started) return null;
-      final dir = await getExternalStorageDirectory();
-      if (dir != null) {
-        return '${dir.path}/$fileName';
-      }
-      return fileName;
+      // Kotlin ahora devuelve el fullPath real (String) o null si falla.
+      final fullPath = await channel.invokeMethod<String>(
+        'startDiagnosticRecording',
+        {'filePath': fileName},
+      );
+      return fullPath; // null si no se pudo iniciar
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Inicia grabación y devuelve fullPath — versión estática para runners
+  /// que manejan su propia grabación (self-recording).
+  static Future<String?> startRecording(String relativeFileName) async {
+    try {
+      final fullPath = await channel.invokeMethod<String>(
+        'startDiagnosticRecording',
+        {'filePath': relativeFileName},
+      );
+      return fullPath;
     } catch (_) {
       return null;
     }
