@@ -81,13 +81,25 @@ class DiagnosticReportGenerator {
       ));
       return;
     }
+
+    // Mapear clase numérica a nombre legible.
+    const classNames = [
+      'Indeterminado', 'Silencio', 'Voz', 'Voz+Ruido leve',
+      'Voz+Ruido medio', 'Ruido grave', 'Ruido agudo', 'Música',
+    ];
+    final classIdx = d['claseDominante'] as int? ?? 0;
+    final className = (classIdx >= 0 && classIdx < classNames.length)
+        ? classNames[classIdx]
+        : 'clase $classIdx';
+
     findings.add(DiagnosticFinding(
       title: 'Clasificador activo',
       userMessage:
-          'El clasificador de ambiente funciona (${d['muestras']} muestras)',
+          'El clasificador de ambiente funciona (${d['muestras']} muestras) '
+          '— ambiente detectado: $className',
       technicalDetail:
           'SmartScene OK: input=${d['inputDbSpl (min/avg/max)']}, '
-          'SNR=${d['snrDb (min/avg/max)']}, clase=${d['claseDominante']}',
+          'SNR=${d['snrDb (min/avg/max)']}, clase=$classIdx ($className)',
       severity: FindingSeverity.ok,
     ));
   }
