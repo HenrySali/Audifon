@@ -23,6 +23,8 @@ class DiagnosticAnalyzerScreen extends StatefulWidget {
 class _DiagnosticAnalyzerScreenState extends State<DiagnosticAnalyzerScreen> {
   final _inbox = AnalyzerInboxService.instance;
   StreamSubscription<void>? _sub;
+  bool _autoAnalyzing = false;
+  String? _autoAnalysisStatus;
 
   @override
   void initState() {
@@ -30,12 +32,39 @@ class _DiagnosticAnalyzerScreenState extends State<DiagnosticAnalyzerScreen> {
     _sub = _inbox.onChange.listen((_) {
       if (mounted) setState(() {});
     });
+    // Si ya hay WAVs en el inbox, analizar automáticamente el primero
+    if (_inbox.count > 0) {
+      _autoAnalyzeFirst();
+    }
   }
 
   @override
   void dispose() {
     _sub?.cancel();
     super.dispose();
+  }
+
+  Future<void> _autoAnalyzeFirst() async {
+    if (_inbox.pendingWavs.isEmpty) return;
+    final firstWav = _inbox.pendingWavs.first;
+    if (!File(firstWav).existsSync()) {
+      setState(() => _autoAnalysisStatus = 'Archivo no encontrado');
+      return;
+    }
+    setState(() {
+      _autoAnalyzing = true;
+      _autoAnalysisStatus = 'Analizando...';
+    });
+    // Abrir el analizador con el primer WAV automáticamente
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => AnalyzerScreen(preloadedWavPath: firstWav),
+        ),
+      );
+      setState(() => _autoAnalyzing = false);
+    }
   }
 
   Future<void> _openAnalyzer(String wavPath) async {

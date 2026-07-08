@@ -373,8 +373,36 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     // una señal con mayor contraste voz/ruido.
     sce_.process(buffer, blockSize);
 
-    // EQ aplica ganancia prescrita directamente.
-    eq_.process(buffer, blockSize);
+    // EQ con protección anti-saturación.
+    // El EQ amplifica 12 bandas simultáneamente. Si la suma de ganancias
+    // es alta (audiograma con pérdida moderada-severa), los picos post-EQ
+    // pueden superar el MPO y causar recorte permanente (MPO 100%).
+    //
+    // Protección: calcular el gain total estimado y escalar si supera
+    // el headroom disponible. Usa processWithScale (no depende de mpoThresholdDbSpl_).
+    //
+    // Headroom = 1.0 (techo digital) / (amplitud actual del buffer peak).
+    // Si maxEqGain * peakSample > 0.85 (ceiling), escalar proporcionalmente.
+    {
+        const float maxEqGain = eq_.getMaxGain();
+        float eqScale = 1.0f;
+        if (maxEqGain > 6.0f) {
+            // Estimar pico post-EQ: peak_actual * 10^(maxGain/20)
+            // Si eso supera 0.7 (dejando headroom para WDRC), escalar.
+            float peakNow = 0.0f;
+            for (int i = 0; i < blockSize; ++i) {
+                float s = std::abs(buffer[i]);
+                if (s > peakNow) peakNow = s;
+            }
+            const float estimatedPeakPostEq = peakNow * std::pow(10.0f, maxEqGain / 20.0f);
+            const float ceiling = 0.7f; // dejar headroom para Volume + WDRC
+            if (estimatedPeakPostEq > ceiling && peakNow > 1e-6f) {
+                eqScale = ceiling / estimatedPeakPostEq;
+                if (eqScale < 0.2f) eqScale = 0.2f; // nunca atenuar más de -14 dB
+            }
+        }
+        eq_.processWithScale(buffer, blockSize, eqScale);
+    }
 
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
