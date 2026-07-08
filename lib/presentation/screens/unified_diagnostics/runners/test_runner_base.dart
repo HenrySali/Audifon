@@ -48,10 +48,10 @@ abstract class TestRunnerBase {
     }
   }
 
-  /// Detiene la grabación WAV en curso.
+  /// Detiene la grabación WAV en curso y CONSERVA el archivo.
   Future<int> stopTestWav() async {
     try {
-      return await channel.invokeMethod<int>('stopDiagnosticRecording') ?? -1;
+      return await channel.invokeMethod<int>('stopDiagnosticRecordingKeep') ?? -1;
     } catch (_) {
       return -1;
     }
