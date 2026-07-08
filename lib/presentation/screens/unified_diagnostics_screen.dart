@@ -24,6 +24,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../data/bridges/spectrum_bridge.dart';
 import '../../data/services/analyzer_inbox_service.dart';
@@ -183,7 +184,7 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
   // ─── Ejecutar UN test ─────────────────────────────────────────────────────
 
   /// Helper: inicia grabación WAV para un test individual.
-  /// Retorna el nombre del archivo o null si no se pudo iniciar.
+  /// Retorna la RUTA COMPLETA del archivo o null si no se pudo iniciar.
   Future<String?> _startTestWav(String testId) async {
     final now = DateTime.now();
     final ts = '${now.year}${_pad2(now.month)}${_pad2(now.day)}'
@@ -194,7 +195,13 @@ class _UnifiedDiagnosticsScreenState extends State<UnifiedDiagnosticsScreen> {
             'startDiagnosticRecording',
             {'filePath': fileName},
           ) ?? false;
-      return started ? fileName : null;
+      if (!started) return null;
+      // Construir path completo (mismo que usa el Kotlin nativo)
+      final dir = await getExternalStorageDirectory();
+      if (dir != null) {
+        return '${dir.path}/$fileName';
+      }
+      return fileName; // fallback solo nombre
     } catch (_) {
       return null;
     }

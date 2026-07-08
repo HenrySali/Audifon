@@ -8,7 +8,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/analyzer/ui/analyzer_screen.dart';
 import '../../data/services/analyzer_inbox_service.dart';
@@ -39,17 +38,15 @@ class _DiagnosticAnalyzerScreenState extends State<DiagnosticAnalyzerScreen> {
     super.dispose();
   }
 
-  Future<void> _openAnalyzer(String wavFileName) async {
-    // Construir path completo
-    final dir = await getExternalStorageDirectory();
-    if (dir == null) return;
-    final fullPath = '${dir.path}/$wavFileName';
+  Future<void> _openAnalyzer(String wavPath) async {
+    // El inbox ahora guarda la ruta completa
+    final fullPath = wavPath;
 
     // Verificar que existe
     if (!File(fullPath).existsSync()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Archivo no encontrado: $wavFileName')),
+          SnackBar(content: Text('Archivo no encontrado: ${fullPath.split('/').last}')),
         );
       }
       return;
@@ -138,7 +135,7 @@ class _DiagnosticAnalyzerScreenState extends State<DiagnosticAnalyzerScreen> {
           child: ListTile(
             leading: const Icon(Icons.audio_file, color: Colors.cyanAccent),
             title: Text(
-              wav,
+              wav.split('/').last,
               style: const TextStyle(color: Colors.white, fontSize: 13),
               overflow: TextOverflow.ellipsis,
             ),
