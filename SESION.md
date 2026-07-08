@@ -218,3 +218,103 @@ Widget `AudioRecommendationWidget` en la pantalla principal que monitorea condic
 - Probar selector de micrófono con auricular BT
 - Subir server-patch.js al VPS
 - Duplicar cambios a app usuario (Audifon-usuario)
+
+
+---
+
+## Sesión 5 — 8 julio 2026
+
+### Objetivo
+Modularizar la pantalla de diagnóstico unificado, corregir bugs del pipeline WAV, y crear sistema de reporte inteligente para el Analizador.
+
+### 1. Modularización de unified_diagnostics_screen.dart
+
+**Antes:** 1 archivo monolítico de 1432 líneas.
+**Después:** 20 archivos con responsabilidades claras.
+
+```
+lib/presentation/screens/unified_diagnostics/
+├── models/
+│   ├── diag_test_id.dart        (IDs + nombres de los 13 tests)
+│   ├── test_result.dart         (TestResult + TestStatus enum)
+│   └── diagnostic_report.dart   (DiagnosticReport + DiagnosticFinding)
+├── runners/
+│   ├── test_runner_base.dart    (helpers compartidos: WAV, stats)
+│   ├── smart_scene_runner.dart
+│   ├── dsp_recording_runner.dart
+│   ├── session_log_runner.dart
+│   ├── spectrum_runner.dart
+│   ├── enhancement_runner.dart
+│   ├── latency_runner.dart
+│   ├── dnn_runner.dart
+│   ├── wdrc_runner.dart
+│   ├── mpo_runner.dart
+│   ├── protection_runner.dart
+│   ├── routing_runner.dart
+│   ├── health_runner.dart
+│   └── ab_comparative_runner.dart
+├── report/
+│   └── diagnostic_report_generator.dart
+├── widgets/
+│   ├── control_bar.dart
+│   └── test_card.dart
+├── theme/
+│   └── diagnostics_colors.dart
+└── unified_diagnostics_screen.dart (orquestador ~200 líneas)
+```
+
+### 2. Bugs corregidos en el pipeline WAV
+
+| Bug | Causa | Fix |
+|-----|-------|-----|
+| Self-recording tests (DSP, A/B) no enviaban WAVs al Analizador | `addWav()` solo se llamaba para tests normales | Extraer `wavFullPath`/`wavFullPaths` del resultado |
+| Path incorrecto (Dart vs Kotlin) | `getExternalStorageDirectory()` ≠ `getExternalFilesDir(null)` | Kotlin devuelve fullPath real como String |
+| WAVs de tests normales se borraban | `stop()` borra archivos <15s | Todos usan `stopDiagnosticRecordingKeep` |
+| A/B Comparative "Stop code -1" | `stop()` borra WAVs de 5s (intencionales) | Nuevo método `stopAndKeep()` en C++ |
+
+### 3. Reporte unificado de diagnóstico
+
+**DiagnosticReportGenerator** analiza los 13 tests y genera:
+- **Sección usuario**: lenguaje simple con ✅/⚠️/❌ + recomendaciones
+- **Sección técnica**: JSON completo con todos los datos (para soporte/dev)
+
+Se visualiza en la ventana del Analizador con:
+- Header con estado global (OK/warnings/issues)
+- Lista de hallazgos con severity + recomendaciones
+- Toggle expandible con JSON técnico copiable
+- Lista de WAVs con indicador de existencia del archivo
+
+### 4. Correcciones basadas en normas IEC/ANSI
+
+| # | Problema | Norma/Referencia | Fix |
+|---|----------|------------------|-----|
+| 1 | WDRC `distribuciónRegiones` vacío | IEC 60118-2:2004 | Kotlin devuelve String, runner ahora parsea ambos tipos |
+| 2 | MPO falso positivo "distorsionado" con clips=0 | Giannoulis/Massberg/Reiss (2012) JAES 60(6):399-408 | Diferencia envolvente activa (warning) vs clips reales (critical) |
+| 3 | Enhancement "Bypass" confuso con DNN activa | IEC 60118-2 (AGC etapas independientes) | Clarifica: modo = beamformer, DNN es independiente |
+| 4 | A/B borra WAVs parciales | IEC 60118-0:2022 (no prescribe duración mínima) | `stopAndKeep()`: finaliza header WAV sin borrar |
+
+### Commits de esta sesión
+
+| Commit | Mensaje |
+|--------|---------|
+| `3f3565f` | refactor: modularizar unified_diagnostics_screen en 20 archivos |
+| `9f8bbdb` | fix(diagnostics): WAV pipeline + reporte unificado en Analizador |
+| `b46cb56` | fix(diagnostics): 4 correcciones basadas en normas IEC/ANSI y literatura |
+| `427f097` | fix(build): remove extraneous closing brace in audio_engine.cpp:1146 |
+| `409591b` | fix(diagnostics): stopTestWav usa stopKeep para conservar WAVs de tests normales |
+
+### Resultado final del diagnóstico (test en Moto G32)
+
+- 14 WAVs generados y conservados correctamente
+- A/B Comparative: 3/3 modos grabados exitosamente
+- WDRC: "Compresión: 96%, Lineal: 4%" (antes vacío)
+- MPO: "Protección OK (activo 0%)" o "Protegiendo correctamente (sin distorsión)"
+- Enhancement: "IA activa (100%), beamformer desactivado"
+- Sistema estable, 0 underruns en latencia, timestamps 100% sanos
+
+### Pendiente para próxima sesión
+- **Diagnóstico en ambiente ruidoso**: grabación WAV + validar coherencia del pipeline con SNR bajo
+- Verificar que el clasificador de ambiente cambie correctamente con ruido real
+- Validar que DNN/WDRC/MPO se comporten coherentemente en ruido
+- Evaluar si el underrun reportado en health (1 en 5s durante diagnóstico) es un falso positivo del test mismo
+- Considerar bajar threshold de underruns critical de 1 a 3+ para evitar falsos positivos durante diagnóstico
