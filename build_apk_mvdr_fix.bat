@@ -7,7 +7,7 @@ REM  Cierra apps pesadas antes por RAM. Correr en CMD.
 REM ============================================================================
 setlocal
 set "FLUTTER=C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro2\flutter_3196\bin\flutter.bat"
-set "PROJ=C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro3\Audifon"
+set "PROJ=C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\Audifon"
 
 if not exist "%FLUTTER%" (
     echo ERROR: flutter.bat no encontrado en "%FLUTTER%".

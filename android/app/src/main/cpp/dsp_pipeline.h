@@ -561,6 +561,20 @@ private:
     /// Coeficiente de la rampa exponencial del WDRC (~200 ms a 4 ms/bloque).
     /// y[n] = y[n-1] + alpha * (target - y[n-1])  → tau ≈ 1/alpha bloques.
     static constexpr float kWdrcRampAlpha = 0.02f;
+
+    /// Dwell time para cambio de escena (anti-chasquido por oscilación).
+    /// La nueva SceneClass debe sostenerse kSceneDwellBlocks consecutivos
+    /// antes de aplicarla. ~2 s a 4 ms/bloque (256 samples / 48 kHz ≈ 5.3 ms;
+    /// ajustamos a 375 bloques ≈ 2.0 s). Phonak usa ~3-5 s; 2 s es reactivo
+    /// pero suficiente para evitar oscilación en el subte.
+    static constexpr int kSceneDwellBlocks = 375;
+
+    /// Escena actualmente aplicada (tras cumplir el dwell).
+    uint8_t currentAppliedScene_ = 0;  // UNKNOWN
+    /// Escena pendiente (candidata, aún no cumplió dwell).
+    uint8_t pendingScene_ = 0;
+    /// Contador de bloques consecutivos con la escena pendiente.
+    int pendingSceneCounter_ = 0;
     /// Bloques entre incrementos discretos del nrLevel (~300 ms a 4 ms/bloque).
     static constexpr int kNrLevelStepBlocks = 75;
     /// Bloques de “grace period” inicial al detectar cambio de clase (~200 ms)

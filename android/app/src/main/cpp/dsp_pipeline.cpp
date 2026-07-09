@@ -280,7 +280,39 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
         // pero es la información más reciente disponible sin re-analizar aquí.
         if (!smartPresetPinned_.load(std::memory_order_acquire)) {
             const uint8_t sceneClass = lastSceneClass_.load(std::memory_order_relaxed);
-            smart_scene::ScenePolicy policy = smart_scene::getPolicyForClass(sceneClass);
+
+            // ─── HISTÉRESIS / DWELL TIME (anti-chasquido por oscilación) ───
+            // Sin histéresis, si el clasificador oscila rápido entre 2 clases
+            // (p.ej. VOICE_IN_NOISE ↔ NOISE en el subte de CABA con mucha
+            // gente), los targets de WDRC cambian cada ~5 ms y la rampa no
+            // converge → chasquido "emisora mal sintonizada".
+            // Fix: la nueva escena debe sostenerse kSceneDwellBlocks (~2 s)
+            // antes de aplicarla. Si cambia antes del dwell, se ignora.
+            // Referencia: Phonak AutoSense usa ~3-5 s de dwell; Oticon usa
+            // histéresis de nivel con holdoff similar (PMC4111442).
+            bool applyPolicy = false;
+            if (sceneClass != currentAppliedScene_) {
+                if (sceneClass == pendingScene_) {
+                    pendingSceneCounter_++;
+                    if (pendingSceneCounter_ >= kSceneDwellBlocks) {
+                        // La nueva escena se mantuvo estable el dwell → aplicar.
+                        currentAppliedScene_ = sceneClass;
+                        pendingSceneCounter_ = 0;
+                        applyPolicy = true;
+                    }
+                } else {
+                    // Cambió a una escena DIFERENTE a la pendiente → reset.
+                    pendingScene_ = sceneClass;
+                    pendingSceneCounter_ = 1;
+                }
+            } else {
+                // Misma escena que la aplicada → reset del contador pendiente.
+                pendingScene_ = sceneClass;
+                pendingSceneCounter_ = 0;
+            }
+
+            if (applyPolicy) {
+                smart_scene::ScenePolicy policy = smart_scene::getPolicyForClass(currentAppliedScene_);
 
             // Aplicar WDRC targets (siempre).
             wdrcKneeTarget_  = policy.compressionKnee;
@@ -300,6 +332,7 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
             if (!nrBypassed_.load(std::memory_order_acquire)) {
                 nrLevelTarget_ = policy.nrLevel;
             }
+            } // end if (applyPolicy)
         }
     }
 

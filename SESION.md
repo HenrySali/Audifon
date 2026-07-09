@@ -318,3 +318,108 @@ Se visualiza en la ventana del Analizador con:
 - Validar que DNN/WDRC/MPO se comporten coherentemente en ruido
 - Evaluar si el underrun reportado en health (1 en 5s durante diagnóstico) es un falso positivo del test mismo
 - Considerar bajar threshold de underruns critical de 1 a 3+ para evitar falsos positivos durante diagnóstico
+
+
+---
+
+## Sesión 6 — 9 julio 2026
+
+### Objetivo
+Eliminar el artefacto de "soplido/eco de caracol" que deja la DNN (GTCRN) al limpiar ruido, especialmente en ambientes de calle/subte. También corregir chasquidos por oscilación de escena y mejorar el MVDR.
+
+### 1. Diagnóstico del soplido (validado en Octave + WAVs reales del dispositivo)
+
+**Problema:** con la DNN activa en ambientes ruidosos (calle, subte), se escucha un "soplido" constante de fondo que suena como viento o resonancia de caracol. El bypass no lo tiene. La DNN (GTCRN) deja residuo tonal por usar máscara de magnitud sin tratamiento de fase.
+
+**Análisis realizado:**
+- Extracción de 14 WAVs de diagnóstico del Moto G32 via adb
+- Simulación en Octave (`simular_eco.m`): confirmó que la interacción DNN + WDRC modula el residuo DNN con fluctuación de 4.8 dB (audible, umbral 3 dB)
+- Comparativa A/B en los WAVs: bypass vs DNN — el soplido solo está con DNN activa
+- Medición de nivel MVDR vs bypass (`medir_nivel_mvdr_vs_bypass.m`): confirmó onset preservation al 10.5% con Wiener DD
+
+### 2. Cambio de modelo DNN: GTCRN → DPDFNet4
+
+**Causa raíz:** GTCRN aplica máscara de magnitud pura (no toca fase) → deja "huecos" espectrales → musical noise / soplido residual.
+
+**Solución:** DPDFNet4 (repo: `github.com/ceva-ip/DPDFNet`, paper arXiv:2512.16420):
+- Usa **Deep Filtering** (predice filtros FIR por banda, no máscaras) → reconstruye sin huecos espectrales → sin soplido
+- 16 kHz nativo, causal, streaming
+- ONNX ya exportado (11.6 MB)
+- Win=320, hop=160, freq_bins=161, state=52592 floats
+- PESQ ~3.1 vs ~2.87 del GTCRN
+- MIT license
+
+**Validación offline:**
+- Descargado el modelo de Hugging Face (`Ceva-IP/DPDFNet`)
+- Probado con Python (`inferir_simple.py`) sobre los WAVs reales del diagnóstico:
+  - `diag_test_20260708_213700.wav` (solo ruido de calle) → salió **limpio sin soplido**
+  - `ab_bypass_20260708_213805.wav` (con voces) → limpió sin perder voces (volumen más bajo, normal — la cadena posterior amplifica)
+
+**Integración:**
+- El `dnn_denoiser.cpp` de build-84 **ya estaba adaptado** a DPDFNet4 (win=320, hop=160, DFT directa N=320, state [52592])
+- Solo se reemplazó el archivo asset `dnn_denoiser/gtcrn.onnx` por `dpdfnet4.onnx` (renombrado a `gtcrn.onnx` para mantener compatibilidad de path)
+- APK compilado desde Pro4 (build-84 + modelo nuevo)
+
+### 3. Histéresis de cambio de escena (anti-chasquido)
+
+**Problema:** en el subte, el clasificador oscila rápido entre escenas (VOICE_IN_NOISE ↔ NOISE) → los targets del WDRC cambian cada ~5 ms → la rampa no converge → chasquido "emisora mal sintonizada".
+
+**Solución:** agregado **dwell time de 2 segundos** (`kSceneDwellBlocks = 375`) en `dsp_pipeline.cpp`:
+- La nueva escena debe sostenerse 2 s consecutivos antes de aplicarse
+- Si oscila antes del dwell, se ignora (se mantiene la escena anterior)
+- Basado en Phonak AutoSense (~3-5 s) y Oticon (PMC4111442)
+- Variables nuevas en `dsp_pipeline.h`: `currentAppliedScene_`, `pendingScene_`, `pendingSceneCounter_`
+
+### 4. Mejoras MVDR (de sesiones previas, validadas en Octave)
+
+- **SGJMAP** reemplazó al Wiener DD como post-filtro (preserva 3× más onsets: 30.9% vs 10.5%)
+- **Steering endfire 90°** (vs broadside 0° que daba solo 3.78 dB)
+- **Loading adaptativo** (trace(Rnn)/2, WNG max 1.98 → 0.67)
+- **Noise-only interno** (sin dependencia del VAD pegado, updates-durante-voz 58 → 0)
+- **Dereverb suavizado** (over 1.1, floor 0.40, gainSmooth 0.60)
+- **MPO soft-knee 12 dB** (vs 6 dB que no capturaba el exceso de 7 dB)
+
+### 5. OpenMHA instalado
+
+- Descargado OpenMHA v4.18.1 para Windows x64 en `Repo Oir Pro4\openmha-4.18.1-windows-x64\`
+- Configuración `.cfg` creada para simular el pipeline Oir Pro (EQ + WDRC + MPO)
+- Pendiente: usar para validación offline de los WAVs del dispositivo
+
+### Archivos modificados/creados en Pro4
+
+| Archivo | Cambio |
+|---------|--------|
+| `android/app/src/main/assets/dnn_denoiser/gtcrn.onnx` | Reemplazado por DPDFNet4 (11.6 MB) |
+| `android/app/src/main/cpp/dsp_pipeline.cpp` | Histéresis de escena (dwell 2 s) |
+| `android/app/src/main/cpp/dsp_pipeline.h` | Variables de histéresis + constante `kSceneDwellBlocks` |
+| `build_apk_mvdr_fix.bat` | Corregido path a Pro4 |
+| `install_apk_mvdr_fix.bat` | Corregido path a Pro4 |
+
+### Herramientas de análisis creadas (Octave, en Repo Oir Pro2\Octave Kiro IDE\ANALISIS_MVDR\)
+
+- `simular_eco.m` + `correr_eco.bat` — diagnóstico del eco/soplido (H1/H2/H3)
+- `medir_nivel_mvdr_vs_bypass.m` + `correr_medicion_nivel.bat` — onset preservation
+- `mvdr_run_sgjmap.m` + `medir_sgjmap.m` + `correr_sgjmap.bat` — validación SGJMAP
+- `analisis_mvdr.m` / `analisis_mvdr_fix.m` — simulación completa MVDR pre/post fixes
+
+### Herramienta de prueba DPDFNet (Python, en Repo Oir Pro4\DPDFNet\)
+
+- `inferir_simple.py` — procesa WAV con DPDFNet4 ONNX (streaming frame-by-frame)
+- `procesar_bypass.bat` — extrae canal izquierdo y procesa
+- `correr_inferencia.bat` — wrapper rápido
+
+### Estado pendiente
+
+- **Probar DPDFNet4 en el dispositivo** (APK compilado, falta instalar y escuchar)
+- Verificar que el modelo carga bien en Android (compatibilidad ONNX input shapes)
+- Si funciona: pushear a `main` el modelo nuevo + histéresis
+- Evaluar si `intensity` DNN necesita ajuste con el nuevo modelo
+- Prueba en subte para verificar que la histéresis eliminó los chasquidos
+
+### Repos y rutas
+
+- Pro4: `C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\Audifon` (build-84 + cambios)
+- DPDFNet: `C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\DPDFNet` (repo clonado)
+- OpenMHA: `C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\openmha-4.18.1-windows-x64\`
+- WAVs diagnóstico: `C:\Users\Elsa y Henry\Desktop\Amplificador\wavs_diagnostico\`
+- Octave análisis: `C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro2\Octave Kiro IDE\ANALISIS_MVDR\`

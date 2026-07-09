@@ -8,7 +8,7 @@ setlocal
 cd /d "%~dp0"
 
 set "ADB=C:\Users\Elsa y Henry\AppData\Local\Android\sdk\platform-tools\adb.exe"
-set "APK=C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro3\Audifon\build\app\outputs\flutter-apk\app-debug.apk"
+set "APK=C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\Audifon\build\app\outputs\flutter-apk\app-debug.apk"
 
 if not exist "%ADB%" (
     echo ERROR: adb no encontrado en "%ADB%".
