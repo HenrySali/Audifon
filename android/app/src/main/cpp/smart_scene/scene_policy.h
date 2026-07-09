@@ -25,6 +25,8 @@ struct ScenePolicy {
     bool tnrEnabled;            ///< Transient Noise Reducer
     int enhancementMode;        ///< 0=Bypass, 1=DualDNN, 2=MVDR, 3=Hybrid
     float mpoThresholdDbSpl;    ///< MPO broadband
+    float wdrcReleaseMs;        ///< Release del WDRC (ms). Más largo en ruido
+                                ///< para suavizar fluctuaciones y evitar artefactos DNN.
 };
 
 /// Tabla de políticas indexada por SceneClass (0-7).
@@ -50,41 +52,50 @@ struct ScenePolicy {
 ///
 /// Referencia: Dillon (2012) "Hearing Aids" Cap 6; Keidser et al. (2012)
 /// "NAL-NL2 Empirical Adjustments" Trends in Hearing; IEC 60118-2.
+///
+/// Fundamento del wdrcReleaseMs por escena:
+///   - En SILENCIO/VOZ pura: release corto (100 ms) para reactividad.
+///   - En VOZ+RUIDO: release LARGO (300-400 ms) para que la ganancia no
+///     oscile rápidamente con las fluctuaciones del ruido de fondo.
+///     Un release largo previene que la DNN reciba señal con modulaciones
+///     rápidas de amplitud que causan artefactos ("chasquido de emisora").
+///     Ref: Giannoulis et al. (2012) JAES — release lento reduce "pumping".
+///     Ref: Stone & Moore (2003) — release >200 ms mejora calidad en ruido.
+///   - En RUIDO dominante (sin voz): release largo (350 ms) — estabilidad.
+///   - En MÚSICA: release largo (400 ms) para preservar dinámica natural
+///     sin pumping audible.
 static constexpr ScenePolicy kScenePolicies[] = {
     // UNKNOWN (0): conservador, DualDNN por seguridad
     { /* nr */ 1, /* knee */ 55.0f, /* ratio */ 2.0f, /* tnr */ false,
-      /* enhancement */ 1, /* mpo */ 110.0f },
+      /* enhancement */ 1, /* mpo */ 110.0f, /* release */ 150.0f },
 
     // SILENCE (1): bypass total, mínimo procesamiento
     { /* nr */ 0, /* knee */ 55.0f, /* ratio */ 1.5f, /* tnr */ false,
-      /* enhancement */ 0, /* mpo */ 110.0f },
+      /* enhancement */ 0, /* mpo */ 110.0f, /* release */ 100.0f },
 
     // VOICE_ONLY (2): DualDNN para limpiar, compresión estándar
     { /* nr */ 1, /* knee */ 52.0f, /* ratio */ 2.0f, /* tnr */ false,
-      /* enhancement */ 1, /* mpo */ 110.0f },
+      /* enhancement */ 1, /* mpo */ 110.0f, /* release */ 100.0f },
 
     // VOICE_IN_NOISE_LOW (3): DualDNN, NR medio, knee ALTO para preservar voz
     { /* nr */ 2, /* knee */ 65.0f, /* ratio */ 1.5f, /* tnr */ false,
-      /* enhancement */ 1, /* mpo */ 110.0f },
+      /* enhancement */ 1, /* mpo */ 110.0f, /* release */ 300.0f },
 
     // VOICE_IN_NOISE_MID (4): DualDNN, NR alto, knee ALTO, ratio bajo
     { /* nr */ 3, /* knee */ 70.0f, /* ratio */ 1.4f, /* tnr */ true,
-      /* enhancement */ 1, /* mpo */ 110.0f },
+      /* enhancement */ 1, /* mpo */ 110.0f, /* release */ 400.0f },
 
     // NOISE_LOW_DOMINANT (5): DualDNN, NR máximo + TNR, knee moderado
-    // Sin voz detectada → podemos comprimir más, pero no excesivamente
-    // porque la DNN ya limpia. Ratio bajo para no matar la señal.
     { /* nr */ 3, /* knee */ 60.0f, /* ratio */ 1.4f, /* tnr */ true,
-      /* enhancement */ 1, /* mpo */ 110.0f },
+      /* enhancement */ 1, /* mpo */ 110.0f, /* release */ 350.0f },
 
     // NOISE_HIGH_DOMINANT (6): DualDNN, NR máximo + TNR, knee moderado
-    // Subte, tráfico, maquinaria — misma lógica que NOISE_LOW.
     { /* nr */ 3, /* knee */ 60.0f, /* ratio */ 1.4f, /* tnr */ true,
-      /* enhancement */ 1, /* mpo */ 110.0f },
+      /* enhancement */ 1, /* mpo */ 110.0f, /* release */ 350.0f },
 
     // MUSIC (7): bypass NR, compresión mínima para preservar dinámica
     { /* nr */ 0, /* knee */ 65.0f, /* ratio */ 1.2f, /* tnr */ false,
-      /* enhancement */ 0, /* mpo */ 115.0f },
+      /* enhancement */ 0, /* mpo */ 115.0f, /* release */ 400.0f },
 };
 
 /// Obtiene la política para una clase dada (bounds-checked).

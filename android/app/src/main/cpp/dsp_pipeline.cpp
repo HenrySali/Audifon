@@ -285,6 +285,10 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
             // Aplicar WDRC targets (siempre).
             wdrcKneeTarget_  = policy.compressionKnee;
             wdrcRatioTarget_ = policy.compressionRatio;
+            // Release adaptativo por escena: en ruido, release largo para
+            // evitar oscilaciones rápidas que causan artefactos en la DNN.
+            // Stone & Moore (2003): release >200 ms mejora calidad en ruido.
+            wdrc_.setReleaseMs(policy.wdrcReleaseMs);
             // TNR se aplica directo (sin rampa, es ON/OFF).
             tnr_.setEnabled(policy.tnrEnabled);
 
