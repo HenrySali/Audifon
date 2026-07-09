@@ -282,57 +282,52 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
             const uint8_t sceneClass = lastSceneClass_.load(std::memory_order_relaxed);
 
             // ─── HISTÉRESIS / DWELL TIME (anti-chasquido por oscilación) ───
-            // Sin histéresis, si el clasificador oscila rápido entre 2 clases
-            // (p.ej. VOICE_IN_NOISE ↔ NOISE en el subte de CABA con mucha
-            // gente), los targets de WDRC cambian cada ~5 ms y la rampa no
-            // converge → chasquido "emisora mal sintonizada".
-            // Fix: la nueva escena debe sostenerse kSceneDwellBlocks (~2 s)
-            // antes de aplicarla. Si cambia antes del dwell, se ignora.
-            // Referencia: Phonak AutoSense usa ~3-5 s de dwell; Oticon usa
-            // histéresis de nivel con holdoff similar (PMC4111442).
+            // La nueva escena debe sostenerse kSceneDwellBlocks (~2 s) antes
+            // de aplicarla. EXCEPCIÓN: la primera transición desde UNKNOWN (0)
+            // se aplica INMEDIATAMENTE para que el sistema no quede 2s sin
+            // clasificación útil al arrancar.
             bool applyPolicy = false;
             if (sceneClass != currentAppliedScene_) {
-                if (sceneClass == pendingScene_) {
+                // Excepción: si estamos en UNKNOWN (arranque), aplicar inmediato.
+                if (currentAppliedScene_ == 0 && sceneClass != 0) {
+                    currentAppliedScene_ = sceneClass;
+                    pendingSceneCounter_ = 0;
+                    applyPolicy = true;
+                } else if (sceneClass == pendingScene_) {
                     pendingSceneCounter_++;
                     if (pendingSceneCounter_ >= kSceneDwellBlocks) {
-                        // La nueva escena se mantuvo estable el dwell → aplicar.
                         currentAppliedScene_ = sceneClass;
                         pendingSceneCounter_ = 0;
                         applyPolicy = true;
                     }
                 } else {
-                    // Cambió a una escena DIFERENTE a la pendiente → reset.
                     pendingScene_ = sceneClass;
                     pendingSceneCounter_ = 1;
                 }
             } else {
-                // Misma escena que la aplicada → reset del contador pendiente.
                 pendingScene_ = sceneClass;
                 pendingSceneCounter_ = 0;
             }
 
             if (applyPolicy) {
-                smart_scene::ScenePolicy policy = smart_scene::getPolicyForClass(currentAppliedScene_);
+                smart_scene::ScenePolicy policy =
+                    smart_scene::getPolicyForClass(currentAppliedScene_);
 
-            // Aplicar WDRC targets (siempre).
-            wdrcKneeTarget_  = policy.compressionKnee;
-            wdrcRatioTarget_ = policy.compressionRatio;
-            // Release adaptativo por escena: en ruido, release largo para
-            // evitar oscilaciones rápidas que causan artefactos en la DNN.
-            // Stone & Moore (2003): release >200 ms mejora calidad en ruido.
-            wdrc_.setReleaseMs(policy.wdrcReleaseMs);
-            // TNR se aplica directo (sin rampa, es ON/OFF).
-            tnr_.setEnabled(policy.tnrEnabled);
+                // WDRC targets
+                wdrcKneeTarget_  = policy.compressionKnee;
+                wdrcRatioTarget_ = policy.compressionRatio;
 
-            // NR: solo aplicar si la DNN NO está activa (evitar doble
-            // atenuación). Cuando DNN corre, setDnnEnabled(true) ya puso
-            // nrBypassed_=true; si ScenePolicy pisara nrLevelTarget_ aquí,
-            // la rampa reactiva el NR Wiener sobre la señal ya limpiada
-            // por la DNN → la voz desaparece.
-            if (!nrBypassed_.load(std::memory_order_acquire)) {
-                nrLevelTarget_ = policy.nrLevel;
+                // Release adaptativo (sin rampa — un solo set por transición)
+                wdrc_.setReleaseMs(policy.wdrcReleaseMs);
+
+                // TNR (ON/OFF directo)
+                tnr_.setEnabled(policy.tnrEnabled);
+
+                // NR: solo si DNN NO está activa (evitar doble atenuación)
+                if (!nrBypassed_.load(std::memory_order_acquire)) {
+                    nrLevelTarget_ = policy.nrLevel;
+                }
             }
-            } // end if (applyPolicy)
         }
     }
 
@@ -386,13 +381,7 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     }
 
     // ─── 4. Equalizer 12 bandas (AMPLIFICA según prescripción) ──────────
-    // Gain scaling adaptativo: cuando el input es alto (>70 dB SPL), reduce
-    // las ganancias EQ proporcionalmente para que los picos post-EQ no
-    // superen MPO - 6 dB de headroom. Esto previene el "aplastamiento" del
-    // MPO cuando hay señal fuerte + prescripción audiométrica agresiva.
-    //
-    // Fórmula: scale = min(1.0, (mpoDbSpl - 6 - inputLevelDb) / maxEqGain)
-    // Validado con pyroomacoustics: input 89.8 dB → scale 0.38 → MPO 0%.
+    // Protección anti-saturación + EQ prescriptivo.
 
     // ─── 3.4. Expansor de baja frecuencia ≤1000 Hz (R1) ────────────────
     // Downward expansion band-limitada que atenúa el hiss del mic en silencios

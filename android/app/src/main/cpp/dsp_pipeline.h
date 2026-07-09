@@ -1,7 +1,7 @@
 /// @file dsp_pipeline.h
 /// @brief Pipeline DSP completo para procesamiento de audio en tiempo real.
 ///
-/// Orden del pipeline: HPF 100Hz → NR → medir nivel PRE-EQ → EQ → WDRC → Volume → MPO
+/// Orden del pipeline: HPF 100Hz → TNR → NR → Expansor → SCE → EQ → WDRC → Volume → FBS → OC → MPO
 ///
 /// Principios de diseño:
 /// - El nivel se mide ANTES del EQ para que el WDRC tome decisiones
