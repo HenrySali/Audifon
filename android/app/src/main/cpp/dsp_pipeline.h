@@ -1,7 +1,7 @@
 /// @file dsp_pipeline.h
 /// @brief Pipeline DSP completo para procesamiento de audio en tiempo real.
 ///
-/// Orden del pipeline: HPF 100Hz → TNR → NR → Expansor → SCE → EQ → WDRC → Volume → FBS → OC → MPO
+/// Orden del pipeline: HPF 100Hz → TNR → NR → Expansor → SCE → EQ → AuditoryModel → WDRC → Volume → FBS → OC → MPO
 ///
 /// Principios de diseño:
 /// - El nivel se mide ANTES del EQ para que el WDRC tome decisiones
@@ -32,6 +32,7 @@
 #include "adaptive_feedback_canceller.h"
 #include "spectral_contrast_enhancer.h"
 #include "expander.h"
+#include "auditory_model.h"
 
 /// Configuración de audio del sistema
 struct AudioConfig {
@@ -201,6 +202,21 @@ public:
     /// Intensidad del SCE. factor ∈ [0, 1]: 0=bypass, 0.5=-6dB valles, 1=max.
     void setSceFactor(float factor) { sce_.setFactor(factor); }
     float getSceFactor() const { return sce_.getFactor(); }
+
+    // ─── Modelo Auditivo (simulación del sistema auditivo humano) ────────
+    /// Habilita/deshabilita el modelo auditivo (6 etapas cocleares).
+    /// Cuando está habilitado, simula la cadena auditiva humana y aplica
+    /// compensaciones personalizadas según el audiograma del paciente.
+    /// Se inserta después del EQ, antes del WDRC.
+    void setAuditoryModelEnabled(bool enabled) { auditoryModel_.setEnabled(enabled); }
+    bool isAuditoryModelEnabled() const { return auditoryModel_.isEnabled(); }
+
+    /// Configura el audiograma del paciente para el modelo auditivo.
+    /// Los umbrales en dB HL (12 bandas) determinan la compensación OHC.
+    /// @param thresholds Array de 12 valores en dB HL (0 = audición normal)
+    void setAuditoryModelAudiogram(const float thresholds[12]) {
+        auditoryModel_.setAudiogram(thresholds);
+    }
 
     // ─── Expansor de baja frecuencia (R1, tarea 4) ──────────────────────
     /// Configura el Expansor de baja frecuencia (downward expansion ≤1000 Hz).
@@ -483,6 +499,7 @@ private:
     SpectralContrastEnhancer sce_; ///< SCE: realza voz atenuando valles (solo atenúa)
     Expander expander_;       ///< Expansor de baja frecuencia ≤1kHz (R1, solo atenúa; default OFF)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
+    AuditoryModel auditoryModel_; ///< Modelo auditivo humano (6 etapas cocleares, post-EQ pre-WDRC)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)
     EnvironmentClassifier envClassifier_; ///< Clasificador automático de entorno

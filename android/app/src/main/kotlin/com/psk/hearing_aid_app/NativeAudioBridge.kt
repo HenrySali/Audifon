@@ -494,6 +494,29 @@ class NativeAudioBridge {
 
     external fun nativeSetTnrEnabled(enabled: Boolean)
 
+    // ─── Auditory Model (simulación del sistema auditivo humano) ─────────
+
+    /**
+     * Habilita/deshabilita el Modelo Auditivo (6 etapas cocleares).
+     * Cuando habilitado, simula la cadena auditiva humana y aplica
+     * compensaciones personalizadas según el audiograma del paciente.
+     * Se inserta después del EQ, antes del WDRC en el pipeline.
+     * Thread-safe (std::atomic interno). Default: OFF.
+     *
+     * @param enabled true para activar, false para bypass (passthrough)
+     */
+    external fun nativeSetAuditoryModelEnabled(enabled: Boolean)
+
+    /**
+     * Configura el audiograma del paciente para el modelo auditivo.
+     * Los umbrales en dB HL (12 bandas) determinan la compensación OHC
+     * por banda. Frecuencias: 250, 500, 750, 1000, 1500, 2000, 2500,
+     * 3000, 3500, 4000, 6000, 8000 Hz.
+     *
+     * @param thresholds FloatArray de 12 valores en dB HL (0 = audición normal)
+     */
+    external fun nativeSetAuditoryModelAudiogram(thresholds: FloatArray)
+
     // ─── Smart Scene Engine (Fase 1) ────────────────────────────────────
 
     /**

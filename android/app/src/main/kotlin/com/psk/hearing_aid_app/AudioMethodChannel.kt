@@ -243,6 +243,20 @@ class AudioMethodChannel(
                     nativeBridge.nativeSetTnrEnabled(enabled)
                     result.success(null)
                 }
+                // Auditory Model (simulación del sistema auditivo humano)
+                "setAuditoryModelEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    nativeBridge.nativeSetAuditoryModelEnabled(enabled)
+                    result.success(null)
+                }
+                "setAuditoryModelAudiogram" -> {
+                    val thresholdsList = call.argument<List<Double>>("thresholds") ?: List(12) { 0.0 }
+                    val thresholds = FloatArray(12) { i ->
+                        if (i < thresholdsList.size) thresholdsList[i].toFloat() else 0f
+                    }
+                    nativeBridge.nativeSetAuditoryModelAudiogram(thresholds)
+                    result.success(null)
+                }
                 // Smart Scene Engine (Fase 1)
                 "getSceneSnapshot" -> {
                     val data = nativeBridge.nativeGetSceneSnapshot()

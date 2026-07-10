@@ -156,6 +156,21 @@ public:
                                     attackMs, releaseMs);
     }
 
+    // ─── Modelo Auditivo (simulación del sistema auditivo humano) ────────
+    /// Habilita/deshabilita el modelo auditivo (6 etapas cocleares).
+    /// Thread-safe (atómico en AuditoryModel).
+    void setAuditoryModelEnabled(bool enabled) {
+        pipeline_.setAuditoryModelEnabled(enabled);
+    }
+    bool isAuditoryModelEnabled() const {
+        return pipeline_.isAuditoryModelEnabled();
+    }
+    /// Configura el audiograma del paciente para el modelo auditivo.
+    /// @param thresholds Array de 12 valores en dB HL (0 = audición normal)
+    void setAuditoryModelAudiogram(const float thresholds[12]) {
+        pipeline_.setAuditoryModelAudiogram(thresholds);
+    }
+
     // ─── Supresor de reverberacion (R5, tarea 5.2) ───────────────────────
     /// Forward a MvdrBeamformer. Los setters son no-op efectivos fuera del
     /// modo MVDR (el beamformer hace bypass), pero el estado queda guardado

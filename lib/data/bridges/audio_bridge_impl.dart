@@ -220,6 +220,29 @@ class AudioBridgeImpl implements AudioBridge {
   }
 
   @override
+  Future<void> setAuditoryModelEnabled(bool enabled) async {
+    await _safeInvokeVoid(
+      'setAuditoryModelEnabled',
+      <String, dynamic>{'enabled': enabled},
+    );
+  }
+
+  @override
+  Future<void> setAuditoryModelAudiogram(List<double> thresholds) async {
+    if (thresholds.length != 12) {
+      throw ArgumentError.value(
+        thresholds.length,
+        'thresholds.length',
+        'Audiogram requires exactly 12 bands, got ${thresholds.length}',
+      );
+    }
+    await _safeInvokeVoid(
+      'setAuditoryModelAudiogram',
+      <String, dynamic>{'thresholds': thresholds},
+    );
+  }
+
+  @override
   Future<void> setMpoThresholdDbSpl(double thresholdDbSpl) async {
     if (thresholdDbSpl.isNaN || thresholdDbSpl.isInfinite) {
       throw ArgumentError(

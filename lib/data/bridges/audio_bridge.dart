@@ -170,6 +170,31 @@ abstract class AudioBridge {
   /// timbre del subte, puertas que se cierran, bocinas. No afecta la voz.
   Future<void> updateTnrEnabled(bool enabled);
 
+  /// Habilita/deshabilita el Modelo Auditivo (simulación del sistema auditivo
+  /// humano — 6 etapas cocleares).
+  ///
+  /// Cuando está habilitado, simula la cadena auditiva humana completa:
+  /// canal auditivo (resonancia 2700 Hz), oído medio (bandpass 400-4000 Hz),
+  /// membrana basilar (12 filtros gammatone), OHC (compresión compensatoria
+  /// según audiograma), IHC (transducción), nervio auditivo (realce temporal).
+  ///
+  /// Se inserta después del EQ, antes del WDRC en el pipeline DSP.
+  /// Requiere audiograma del paciente para personalizar la compensación.
+  ///
+  /// Referencias: Moore 2003, Glasberg & Moore 1990, Zilany et al. 2014.
+  Future<void> setAuditoryModelEnabled(bool enabled);
+
+  /// Configura el audiograma del paciente para el Modelo Auditivo.
+  ///
+  /// [thresholds] debe contener exactamente 12 valores en dB HL,
+  /// correspondientes a las frecuencias: 250, 500, 750, 1000, 1500, 2000,
+  /// 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+  /// Un valor de 0 indica audición normal en esa frecuencia.
+  ///
+  /// Los umbrales determinan la ganancia compensatoria de las células
+  /// ciliadas externas (OHC) por banda: mayor HL → más compensación.
+  Future<void> setAuditoryModelAudiogram(List<double> thresholds);
+
   /// Activa/desactiva "MHL Prescripción": amplificación lineal mínima.
   ///
   /// Cuando se activa, el motor aplica gains flat 8 dB en las 12 bandas EQ
