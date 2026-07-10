@@ -3230,16 +3230,37 @@ class _AuditoryModelCardState extends State<_AuditoryModelCard> {
   }
 
   Future<void> _sendAudiogram() async {
-    // Enviar audiograma por defecto (0 dB HL = normal).
-    // En producción, el bloc cargará el audiograma real del paciente
-    // desde el AudiogramRepository y lo enviará al activar el modelo.
+    // Leer el audiograma REAL del paciente desde Hive (audiogram_box).
+    // Si no hay audiograma guardado, usar el default de la app (pérdida
+    // descendente moderada 25-60 dB HL).
     try {
-      final thresholds = List<double>.filled(12, 0.0);
+      final box = await Hive.openBox<dynamic>('audiogram_box');
+      final data = box.get('user_audiogram');
+
+      List<double> thresholds;
+      if (data != null && data is Map) {
+        final thresholdsMap = Map<String, dynamic>.from(data['thresholds'] as Map);
+        // Convertir el mapa {frecuencia: umbral} a lista ordenada de 12 bandas
+        const freqs = [250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000];
+        thresholds = freqs.map((f) {
+          final val = thresholdsMap[f.toString()];
+          return (val is num) ? val.toDouble() : 0.0;
+        }).toList();
+      } else {
+        // Sin audiograma guardado → usar default de la app
+        thresholds = [25, 30, 35, 40, 40, 45, 45, 50, 50, 55, 55, 60];
+      }
+
       await _channel.invokeMethod('setAuditoryModelAudiogram', {
         'thresholds': thresholds,
       });
     } catch (_) {
-      // El motor puede no estar activo aún — silenciar
+      // Si falla, enviar el default
+      try {
+        await _channel.invokeMethod('setAuditoryModelAudiogram', {
+          'thresholds': [25.0, 30.0, 35.0, 40.0, 40.0, 45.0, 45.0, 50.0, 50.0, 55.0, 55.0, 60.0],
+        });
+      } catch (_) {}
     }
   }
 
