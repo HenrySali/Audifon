@@ -257,6 +257,11 @@ class AudioMethodChannel(
                     nativeBridge.nativeSetAuditoryModelAudiogram(thresholds)
                     result.success(null)
                 }
+                "setAuditoryModelEarCanalGain" -> {
+                    val gainDb = (call.argument<Double>("gainDb") ?: 12.0).toFloat()
+                    nativeBridge.nativeSetAuditoryModelEarCanalGain(gainDb)
+                    result.success(null)
+                }
                 // Smart Scene Engine (Fase 1)
                 "getSceneSnapshot" -> {
                     val data = nativeBridge.nativeGetSceneSnapshot()

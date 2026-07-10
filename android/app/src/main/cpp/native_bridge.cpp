@@ -1075,6 +1075,22 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAuditoryModelAudiogram
     }
 }
 
+/// Configura la ganancia del modelo auditivo avanzado (slider UI).
+/// Rango: 0 (mínimo) a 18 (máximo). Default: 12 (normal).
+/// Thread-safe.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAuditoryModelEarCanalGain(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jfloat gainDb) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    g_engine->setAuditoryModelEarCanalGain(gainDb);
+    LOGI("nativeSetAuditoryModelEarCanalGain: %.1f dB", gainDb);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Smart Scene Engine — Fase 1
 // ─────────────────────────────────────────────────────────────────────────────

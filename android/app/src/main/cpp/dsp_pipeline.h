@@ -218,6 +218,12 @@ public:
         auditoryModel_.setAudiogram(thresholds);
     }
 
+    /// Configura la ganancia del modelo auditivo avanzado (slider UI).
+    /// Rango: 0 (mínimo) a 18 (máximo). Default: 12 (normal).
+    void setAuditoryModelEarCanalGain(float gainDb) {
+        auditoryModel_.setEarCanalGainDb(gainDb);
+    }
+
     // ─── Expansor de baja frecuencia (R1, tarea 4) ──────────────────────
     /// Configura el Expansor de baja frecuencia (downward expansion ≤1000 Hz).
     /// Default: enabled=false, ratio=1.0 → passthrough (R6.3, AC5, AC7). Los

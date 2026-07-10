@@ -86,6 +86,17 @@ public:
         computeCompressorParams();
     }
 
+    /// Configura la ganancia de la resonancia del canal auditivo (etapa 1).
+    /// Controla la ganancia máxima de inserción del modelo (0-18 dB).
+    /// 0 = efecto mínimo, 12 = normal, 18 = máximo.
+    /// Thread-safe. Recalcula parámetros de compresión.
+    void setEarCanalGainDb(float gainDb) {
+        gainDb = std::clamp(gainDb, 0.0f, 18.0f);
+        earCanalGainDb_ = gainDb;
+        // Escalar todas las insertion gains proporcionalmente
+        computeCompressorParams();
+    }
+
     /// Procesa un bloque de audio in-place.
     /// REEMPLAZA el EQ + WDRC cuando está habilitado.
     ///
@@ -229,6 +240,12 @@ private:
 
             insertionGain_[b] = hl * 0.5f * freqWeight;
             insertionGain_[b] = std::clamp(insertionGain_[b], 0.0f, 40.0f);
+            // Escalar por el control de ganancia manual (slider UI)
+            // earCanalGainDb_ = 12 → factor 1.0 (normal)
+            // earCanalGainDb_ = 0  → factor 0.0 (mínimo)
+            // earCanalGainDb_ = 18 → factor 1.5 (máximo)
+            float gainScale = earCanalGainDb_ / 12.0f;
+            insertionGain_[b] *= gainScale;
 
             // ─── Knee de compresión ─────────────────────────────────────
             // Más HL → knee más bajo (compresión empieza antes)
@@ -271,6 +288,7 @@ private:
     // ─── Estado ─────────────────────────────────────────────────────────
     std::atomic<bool> enabled_{false};
     float sampleRate_ = 48000.0f;
+    float earCanalGainDb_ = 12.0f;  // Control de ganancia manual (slider UI)
     static constexpr float splOffset_ = 93.0f;  // Calibración del pipeline
 
     // ─── Audiograma ─────────────────────────────────────────────────────

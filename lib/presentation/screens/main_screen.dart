@@ -3175,6 +3175,30 @@ class _AuditoryModelCard extends StatefulWidget {
 class _AuditoryModelCardState extends State<_AuditoryModelCard> {
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
   bool _enabled = false;
+  double _earCanalGainDb = 12.0; // Default: +12 dB (resonancia canal auditivo)
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedGain();
+  }
+
+  Future<void> _loadSavedGain() async {
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      final saved = box.get('auditory_ear_canal_gain_db');
+      if (saved is double && mounted) {
+        setState(() => _earCanalGainDb = saved.clamp(0.0, 18.0));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveGain(double value) async {
+    try {
+      final box = await Hive.openBox<dynamic>('settings_box');
+      await box.put('auditory_ear_canal_gain_db', value);
+    } catch (_) {}
+  }
 
   Future<void> _toggle() async {
     setState(() => _enabled = !_enabled);
@@ -3182,9 +3206,10 @@ class _AuditoryModelCardState extends State<_AuditoryModelCard> {
       await _channel.invokeMethod('setAuditoryModelEnabled', {
         'enabled': _enabled,
       });
-      // Si se activa, enviar también el audiograma actual
+      // Si se activa, enviar también el audiograma y la ganancia actual
       if (_enabled) {
         await _sendAudiogram();
+        await _sendEarCanalGain(_earCanalGainDb);
       }
     } catch (_) {
       // Ignorar errores si el engine no está activo
@@ -3218,98 +3243,188 @@ class _AuditoryModelCardState extends State<_AuditoryModelCard> {
     }
   }
 
+  Future<void> _sendEarCanalGain(double gainDb) async {
+    try {
+      await _channel.invokeMethod('setAuditoryModelEarCanalGain', {
+        'gainDb': gainDb,
+      });
+    } catch (_) {}
+  }
+
+  void _onGainChanged(double value) {
+    setState(() => _earCanalGainDb = value);
+    _sendEarCanalGain(value);
+    _saveGain(value);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: _toggle,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: _enabled
-              ? Colors.deepPurple.withOpacity(0.15)
-              : const Color(0xFF1a1a2e),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: _enabled
-                ? Colors.deepPurple.withOpacity(0.5)
-                : Colors.white12,
-          ),
-        ),
-        child: Row(
-          children: [
-            // Ícono
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: _enabled
-                    ? Colors.deepPurple.withOpacity(0.25)
-                    : Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(10),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ─── Toggle card ─────────────────────────────────────────────
+        GestureDetector(
+          onTap: _toggle,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: _enabled
+                  ? Colors.deepPurple.withOpacity(0.15)
+                  : const Color(0xFF1a1a2e),
+              borderRadius: BorderRadius.vertical(
+                top: const Radius.circular(14),
+                bottom: Radius.circular(_enabled ? 0 : 14),
               ),
-              child: Icon(
-                Icons.hearing,
-                color: _enabled ? Colors.deepPurple.shade200 : Colors.white38,
-                size: 22,
+              border: Border.all(
+                color: _enabled
+                    ? Colors.deepPurple.withOpacity(0.5)
+                    : Colors.white12,
               ),
             ),
-            const SizedBox(width: 14),
-            // Texto
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Audífono Avanzado',
-                    style: TextStyle(
-                      color: _enabled ? Colors.white : Colors.white70,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _enabled
-                        ? 'Compresión multicanal activa (12 bandas)'
-                        : 'Ganancias adaptativas + compresión por banda',
-                    style: TextStyle(
-                      color: _enabled
-                          ? Colors.deepPurple.shade200
-                          : Colors.white38,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Toggle indicator
-            Container(
-              width: 44,
-              height: 24,
-              decoration: BoxDecoration(
-                color: _enabled
-                    ? Colors.deepPurple
-                    : Colors.white.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 200),
-                alignment:
-                    _enabled ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  width: 20,
-                  height: 20,
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
-                    color: _enabled ? Colors.white : Colors.white54,
-                    shape: BoxShape.circle,
+                    color: _enabled
+                        ? Colors.deepPurple.withOpacity(0.25)
+                        : Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.hearing,
+                    color: _enabled ? Colors.deepPurple.shade200 : Colors.white38,
+                    size: 22,
                   ),
                 ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Audífono Avanzado',
+                        style: TextStyle(
+                          color: _enabled ? Colors.white : Colors.white70,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _enabled
+                            ? 'Compresión multicanal activa (12 bandas)'
+                            : 'Ganancias adaptativas + compresión por banda',
+                        style: TextStyle(
+                          color: _enabled
+                              ? Colors.deepPurple.shade200
+                              : Colors.white38,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: 44,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: _enabled
+                        ? Colors.deepPurple
+                        : Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: AnimatedAlign(
+                    duration: const Duration(milliseconds: 200),
+                    alignment:
+                        _enabled ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      decoration: BoxDecoration(
+                        color: _enabled ? Colors.white : Colors.white54,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // ─── Slider de ganancia (visible solo cuando ON) ─────────────
+        if (_enabled)
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+            decoration: BoxDecoration(
+              color: Colors.deepPurple.withOpacity(0.08),
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(14),
+              ),
+              border: Border(
+                left: BorderSide(color: Colors.deepPurple.withOpacity(0.5)),
+                right: BorderSide(color: Colors.deepPurple.withOpacity(0.5)),
+                bottom: BorderSide(color: Colors.deepPurple.withOpacity(0.5)),
               ),
             ),
-          ],
-        ),
-      ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.volume_down, color: Colors.white38, size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Ganancia canal auditivo',
+                      style: TextStyle(
+                        color: Colors.deepPurple.shade200,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '+${_earCanalGainDb.toStringAsFixed(0)} dB',
+                      style: TextStyle(
+                        color: Colors.deepPurple.shade100,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: Colors.deepPurple.shade300,
+                    inactiveTrackColor: Colors.white12,
+                    thumbColor: Colors.deepPurple.shade100,
+                    overlayColor: Colors.deepPurple.withOpacity(0.15),
+                    trackHeight: 3,
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                  ),
+                  child: Slider(
+                    value: _earCanalGainDb,
+                    min: 0.0,
+                    max: 18.0,
+                    divisions: 18,
+                    onChanged: _onGainChanged,
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('0 dB', style: TextStyle(color: Colors.white24, fontSize: 9)),
+                    Text('Sutil', style: TextStyle(color: Colors.white24, fontSize: 9)),
+                    Text('Normal', style: TextStyle(color: Colors.white24, fontSize: 9)),
+                    Text('Fuerte', style: TextStyle(color: Colors.white24, fontSize: 9)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

@@ -170,6 +170,10 @@ public:
     void setAuditoryModelAudiogram(const float thresholds[12]) {
         pipeline_.setAuditoryModelAudiogram(thresholds);
     }
+    /// Configura la ganancia del modelo auditivo avanzado (slider UI).
+    void setAuditoryModelEarCanalGain(float gainDb) {
+        pipeline_.setAuditoryModelEarCanalGain(gainDb);
+    }
 
     // ─── Supresor de reverberacion (R5, tarea 5.2) ───────────────────────
     /// Forward a MvdrBeamformer. Los setters son no-op efectivos fuera del

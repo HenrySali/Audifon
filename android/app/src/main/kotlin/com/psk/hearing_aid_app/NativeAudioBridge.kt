@@ -517,6 +517,13 @@ class NativeAudioBridge {
      */
     external fun nativeSetAuditoryModelAudiogram(thresholds: FloatArray)
 
+    /**
+     * Configura la ganancia del modelo auditivo avanzado (slider UI).
+     * Rango: 0 (mínimo) a 18 (máximo). Default: 12 (normal).
+     * Controla la intensidad del procesamiento multicanal.
+     */
+    external fun nativeSetAuditoryModelEarCanalGain(gainDb: Float)
+
     // ─── Smart Scene Engine (Fase 1) ────────────────────────────────────
 
     /**
