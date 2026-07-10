@@ -423,3 +423,75 @@ Eliminar el artefacto de "soplido/eco de caracol" que deja la DNN (GTCRN) al lim
 - OpenMHA: `C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\openmha-4.18.1-windows-x64\`
 - WAVs diagnóstico: `C:\Users\Elsa y Henry\Desktop\Amplificador\wavs_diagnostico\`
 - Octave análisis: `C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro2\Octave Kiro IDE\ANALISIS_MVDR\`
+
+
+---
+
+## Sesión 6 (continuación) — Modelo Auditivo (AuditoryModel)
+
+### Investigación científica (MCP Brave)
+
+#### Etapa 1 — Resonancia del canal auditivo (2700 Hz, +12 dB)
+- **Hearing Review** (The Acoustics of Hearing Aids): "the first mode of a standing wave... is associated with the **2700 Hz real-ear unaided response (REUR)**"
+- **PMC4432547**: "average resonance frequency of **2700 Hz with amplitude of 16.8 dB**" (compilación de estudios sobre resonancia del oído externo)
+- Implementación: filtro peaking EQ a 2700 Hz, +12 dB (conservador vs los 16.8 medidos), Q=1.5
+
+#### Etapa 2 — Transferencia del oído medio (400-4000 Hz, +3 dB)
+- El oído medio (tímpano + cadena osicular) actúa como un bandpass mecánico con pico ~1-3 kHz
+- La ganancia del oído medio es ~20-25 dB (transformador de impedancia aire→líquido) pero ya está implícita en la calibración SPL; lo que modelamos es el **shape** del filtro (bandpass)
+- +3 dB es la atenuación relativa fuera de banda
+
+#### Etapa 3 — Banco de filtros gammatone (membrana basilar)
+- **Glasberg & Moore (1990)**: ERB(f) = 24.7 × (4.37 × f/1000 + 1)
+- Fuente: PubMed (PMID: 6630731), Wikipedia (Equivalent Rectangular Bandwidth), CCRMA Stanford
+- CalcSimpler confirma la fórmula exacta
+- Implementación: 12 filtros gammatone 4to orden (cascada de 4 biquads) centrados en las frecuencias del audiograma
+- Referencia C++: `github.com/mmmaat/libgammatone` (MIT license)
+- **IEEE 2015** (7338847): "realtime and efficient digital implementation of Gammatone filterbank"
+
+#### Etapa 4 — Compresor OHC (células ciliadas externas)
+- **Moore (2003)**: Loudness recruitment — las OHC dañadas pierden compresión → reclutamiento
+- **ResearchGate** (Digital implementation of linear gammatone filters): "The amplitude of the analysis filter outputs is modified by **outer hair-cell dynamic-range compression** and inner-hair cell firing-rate adaptation"
+- Compensación: si HL alto → las OHC no comprimen → aplicamos expansión compensatoria
+- Parámetros: knee 30 dB SPL (umbral de OHC normales), attack 5 ms, release 50-200 ms
+
+#### Etapa 5 — Transducción IHC (células ciliadas internas)
+- **Zilany, Bruce & Carney (2014)**: "Updated parameters and expanded simulation options for a model of the auditory periphery" (JASA 136(1))
+- Universidad de Rochester, Carney Lab: modelo de referencia del nervio auditivo
+- IHC: rectificación media onda → LP 1 kHz (adaptación temporal) → compresión logarítmica suave
+- Simula la conversión mecánica→eléctrica de la cóclea
+
+#### Etapa 6 — Realce temporal del nervio auditivo
+- **Lyon (2024)**: CARFAC v2 (arXiv:2404.17490) — modelo coclear con detección de envolvente y modulación
+- El nervio auditivo tiene phase-locking que se degrada con la pérdida auditiva
+- Compensación: detectar envolvente (LP 50 Hz), amplificar modulaciones ×1.5
+- Mejora inteligibilidad en ruido (las fluctuaciones temporales del habla son más perceptibles)
+
+#### Referencia general
+- **Dillon (2012)**: Hearing Aids, Chapter 6 — fundamentos de compresión y modelo auditivo en audífonos
+
+### Plan de implementación
+
+| Componente | Archivo | Acción |
+|------------|---------|--------|
+| Módulo C++ | `auditory_model.h` | Header-only, 6 etapas, patrón existente |
+| Pipeline | `dsp_pipeline.h/cpp` | Insertar después de EQ, antes de WDRC |
+| JNI | `native_bridge.cpp` | `nativeSetAuditoryModelEnabled` + `Audiogram` |
+| Kotlin | `NativeAudioBridge.kt` + `AudioMethodChannel.kt` | Wiring |
+| Dart bridge | `audio_bridge.dart` + `audio_bridge_impl.dart` | Métodos |
+| UI | `main_screen.dart` | Card toggle con Icons.hearing |
+
+### Constantes del modelo
+```
+Ear canal:      2700 Hz, +12 dB, Q=1.5
+Middle ear:     BP 400-4000 Hz, +3 dB
+Gammatone:      order 4, 12 bandas, ERB = 24.7*(4.37*f/1000+1)
+OHC:            knee 30 dB SPL, attack 5ms, release 50-200ms
+IHC:            LP cutoff 1000 Hz, half-wave rectification
+AN:             modulation gain 1.5, envelope LP 50 Hz
+SPL offset:     93 dB (calibración del pipeline)
+```
+
+### Estado
+- Investigación: ✅ completada
+- Implementación: pendiente
