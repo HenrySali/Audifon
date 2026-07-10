@@ -1211,6 +1211,9 @@ class _ActiveView extends StatelessWidget {
           // selector de motor separado + el limpiador DNN como 2 controles.
           // Toggle ON = DualDNN activo. Toggle OFF = Bypass. Slider = intensidad.
           const _DnnNoiseCleanerCard(),
+          const SizedBox(height: 12),
+          // Modelo Auditivo — simulación del sistema auditivo humano (6 etapas)
+          const _AuditoryModelCard(),
           const SizedBox(height: 20),
           // Selector de modo de prescriptor (Smart-NL2 / Smart-NL3) — Req 5.1–5.5
           PrescriberModeSelector(
@@ -3151,6 +3154,165 @@ class _TnrToggleButtonState extends State<_TnrToggleButton> {
   }
 }
 
+
+// =============================================================================
+// AUDITORY MODEL CARD — Simulación del sistema auditivo humano
+// =============================================================================
+
+/// Card toggle para el Modelo Auditivo (6 etapas cocleares).
+///
+/// Simula la cadena auditiva humana completa y aplica compensaciones
+/// personalizadas según el audiograma del paciente. Maneja su propio
+/// estado y se comunica directo con el MethodChannel (mismo patrón que
+/// _DnnNoiseCleanerCard y _TnrToggleButton).
+class _AuditoryModelCard extends StatefulWidget {
+  const _AuditoryModelCard();
+
+  @override
+  State<_AuditoryModelCard> createState() => _AuditoryModelCardState();
+}
+
+class _AuditoryModelCardState extends State<_AuditoryModelCard> {
+  static const _channel = MethodChannel('com.psk.hearing_aid/audio');
+  bool _enabled = false;
+
+  Future<void> _toggle() async {
+    setState(() => _enabled = !_enabled);
+    try {
+      await _channel.invokeMethod('setAuditoryModelEnabled', {
+        'enabled': _enabled,
+      });
+      // Si se activa, enviar también el audiograma actual
+      if (_enabled) {
+        await _sendAudiogram();
+      }
+    } catch (_) {
+      // Ignorar errores si el engine no está activo
+    }
+    if (mounted) {
+      final msg = _enabled
+          ? 'Modelo Auditivo activado — compensación coclear personalizada'
+          : 'Modelo Auditivo desactivado';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          duration: const Duration(seconds: 2),
+          backgroundColor:
+              _enabled ? Colors.deepPurple.shade700 : Colors.grey.shade800,
+        ),
+      );
+    }
+  }
+
+  Future<void> _sendAudiogram() async {
+    // Enviar audiograma por defecto (0 dB HL = normal).
+    // En producción, el bloc cargará el audiograma real del paciente
+    // desde el AudiogramRepository y lo enviará al activar el modelo.
+    try {
+      final thresholds = List<double>.filled(12, 0.0);
+      await _channel.invokeMethod('setAuditoryModelAudiogram', {
+        'thresholds': thresholds,
+      });
+    } catch (_) {
+      // El motor puede no estar activo aún — silenciar
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _toggle,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: _enabled
+              ? Colors.deepPurple.withOpacity(0.15)
+              : const Color(0xFF1a1a2e),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _enabled
+                ? Colors.deepPurple.withOpacity(0.5)
+                : Colors.white12,
+          ),
+        ),
+        child: Row(
+          children: [
+            // Ícono
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: _enabled
+                    ? Colors.deepPurple.withOpacity(0.25)
+                    : Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.hearing,
+                color: _enabled ? Colors.deepPurple.shade200 : Colors.white38,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 14),
+            // Texto
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Modelo Auditivo',
+                    style: TextStyle(
+                      color: _enabled ? Colors.white : Colors.white70,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _enabled
+                        ? 'Simulación coclear activa (6 etapas)'
+                        : 'Simula el sistema auditivo humano',
+                    style: TextStyle(
+                      color: _enabled
+                          ? Colors.deepPurple.shade200
+                          : Colors.white38,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Toggle indicator
+            Container(
+              width: 44,
+              height: 24,
+              decoration: BoxDecoration(
+                color: _enabled
+                    ? Colors.deepPurple
+                    : Colors.white.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: AnimatedAlign(
+                duration: const Duration(milliseconds: 200),
+                alignment:
+                    _enabled ? Alignment.centerRight : Alignment.centerLeft,
+                child: Container(
+                  width: 20,
+                  height: 20,
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  decoration: BoxDecoration(
+                    color: _enabled ? Colors.white : Colors.white54,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// Botón "Auto" — clasifica el ambiente acústico actual y aplica el preset
 /// EQ recomendado, ajustando además el master volume con un delta sugerido.

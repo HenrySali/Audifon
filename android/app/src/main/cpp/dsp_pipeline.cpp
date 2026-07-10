@@ -90,6 +90,11 @@ void DspPipeline::init(const AudioConfig& config) {
     // activa por la cadena JNI → Kotlin → Dart (setExpanderParams).
     expander_.init(config.sampleRate);
 
+    // Inicializar el Modelo Auditivo (simulación del sistema auditivo humano).
+    // Default OFF (passthrough). Se activa desde Dart con setAuditoryModelEnabled(true).
+    // Requiere audiograma del paciente para personalizar la compensación OHC.
+    auditoryModel_.init(config.sampleRate);
+
     // Inicializar TNR (Transient Noise Reducer) — para impulsos abruptos
     tnr_.init(config.sampleRate);
     tnr_.setEnabled(true); // Activado por default
@@ -432,6 +437,15 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
 
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+
+    // ─── 4.5. Modelo Auditivo (simulación coclear, post-EQ pre-WDRC) ────
+    // Simula el sistema auditivo humano completo: canal auditivo (resonancia
+    // 2700 Hz), oído medio (bandpass 400-4000 Hz), membrana basilar (12
+    // filtros gammatone), OHC (compresión compensatoria según audiograma),
+    // IHC (transducción), nervio auditivo (realce temporal de modulaciones).
+    // Cuando disabled: passthrough puro (sin overhead). Referencia: Moore 2003,
+    // Glasberg & Moore 1990, Zilany et al. 2014.
+    auditoryModel_.process(buffer, blockSize);
 
     // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
     // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).

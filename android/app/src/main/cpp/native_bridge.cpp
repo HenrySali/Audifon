@@ -1018,6 +1018,64 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetTnrEnabled(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auditory Model (simulación del sistema auditivo humano)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Habilita/deshabilita el Modelo Auditivo (6 etapas cocleares).
+/// Cuando habilitado, simula la cadena auditiva humana y aplica compensaciones
+/// personalizadas según el audiograma del paciente. Se inserta después del EQ,
+/// antes del WDRC en el pipeline.
+/// Thread-safe: usa std::atomic internamente.
+///
+/// @param enabled true para activar, false para bypass (passthrough)
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAuditoryModelEnabled(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setAuditoryModelEnabled(enabled == JNI_TRUE);
+    LOGI("nativeSetAuditoryModelEnabled: %s", (enabled == JNI_TRUE) ? "ON" : "OFF");
+}
+
+/// Configura el audiograma del paciente para el modelo auditivo.
+/// Los umbrales en dB HL (12 bandas) determinan la compensación OHC por banda.
+/// Thread-safe: la copia interna es segura para el hilo de audio.
+///
+/// @param thresholds FloatArray de 12 valores en dB HL (0 = audición normal)
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAuditoryModelAudiogram(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jfloatArray thresholds) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    if (thresholds == nullptr) {
+        LOGW("nativeSetAuditoryModelAudiogram: null thresholds array");
+        return;
+    }
+    jsize len = env->GetArrayLength(thresholds);
+    if (len < 12) {
+        LOGW("nativeSetAuditoryModelAudiogram: array length %d < 12", len);
+        return;
+    }
+
+    jfloat* data = env->GetFloatArrayElements(thresholds, nullptr);
+    if (data != nullptr) {
+        g_engine->setAuditoryModelAudiogram(data);
+        env->ReleaseFloatArrayElements(thresholds, data, JNI_ABORT);
+        LOGI("nativeSetAuditoryModelAudiogram: applied (HL[0]=%.0f, HL[5]=%.0f, HL[11]=%.0f)",
+             data[0], data[5], data[11]);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Smart Scene Engine — Fase 1
 // ─────────────────────────────────────────────────────────────────────────────
 
