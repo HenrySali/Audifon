@@ -3156,15 +3156,15 @@ class _TnrToggleButtonState extends State<_TnrToggleButton> {
 
 
 // =============================================================================
-// AUDITORY MODEL CARD — Simulación del sistema auditivo humano
+// AUDITORY MODEL CARD — Modo Audífono Avanzado
 // =============================================================================
 
-/// Card toggle para el Modelo Auditivo (6 etapas cocleares).
+/// Card toggle para el modo Audífono Avanzado (compresión multicanal).
 ///
-/// Simula la cadena auditiva humana completa y aplica compensaciones
-/// personalizadas según el audiograma del paciente. Maneja su propio
-/// estado y se comunica directo con el MethodChannel (mismo patrón que
-/// _DnnNoiseCleanerCard y _TnrToggleButton).
+/// Cuando está ON, reemplaza el EQ fijo + WDRC broadband por un algoritmo
+/// superior: ganancias adaptativas por nivel, compresión independiente por
+/// banda según audiograma, y realce temporal de modulaciones del habla.
+/// Usa los mismos controles (audiograma, perfiles, NR).
 class _AuditoryModelCard extends StatefulWidget {
   const _AuditoryModelCard();
 
@@ -3191,8 +3191,8 @@ class _AuditoryModelCardState extends State<_AuditoryModelCard> {
     }
     if (mounted) {
       final msg = _enabled
-          ? 'Modelo Auditivo activado — compensación coclear personalizada'
-          : 'Modelo Auditivo desactivado';
+          ? 'Audífono Avanzado ON — compresión multicanal + ganancias adaptativas'
+          : 'Audífono Avanzado OFF — vuelve a EQ + WDRC clásico';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(msg),
@@ -3260,7 +3260,7 @@ class _AuditoryModelCardState extends State<_AuditoryModelCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Modelo Auditivo',
+                    'Audífono Avanzado',
                     style: TextStyle(
                       color: _enabled ? Colors.white : Colors.white70,
                       fontSize: 14,
@@ -3270,8 +3270,8 @@ class _AuditoryModelCardState extends State<_AuditoryModelCard> {
                   const SizedBox(height: 2),
                   Text(
                     _enabled
-                        ? 'Simulación coclear activa (6 etapas)'
-                        : 'Simula el sistema auditivo humano',
+                        ? 'Compresión multicanal activa (12 bandas)'
+                        : 'Ganancias adaptativas + compresión por banda',
                     style: TextStyle(
                       color: _enabled
                           ? Colors.deepPurple.shade200

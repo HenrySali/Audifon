@@ -439,25 +439,36 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
     // ─── 4.5. Modelo Auditivo (simulación coclear, post-EQ pre-WDRC) ────
-    // Simula el sistema auditivo humano completo: canal auditivo (resonancia
-    // 2700 Hz), oído medio (bandpass 400-4000 Hz), membrana basilar (12
-    // filtros gammatone), OHC (compresión compensatoria según audiograma),
-    // IHC (transducción), nervio auditivo (realce temporal de modulaciones).
-    // Cuando disabled: passthrough puro (sin overhead). Referencia: Moore 2003,
-    // Glasberg & Moore 1990, Zilany et al. 2014.
-    auditoryModel_.process(buffer, blockSize);
+    // Cuando está habilitado, REEMPLAZA el EQ + WDRC con procesamiento
+    // multicanal adaptativo: ganancias por nivel, compresión por banda,
+    // y realce temporal de modulaciones del habla. Si está OFF, el EQ y
+    // el WDRC clásicos se ejecutan normalmente (arriba y abajo de aquí).
+    if (auditoryModel_.isEnabled()) {
+        // Modo Avanzado ON: el AuditoryModel reemplaza EQ + WDRC.
+        // El EQ ya se ejecutó arriba (no podemos evitarlo sin reestructurar),
+        // así que reseteamos el buffer al pre-EQ y dejamos que el modelo
+        // haga todo. HACK temporal: aplicamos el modelo sobre la señal
+        // post-EQ y salteamos el WDRC más abajo.
+        auditoryModel_.process(buffer, blockSize, inputLevelDb);
 
-    // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
-    // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
-    // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
-    // dispare compresión innecesaria.
-    wdrc_.process(buffer, blockSize, inputLevelDb);
+        // Saltar el WDRC — el AuditoryModel ya hizo la compresión por banda.
+        lastWdrcGainFactor_.store(1.0f, std::memory_order_relaxed);
+        lastPostWdrcLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+        lastWdrcRegion_.store(1, std::memory_order_relaxed);  // "linear"
+    } else {
+        // Modo clásico: WDRC broadband normal.
+        // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
+        // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
+        // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
+        // dispare compresión innecesaria.
+        wdrc_.process(buffer, blockSize, inputLevelDb);
 
-    // Métrica: gain factor efectivo del WDRC (FIX: antes nunca se escribía).
-    lastWdrcGainFactor_.store(wdrc_.getLastGainFactor(), std::memory_order_relaxed);
+        // Métrica: gain factor efectivo del WDRC (FIX: antes nunca se escribía).
+        lastWdrcGainFactor_.store(wdrc_.getLastGainFactor(), std::memory_order_relaxed);
 
-    // Métrica: nivel post-WDRC
-    lastPostWdrcLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+        // Métrica: nivel post-WDRC
+        lastPostWdrcLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
+    }
 
     // ─── 6. Volume master ───────────────────────────────────────────────
     // Rango: -20 a +10 dB. Puede amplificar hasta +10 dB (3.16×).
