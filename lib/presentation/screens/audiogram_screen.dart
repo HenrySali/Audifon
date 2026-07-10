@@ -230,6 +230,9 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
             ),
           ),
 
+          // Selector de presets de hipoacusia
+          _buildHearingLossPresets(),
+
           // Banner del último diagnóstico (si existe).
           if (_prescribedGains.isNotEmpty) _buildDiagnosticBanner(),
 
@@ -389,6 +392,191 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
     );
   }
 
+  // ─── Presets de hipoacusia (tipos clínicos estándar) ────────────────
+  // Datos basados en clasificación OMS + perfiles audiométricos típicos
+  // de la literatura clínica (Clark 1981, Goodman 1965, Carhart 1950).
+
+  static const _hearingLossPresets = <_HearingLossPreset>[
+    _HearingLossPreset(
+      name: 'Presbiacusia',
+      subtitle: 'Pérdida descendente en agudos (edad)',
+      icon: Icons.trending_down,
+      color: Color(0xFFFF8A65),
+      // 250  500  750  1000 1500 2000 2500 3000 3500 4000 6000 8000
+      thresholds: [15, 20, 25, 30, 35, 45, 50, 55, 55, 60, 65, 70],
+    ),
+    _HearingLossPreset(
+      name: 'Conductiva',
+      subtitle: 'Pérdida plana uniforme (oído medio)',
+      icon: Icons.horizontal_rule,
+      color: Color(0xFF4FC3F7),
+      thresholds: [40, 40, 40, 40, 40, 40, 40, 40, 35, 35, 35, 35],
+    ),
+    _HearingLossPreset(
+      name: 'Sensorioneural',
+      subtitle: 'Caída abrupta desde 1 kHz (cóclea)',
+      icon: Icons.signal_cellular_alt,
+      color: Color(0xFFE57373),
+      thresholds: [10, 15, 20, 25, 45, 55, 60, 65, 70, 75, 75, 80],
+    ),
+    _HearingLossPreset(
+      name: 'Pendiente inversa',
+      subtitle: 'Pérdida en graves, agudos normales',
+      icon: Icons.trending_up,
+      color: Color(0xFF81C784),
+      thresholds: [55, 50, 45, 40, 30, 20, 15, 15, 10, 10, 10, 10],
+    ),
+    _HearingLossPreset(
+      name: 'Cookie-bite',
+      subtitle: 'Pérdida en medios (1-3 kHz)',
+      icon: Icons.expand_more,
+      color: Color(0xFFBA68C8),
+      thresholds: [15, 20, 35, 50, 55, 55, 50, 45, 35, 25, 20, 15],
+    ),
+    _HearingLossPreset(
+      name: 'Muesca de ruido',
+      subtitle: 'Notch en 4 kHz (exposición a ruido)',
+      icon: Icons.noise_aware,
+      color: Color(0xFFFFD54F),
+      thresholds: [10, 10, 15, 15, 20, 25, 35, 50, 60, 65, 45, 30],
+    ),
+    _HearingLossPreset(
+      name: 'Plana severa',
+      subtitle: 'Pérdida uniforme severa (60-80 dB)',
+      icon: Icons.remove,
+      color: Color(0xFFEF5350),
+      thresholds: [65, 65, 65, 70, 70, 70, 70, 75, 75, 75, 80, 80],
+    ),
+    _HearingLossPreset(
+      name: 'Leve descendente',
+      subtitle: 'Pérdida leve, típica inicial',
+      icon: Icons.arrow_downward,
+      color: Color(0xFFA5D6A7),
+      thresholds: [10, 10, 15, 20, 25, 30, 30, 35, 35, 40, 40, 45],
+    ),
+  ];
+
+  /// Construye el selector horizontal de presets de hipoacusia.
+  Widget _buildHearingLossPresets() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1a1a2e),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                Icon(Icons.library_books, color: Colors.white54, size: 16),
+                const SizedBox(width: 8),
+                const Text(
+                  'Presets de hipoacusia',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  'Toca para cargar',
+                  style: TextStyle(color: Colors.white30, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 72,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: _hearingLossPresets.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final preset = _hearingLossPresets[index];
+                return _buildPresetChip(preset);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Construye un chip/tarjeta individual para un preset de hipoacusia.
+  Widget _buildPresetChip(_HearingLossPreset preset) {
+    return GestureDetector(
+      onTap: () => _applyPreset(preset),
+      child: Container(
+        width: 130,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: preset.color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: preset.color.withOpacity(0.4)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                Icon(preset.icon, color: preset.color, size: 14),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    preset.name,
+                    style: TextStyle(
+                      color: preset.color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              preset.subtitle,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 9,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Aplica un preset de hipoacusia a los sliders del audiograma.
+  void _applyPreset(_HearingLossPreset preset) {
+    setState(() {
+      for (int i = 0; i < Audiogram.standardFrequencies.length; i++) {
+        _thresholds[Audiogram.standardFrequencies[i]] =
+            preset.thresholds[i].toDouble();
+      }
+      _hasChanges = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Preset "${preset.name}" cargado — toca Guardar para aplicar'),
+        duration: const Duration(seconds: 2),
+        backgroundColor: preset.color.withOpacity(0.8),
+      ),
+    );
+  }
+
   /// Banner que aparece cuando hay un diagnóstico previo guardado.
   /// Muestra la fecha, el preset recomendado y un mini gráfico de las
   /// ganancias prescritas.
@@ -530,4 +718,22 @@ class _AudiogramScreenState extends State<AudiogramScreen> {
       ),
     );
   }
+}
+
+/// Modelo de datos para un preset de hipoacusia clínico.
+class _HearingLossPreset {
+  final String name;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  /// Umbrales en dB HL para las 12 frecuencias estándar (250-8000 Hz).
+  final List<int> thresholds;
+
+  const _HearingLossPreset({
+    required this.name,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.thresholds,
+  });
 }
