@@ -507,4 +507,22 @@ abstract class AudioBridge {
   ///
   /// Requisitos: 5.3 (ajuste fino de latencia — próximamente en tarea 7)
   Future<void> setDnnBlockSize(int blockSize);
+
+  // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ──────────────────────
+
+  /// Habilita/deshabilita el Modelo Auditivo Humano.
+  ///
+  /// Simula la cadena periférica del oído (resonancia del canal, oído medio,
+  /// gammatone, OHC, IHC, nervio auditivo) para que la señal procesada se
+  /// acerque a la percepción natural. Default OFF.
+  ///
+  /// Refs: Lyon 2024, Zilany 2014, Glasberg & Moore 1990, Moore 2003.
+  Future<void> setAuditoryModelEnabled(bool enabled);
+
+  /// Configura el audiograma de 12 bandas (dB HL) para la compresión OHC
+  /// del modelo auditivo. Las bandas corresponden a las frecuencias del EQ:
+  /// 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+  ///
+  /// [thresholds] debe contener exactamente 12 valores.
+  Future<void> setAuditoryModelAudiogram(List<double> thresholds);
 }

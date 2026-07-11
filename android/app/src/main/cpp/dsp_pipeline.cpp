@@ -90,9 +90,14 @@ void DspPipeline::init(const AudioConfig& config) {
     // activa por la cadena JNI → Kotlin → Dart (setExpanderParams).
     expander_.init(config.sampleRate);
 
+<<<<<<< Updated upstream
     // Inicializar el Modelo Auditivo (simulación del sistema auditivo humano).
     // Default OFF (passthrough). Se activa desde Dart con setAuditoryModelEnabled(true).
     // Requiere audiograma del paciente para personalizar la compensación OHC.
+=======
+    // Inicializar Modelo Auditivo Humano (6 etapas fisiológicas). Default OFF.
+    // El técnico lo activa vía JNI cuando desea simular la cadena perceptual.
+>>>>>>> Stashed changes
     auditoryModel_.init(config.sampleRate);
 
     // Inicializar TNR (Transient Noise Reducer) — para impulsos abruptos
@@ -438,6 +443,7 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
     // Métrica: nivel post-EQ + peak
     lastPostEqLevelDb_.store(measureRmsDb(buffer, blockSize), std::memory_order_relaxed);
 
+<<<<<<< Updated upstream
     // ─── 4.5. Modelo Auditivo (simulación coclear, post-EQ pre-WDRC) ────
     // Cuando está habilitado, REEMPLAZA el EQ + WDRC con procesamiento
     // multicanal adaptativo: ganancias por nivel, compresión por banda,
@@ -450,6 +456,19 @@ void DspPipeline::processBlock(float* buffer, int blockSize,
         // haga todo. HACK temporal: aplicamos el modelo sobre la señal
         // post-EQ y salteamos el WDRC más abajo.
         auditoryModel_.process(buffer, blockSize, inputLevelDb);
+=======
+    // ─── 4.5. Modelo Auditivo Humano (6 etapas fisiológicas) ────────────
+    // Simula la cadena periférica del oído para que la señal procesada se
+    // acerque a la percepción natural. Default OFF → passthrough bit-exacto.
+    // Referencia: Lyon 2024, Zilany 2014, Glasberg & Moore 1990.
+    auditoryModel_.process(buffer, blockSize);
+
+    // ─── 5. WDRC — usa inputLevelDb (pre-EQ) para decisión ─────────────
+    // El WDRC nunca amplifica (gainFactor ∈ [0.0, 1.0]).
+    // Usa el nivel PRE-EQ para evitar que la amplificación del EQ
+    // dispare compresión innecesaria.
+    wdrc_.process(buffer, blockSize, inputLevelDb);
+>>>>>>> Stashed changes
 
         // Saltar el WDRC — el AuditoryModel ya hizo la compresión por banda.
         lastWdrcGainFactor_.store(1.0f, std::memory_order_relaxed);

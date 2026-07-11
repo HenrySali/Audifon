@@ -1211,8 +1211,13 @@ class _ActiveView extends StatelessWidget {
           // selector de motor separado + el limpiador DNN como 2 controles.
           // Toggle ON = DualDNN activo. Toggle OFF = Bypass. Slider = intensidad.
           const _DnnNoiseCleanerCard(),
+<<<<<<< Updated upstream
           const SizedBox(height: 12),
           // Modelo Auditivo — simulación del sistema auditivo humano (6 etapas)
+=======
+          const SizedBox(height: 16),
+          // Modelo Auditivo Humano — simula la fisiología del oído (6 etapas).
+>>>>>>> Stashed changes
           const _AuditoryModelCard(),
           const SizedBox(height: 20),
           // Selector de modo de prescriptor (Smart-NL2 / Smart-NL3) — Req 5.1–5.5
@@ -4207,6 +4212,99 @@ class _SceneChip extends StatelessWidget {
 
 // =============================================================================
 // LIMPIADOR DE RUIDO (DNN) — Toggle + Slider en la pantalla principal
+// =============================================================================
+// AUDITORY MODEL CARD — Modelo auditivo humano (6 etapas fisiológicas)
+// =============================================================================
+
+/// Card de control del Modelo Auditivo Humano. Toggle on/off. Al activar envía
+/// el audiograma actual al modelo. Autocontenido: se comunica directo con el
+/// MethodChannel sin pasar por el AmplificationBloc.
+class _AuditoryModelCard extends StatefulWidget {
+  const _AuditoryModelCard();
+
+  @override
+  State<_AuditoryModelCard> createState() => _AuditoryModelCardState();
+}
+
+class _AuditoryModelCardState extends State<_AuditoryModelCard> {
+  static const _channel = MethodChannel('com.psk.hearing_aid/audio');
+  bool _enabled = false;
+
+  Future<void> _toggle(bool value) async {
+    setState(() => _enabled = value);
+    try {
+      await _channel.invokeMethod('setAuditoryModelEnabled', {'enabled': value});
+      if (value) {
+        // Enviar el audiograma actual al modelo auditivo.
+        final bloc = context.read<AmplificationBloc>();
+        List<double> thresholds = List.filled(12, 25.0); // default 25 dB HL
+        final audiogram = bloc.currentAudiogram;
+        if (audiogram != null) {
+          // El audiograma tiene thresholds: Map<int, double> (freq → dB HL).
+          // Mapear a las 12 bandas del pipeline.
+          const freqs = [250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000];
+          for (int i = 0; i < 12; i++) {
+            final hl = audiogram.thresholds[freqs[i]];
+            if (hl != null) {
+              thresholds[i] = hl;
+            }
+          }
+        }
+        await _channel.invokeMethod('setAuditoryModelAudiogram', {
+          'thresholds': thresholds,
+        });
+      }
+    } catch (e) {
+      // No-op: tolerante a errores nativos.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF16213e),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(
+              Icons.hearing,
+              color: _enabled ? Colors.green : Colors.grey,
+              size: 28,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Modelo Auditivo',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Colors.white,
+                        ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Simula la fisiología del oído',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.white70,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            Switch(
+              value: _enabled,
+              onChanged: _toggle,
+              activeColor: Colors.green,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // =============================================================================
 
 /// Control del filtro de ruido IA (DNN GTCRN) accesible directamente desde la

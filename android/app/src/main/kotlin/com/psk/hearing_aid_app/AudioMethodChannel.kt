@@ -445,6 +445,20 @@ class AudioMethodChannel(
                     val enabled = call.argument<Boolean>("enabled") ?: false
                     handleSetConversationMode(enabled, result)
                 }
+                // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ─────
+                "setAuditoryModelEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    nativeBridge.nativeSetAuditoryModelEnabled(enabled)
+                    result.success(null)
+                }
+                "setAuditoryModelAudiogram" -> {
+                    val thresholdsList = call.argument<List<Double>>("thresholds") ?: List(12) { 0.0 }
+                    val thresholds = FloatArray(12) { i ->
+                        thresholdsList.getOrElse(i) { 0.0 }.toFloat()
+                    }
+                    nativeBridge.nativeSetAuditoryModelAudiogram(thresholds)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

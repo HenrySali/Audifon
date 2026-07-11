@@ -833,4 +833,24 @@ class NativeAudioBridge {
      * normal del audio ambiente. Idempotente: si no hay test activo, no-op.
      */
     external fun nativeCancelLoopbackTest()
+
+    // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ─────────────────
+
+    /**
+     * Habilita/deshabilita el Modelo Auditivo Humano (default OFF).
+     * Simula resonancia del canal, oído medio, gammatone, OHC, IHC, nervio auditivo.
+     * Thread-safe (std::atomic interno).
+     *
+     * @param enabled true para activar el modelo auditivo.
+     */
+    external fun nativeSetAuditoryModelEnabled(enabled: Boolean)
+
+    /**
+     * Configura el audiograma de 12 bandas (dB HL) para la compresión OHC
+     * del modelo auditivo. Las bandas corresponden a:
+     * 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+     *
+     * @param thresholds FloatArray de 12 valores dB HL.
+     */
+    external fun nativeSetAuditoryModelAudiogram(thresholds: FloatArray)
 }

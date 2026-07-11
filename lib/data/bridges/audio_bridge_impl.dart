@@ -970,4 +970,29 @@ class AudioBridgeImpl implements AudioBridge {
     }
     return AudioEngineState.idle;
   }
+
+  // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ────────────────────
+
+  @override
+  Future<void> setAuditoryModelEnabled(bool enabled) async {
+    await _safeInvokeVoid(
+      'setAuditoryModelEnabled',
+      <String, dynamic>{'enabled': enabled},
+    );
+  }
+
+  @override
+  Future<void> setAuditoryModelAudiogram(List<double> thresholds) async {
+    if (thresholds.length != 12) {
+      throw ArgumentError.value(
+        thresholds.length,
+        'thresholds.length',
+        'Auditory model audiogram requires exactly 12 bands, got ${thresholds.length}',
+      );
+    }
+    await _safeInvokeVoid(
+      'setAuditoryModelAudiogram',
+      <String, dynamic>{'thresholds': thresholds},
+    );
+  }
 }

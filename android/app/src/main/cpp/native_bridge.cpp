@@ -1663,4 +1663,48 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeCancelLoopbackTest(
     }
 }
 
+/// Habilita/deshabilita el Modelo Auditivo Humano (6 etapas fisiológicas).
+/// Default OFF. Simula la cadena periférica del oído para percepción natural.
+/// Thread-safe (std::atomic interno).
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAuditoryModelEnabled(
+        JNIEnv* /* env */,
+        jobject /* thiz */,
+        jboolean enabled) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+
+    g_engine->setAuditoryModelEnabled(enabled == JNI_TRUE);
+}
+
+/// Configura el audiograma de 12 bandas (dB HL) para la compresión OHC del
+/// modelo auditivo. Las 12 bandas corresponden a las frecuencias del EQ:
+/// 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetAuditoryModelAudiogram(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jfloatArray thresholds) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return;
+    }
+    if (thresholds == nullptr) {
+        LOGW("nativeSetAuditoryModelAudiogram: null thresholds array");
+        return;
+    }
+    jsize len = env->GetArrayLength(thresholds);
+    if (len < 12) {
+        LOGW("nativeSetAuditoryModelAudiogram: array length %d < 12", len);
+        return;
+    }
+    jfloat* ptr = env->GetFloatArrayElements(thresholds, nullptr);
+    if (ptr != nullptr) {
+        g_engine->setAuditoryModelAudiogram(ptr);
+        env->ReleaseFloatArrayElements(thresholds, ptr, JNI_ABORT);
+    }
+}
+
 } // extern "C"
