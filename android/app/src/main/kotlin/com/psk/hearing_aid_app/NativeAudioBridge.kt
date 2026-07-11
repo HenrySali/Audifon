@@ -653,6 +653,14 @@ class NativeAudioBridge {
      */
     external fun nativeGetDnnIsActive(): Boolean
 
+    /**
+     * Retorna diagnósticos en tiempo real del DNN denoiser como HashMap.
+     * Claves: isActive, isEnabled, processedFrames, droppedFrames,
+     * lastInferenceUs, effectiveIntensity, userIntensity, inputChannels.
+     * @return HashMap<String, Any> con los valores, o null si el engine no corre.
+     */
+    external fun nativeGetDnnDiagnostics(): HashMap<String, Any>?
+
     // ─── MVDR Dual-Mic Beamforming ─────────────────────────────────────
 
     /**

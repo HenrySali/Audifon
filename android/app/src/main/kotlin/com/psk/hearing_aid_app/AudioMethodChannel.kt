@@ -359,6 +359,10 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetDnnIsActive()
                     result.success(active)
                 }
+                "getDnnDiagnostics" -> {
+                    val diag = nativeBridge.nativeGetDnnDiagnostics()
+                    result.success(diag)
+                }
                 // ─── MVDR Dual-Mic Beamforming ──────────────────────────
                 "setBeamformingEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false

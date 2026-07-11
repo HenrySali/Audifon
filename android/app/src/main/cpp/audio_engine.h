@@ -235,6 +235,18 @@ public:
     bool getDnnIsActive() const { return dnnDenoiser_.isActive(); }
     /// @return true si el flag de configuración enabled está en true.
     bool getDnnIsEnabled() const { return dnnDenoiser_.isEnabled(); }
+    /// @return total de hops procesados por el worker del DNN.
+    uint64_t getDnnProcessedFrames() const { return dnnDenoiser_.getProcessedFrames(); }
+    /// @return total de frames descartados por congestión del worker.
+    uint64_t getDnnDroppedFrames() const { return dnnDenoiser_.getDroppedFrames(); }
+    /// @return microsegundos de la última inferencia ONNX.
+    uint32_t getDnnLastInferenceUs() const { return dnnDenoiser_.getLastInferenceUs(); }
+    /// @return intensidad efectiva post-VAD-cap (valor aplicado en mezcla).
+    float getDnnEffectiveIntensity() const { return dnnDenoiser_.getEffectiveIntensity(); }
+    /// @return intensidad del usuario (slider).
+    float getDnnUserIntensity() const { return dnnDenoiser_.getIntensity(); }
+    /// @return canales de entrada del modelo (1=mono, 2=dual).
+    int getDnnInputChannels() const { return dnnDenoiser_.inputChannels(); }
 
     // ─── MVDR Beamformer (dual-mic) ─────────────────────────────────────
     /// Habilita/deshabilita el beamformer MVDR en runtime (thread-safe).

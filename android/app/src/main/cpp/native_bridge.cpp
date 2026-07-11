@@ -1364,6 +1364,39 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDnnIsActive(
     return g_engine->getDnnIsActive() ? JNI_TRUE : JNI_FALSE;
 }
 
+/// Retorna diagnósticos en tiempo real del DNN denoiser como HashMap.
+/// Claves:
+///   isActive (bool), isEnabled (bool), processedFrames (long),
+///   droppedFrames (long), lastInferenceUs (int), effectiveIntensity (double),
+///   userIntensity (double), inputChannels (int).
+JNIEXPORT jobject JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDnnDiagnostics(
+        JNIEnv* env,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return nullptr;
+    }
+
+    jclass hashMapCls = env->FindClass("java/util/HashMap");
+    jmethodID ctor = env->GetMethodID(hashMapCls, "<init>", "()V");
+    jmethodID put  = env->GetMethodID(hashMapCls, "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    jobject map = env->NewObject(hashMapCls, ctor);
+
+    putKv(env, map, put, "isActive",            boxBool(env, g_engine->getDnnIsActive()));
+    putKv(env, map, put, "isEnabled",           boxBool(env, g_engine->getDnnIsEnabled()));
+    putKv(env, map, put, "processedFrames",     boxLong(env, static_cast<int64_t>(g_engine->getDnnProcessedFrames())));
+    putKv(env, map, put, "droppedFrames",       boxLong(env, static_cast<int64_t>(g_engine->getDnnDroppedFrames())));
+    putKv(env, map, put, "lastInferenceUs",     boxInt(env, static_cast<int32_t>(g_engine->getDnnLastInferenceUs())));
+    putKv(env, map, put, "effectiveIntensity",  boxDouble(env, static_cast<double>(g_engine->getDnnEffectiveIntensity())));
+    putKv(env, map, put, "userIntensity",       boxDouble(env, static_cast<double>(g_engine->getDnnUserIntensity())));
+    putKv(env, map, put, "inputChannels",       boxInt(env, g_engine->getDnnInputChannels()));
+
+    env->DeleteLocalRef(hashMapCls);
+    return map;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MVDR Dual-Mic Beamforming — Phase 3 (JNI bridge)
 // ─────────────────────────────────────────────────────────────────────────────
