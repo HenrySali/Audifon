@@ -147,10 +147,6 @@ public:
     void setTnrThreshold(float ratio) { pipeline_.setTnrThreshold(ratio); }
     void setTnrAttenuationDb(float db) { pipeline_.setTnrAttenuationDb(db); }
 
-    // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ──────────────────
-    void setAuditoryModelEnabled(bool enabled) { pipeline_.setAuditoryModelEnabled(enabled); }
-    void setAuditoryModelAudiogram(const float* thresholds) { pipeline_.setAuditoryModelAudiogram(thresholds); }
-
     // ─── Expansor de baja frecuencia (R1, tarea 4.3) ─────────────────────
     /// Forward a DspPipeline::setExpanderParams. Default OFF/ratio 1.0 →
     /// passthrough (R6.3). Thread-safe.

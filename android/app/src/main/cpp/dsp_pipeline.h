@@ -245,18 +245,6 @@ public:
     }
     bool isExpanderEnabled() const { return expander_.isEnabled(); }
 
-    // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ─────────────────
-    /// Habilita/deshabilita el modelo auditivo humano (default OFF).
-    /// Simula resonancia del canal, oído medio, gammatone, OHC, IHC, nervio auditivo.
-    void setAuditoryModelEnabled(bool enabled) { auditoryModel_.setEnabled(enabled); }
-    bool isAuditoryModelEnabled() const { return auditoryModel_.isEnabled(); }
-
-    /// Configura el audiograma de 12 bandas (dB HL) para la compresión OHC del modelo.
-    /// @param thresholds Array de 12 valores dB HL correspondientes a las bandas del EQ.
-    void setAuditoryModelAudiogram(const float thresholds[12]) {
-        auditoryModel_.setAudiogram(thresholds);
-    }
-
     /// Ratio del compresor de salida (input:output). Default: 4.0 (4:1).
     void setOutputCompressorRatio(float ratio) { oc_.setRatio(ratio); }
     /// Ancho del soft-knee del compresor de salida en dB. Default: 6 dB.
@@ -518,7 +506,6 @@ private:
     Expander expander_;       ///< Expansor de baja frecuencia ≤1kHz (R1, solo atenúa; default OFF)
     AuditoryModel auditoryModel_; ///< Modelo auditivo humano 6 etapas (default OFF)
     Equalizer eq_;            ///< EQ 12 bandas (AMPLIFICA según prescripción)
-    AuditoryModel auditoryModel_; ///< Modelo auditivo humano (6 etapas cocleares, post-EQ pre-WDRC)
     WdrcProcessor wdrc_;      ///< WDRC 3 regiones (solo atenúa)
     MpoLimiter mpo_;          ///< Limitador de picos (solo atenúa)
     EnvironmentClassifier envClassifier_; ///< Clasificador automático de entorno
