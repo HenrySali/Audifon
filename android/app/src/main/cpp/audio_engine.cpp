@@ -77,7 +77,7 @@ oboe::Result AudioEngine::openInputStream() {
     // silence when it falls back silently.
     builder.setSharingMode(oboe::SharingMode::Shared);
     builder.setAudioApi(oboe::AudioApi::Unspecified);
-    builder.setErrorCallback(this);
+    builder.setErrorCallback(static_cast<oboe::AudioStreamErrorCallback*>(this));
     // Pedir al HAL que asigne un audio session ID (para NoiseSuppressor Android).
     // Sin esto, getSessionId() devuelve 0 (None) y NoiseSuppressor no puede attachear.
     builder.setSessionId(oboe::SessionId::Allocate);
@@ -199,8 +199,8 @@ oboe::Result AudioEngine::openOutputStream() {
     // output stream's data callback means onAudioReady() fires on the output
     // stream, which internally reads from the input stream and calls
     // onBothStreamsReady(). This is the correct Oboe FullDuplexStream pattern.
-    builder.setDataCallback(this);
-    builder.setErrorCallback(this);
+    builder.setDataCallback(static_cast<oboe::AudioStreamDataCallback*>(this));
+    builder.setErrorCallback(static_cast<oboe::AudioStreamErrorCallback*>(this));
 
     oboe::Result result = builder.openStream(outputStream_);
 
@@ -336,8 +336,8 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     mvdrBeamformer_.setEnabled(mvdrWanted && stereoInputAvailable_);
 
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
-    setInputStream(inputStream_.get());
-    setOutputStream(outputStream_.get());
+    oboe::FullDuplexStream::setInputStream(inputStream_.get());
+    oboe::FullDuplexStream::setOutputStream(outputStream_.get());
 
     // ─── Step 7: Start the FullDuplexStream ──────────────────────────────
     // FullDuplexStream::start() will start the input stream for reading
@@ -378,7 +378,7 @@ oboe::Result AudioEngine::stop() {
     running_.store(false, std::memory_order_release);
 
     // Stop the FullDuplexStream (base class) — stops both streams
-    oboe::Result stopResult = FullDuplexStream::stop();
+    oboe::Result stopResult = oboe::FullDuplexStream::stop();
     if (stopResult != oboe::Result::OK) {
         LOGW("FullDuplexStream::stop() returned: %s", oboe::convertToText(stopResult));
     }
@@ -1214,10 +1214,10 @@ void AudioEngine::attemptReconnection() {
         }
 
         // Success — start full-duplex
-        setInputStream(inputStream_.get());
-        setOutputStream(outputStream_.get());
+        oboe::FullDuplexStream::setInputStream(inputStream_.get());
+        oboe::FullDuplexStream::setOutputStream(outputStream_.get());
 
-        auto startResult = FullDuplexStream::start();
+        auto startResult = oboe::FullDuplexStream::start();
         if (startResult == oboe::Result::OK) {
             reconnecting_.store(false, std::memory_order_release);
             LOGI("Reconnection successful on attempt %d", attempt + 1);
