@@ -4226,6 +4226,10 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
   bool _enabled = true;
   double _intensity = 0.6;
 
+  // ─── Diagnostics state ─────────────────────────────────────────────────
+  Timer? _diagTimer;
+  Map<String, dynamic>? _diagnostics;
+
   @override
   void initState() {
     super.initState();
@@ -4233,11 +4237,44 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     _loadState();
   }
 
+  @override
+  void dispose() {
+    _diagTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startDiagTimer() {
+    _diagTimer?.cancel();
+    _diagTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      _pollDiagnostics();
+    });
+    // Poll immediately on start
+    _pollDiagnostics();
+  }
+
+  void _stopDiagTimer() {
+    _diagTimer?.cancel();
+    _diagTimer = null;
+    if (mounted) setState(() => _diagnostics = null);
+  }
+
+  Future<void> _pollDiagnostics() async {
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'getDnnDiagnostics',
+      );
+      if (mounted && result != null) {
+        setState(() => _diagnostics = result);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _loadState() async {
     try {
       final active = await _channel.invokeMethod<bool>('getDnnIsActive');
       if (mounted && active != null) {
         setState(() => _enabled = active);
+        if (active) _startDiagTimer();
       }
     } catch (_) {}
     // Leer intensidad desde settings si está disponible.
@@ -4250,6 +4287,11 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
 
   Future<void> _setEnabled(bool enabled) async {
     setState(() => _enabled = enabled);
+    if (enabled) {
+      _startDiagTimer();
+    } else {
+      _stopDiagTimer();
+    }
     try {
       // Activar/desactivar DNN mono (limpieza directa del pipeline)
       await _channel.invokeMethod<void>('setDnnEnabled', {'enabled': enabled});
@@ -4277,6 +4319,71 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     } catch (_) {}
   }
 
+  Widget _buildDiagnosticsPanel() {
+    final diag = _diagnostics;
+    if (diag == null) {
+      return const SizedBox.shrink();
+    }
+
+    final isActive = diag['isActive'] as bool? ?? false;
+    final processedFrames = diag['processedFrames'] as int? ?? 0;
+    final droppedFrames = diag['droppedFrames'] as int? ?? 0;
+    final lastInferenceUs = diag['lastInferenceUs'] as int? ?? 0;
+    final effectiveIntensity = (diag['effectiveIntensity'] as num?)?.toDouble() ?? 0.0;
+
+    final inferenceMs = (lastInferenceUs / 1000.0).toStringAsFixed(1);
+    final effectivePct = (effectiveIntensity * 100).round();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Activo: ${isActive ? "\u2705" : "\u274C"}',
+            style: const TextStyle(
+              color: Colors.cyanAccent,
+              fontSize: 11,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Frames: $processedFrames | Drops: $droppedFrames',
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 11,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Inferencia: $inferenceMs ms',
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 11,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Intensidad efectiva: $effectivePct%',
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 11,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final intensityPct = (_intensity * 100).round();
@@ -4287,7 +4394,7 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ─── Fila: Título + Toggle ─────────────────────────────────
+            // ─── Fila: Titulo + Toggle ─────────────────────────────────
             Row(
               children: [
                 const Icon(Icons.psychology, color: Colors.cyanAccent, size: 20),
@@ -4349,6 +4456,8 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
                 ),
               ),
             ),
+            // ─── Panel de diagnostico DNN (solo visible cuando ON) ────
+            if (_enabled) _buildDiagnosticsPanel(),
           ],
         ),
       ),
