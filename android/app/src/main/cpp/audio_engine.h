@@ -147,9 +147,15 @@ public:
     void setTnrThreshold(float ratio) { pipeline_.setTnrThreshold(ratio); }
     void setTnrAttenuationDb(float db) { pipeline_.setTnrAttenuationDb(db); }
 
-    // ─── Modelo Auditivo Humano (6 etapas fisiológicas) ──────────────────
+    // ─── Audífono Avanzado (compresión multicanal adaptativa) ──────────
     void setAuditoryModelEnabled(bool enabled) { pipeline_.setAuditoryModelEnabled(enabled); }
-    void setAuditoryModelAudiogram(const float* thresholds) { pipeline_.setAuditoryModelAudiogram(thresholds); }
+    bool isAuditoryModelEnabled() const { return pipeline_.isAuditoryModelEnabled(); }
+    void setAuditoryModelAudiogram(const float thresholds[12]) {
+        pipeline_.setAuditoryModelAudiogram(thresholds);
+    }
+    void setAuditoryModelEarCanalGain(float gainDb) {
+        pipeline_.setAuditoryModelEarCanalGain(gainDb);
+    }
 
     // ─── Expansor de baja frecuencia (R1, tarea 4.3) ─────────────────────
     /// Forward a DspPipeline::setExpanderParams. Default OFF/ratio 1.0 →
@@ -158,25 +164,6 @@ public:
                            float cutoffHz, float attackMs, float releaseMs) {
         pipeline_.setExpanderParams(enabled, kneeDbSpl, ratio, cutoffHz,
                                     attackMs, releaseMs);
-    }
-
-    // ─── Modelo Auditivo (simulación del sistema auditivo humano) ────────
-    /// Habilita/deshabilita el modelo auditivo (6 etapas cocleares).
-    /// Thread-safe (atómico en AuditoryModel).
-    void setAuditoryModelEnabled(bool enabled) {
-        pipeline_.setAuditoryModelEnabled(enabled);
-    }
-    bool isAuditoryModelEnabled() const {
-        return pipeline_.isAuditoryModelEnabled();
-    }
-    /// Configura el audiograma del paciente para el modelo auditivo.
-    /// @param thresholds Array de 12 valores en dB HL (0 = audición normal)
-    void setAuditoryModelAudiogram(const float thresholds[12]) {
-        pipeline_.setAuditoryModelAudiogram(thresholds);
-    }
-    /// Configura la ganancia del modelo auditivo avanzado (slider UI).
-    void setAuditoryModelEarCanalGain(float gainDb) {
-        pipeline_.setAuditoryModelEarCanalGain(gainDb);
     }
 
     // ─── Supresor de reverberacion (R5, tarea 5.2) ───────────────────────
