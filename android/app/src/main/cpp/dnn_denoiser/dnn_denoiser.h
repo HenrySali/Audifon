@@ -35,15 +35,15 @@
 ///   3. Audio thread: si inputSr != 16000 → DOWNSAMPLE a 16 kHz (polyphase
 ///                     o lineal según rate). Empuja samples al input ring
 ///                     buffer (lock-free SPSC) en samples a 16 kHz.
-///   4. Worker thread: drena 128 samples (kDnnHopSize, MEJORA #1) →
-///                     STFT(512, hop 128, sqrt-Hann periódica, 75% overlap) →
+///   4. Worker thread: drena 160 samples (kDnnHopSize) →
+///                     STFT(320, hop 160, sqrt-Hann periodica, 50% overlap) →
 ///                     OnnxRuntime.run(mix, cache0, cache1, cache2)
 ///                     → enhanced spectrum → iSTFT/OLA → output ring buffer
 ///                     (también en samples a 16 kHz).
 ///   5. Audio thread: tira samples del output ring buffer (16 kHz),
 ///                     UPSAMPLE a inputSampleRate. dryDelayRing va en
 ///                     samples a la rate nativa (alineamiento 1:1).
-///   6. Crossfade lineal de 50 ms (800 samples a 16 kHz, MEJORA #1 Tier 3 #12)
+///   6. Crossfade lineal de 50 ms (800 samples a 16 kHz)
 ///                     al activar/desactivar (anti-clic).
 ///   7. Clamp final a ±1.0 por seguridad.
 ///
@@ -53,7 +53,7 @@
 /// INDICADORES (monitoring vía getters):
 ///   ├─ isEnabled() → bool         — flag de configuración
 ///   ├─ isActive()  → bool         — flag operacional (modelo listo + sin error)
-///   ├─ getProcessedFrames() → uint64_t — total de hops (128 samples) procesados
+///   ├─ getProcessedFrames() → uint64_t — total de hops (160 samples) procesados
 ///   ├─ getDroppedFrames()   → uint64_t — frames descartados por congestión
 ///   └─ getLastInferenceUs() → uint32_t — latencia última inferencia
 ///
@@ -64,14 +64,11 @@
 ///
 /// LATENCIA:
 ///   - GTCRN frame procesado en hops de kDnnHopSize samples a 16 kHz.
-///   - MEJORA #1 (ruido-profundo.md): kDnnHopSize=128 → 8 ms de latencia
-///     algorítmica STFT (antes era 256 = 16 ms). Esto pone el sistema por
-///     debajo del umbral de comb-filter audible en open-fit (~5–7 ms).
+///   - kDnnHopSize=160 -> 10 ms de latencia algoritmica STFT.
 ///   - Resampler polyphase 48↔16 (72 taps, ratio 3, MEJORA #3): group delay ≈
 ///     (72-1)/2 / 48000 ≈ 0.74 ms en cada sentido → ~1.48 ms ida+vuelta
 ///     (antes 96 taps → ~2 ms).
-///   - Latencia total esperada (con buffering + worker handoff) ≈ 14–18 ms
-///     (antes ≈ 22–27 ms con hop=256 y proto de 96 taps).
+///   - Latencia total esperada (con buffering + worker handoff) ~ 14-18 ms.
 ///
 /// FAIL-SAFE:
 ///   Si el modelo no carga, la API de input shape no coincide, o cualquier
@@ -98,37 +95,36 @@ static constexpr int kDnnSampleRate = 16000;
 
 /// Tamaño de hop (frame de inferencia GTCRN) en samples a 16 kHz.
 ///
-/// MEJORA #1 (ruido-profundo.md): hop reducido de 256 → 128 (8 ms en vez de 16 ms).
-/// Lleva el overlap STFT de 50% a 75% (con kDnnFftSize=512). Baja la latencia
-/// algorítmica del paradigma STFT-DNN de 16 ms a 8 ms — el comb-filter en
-/// open-fit deja de ser audible (umbral perceptual ~5–7 ms, Agnew/Stiefenhofer).
-/// Costo: 2× inferencias por segundo (250 vs 125). Aceptable porque la inferencia
-/// GTCRN simple corre en ~1.5 ms en arm64, así que 250 inferencias × 1.5 ms = 375 ms/s
-/// = ~37% de un core, con margen suficiente.
-static constexpr int kDnnHopSize = 128;
+/// El modelo ONNX gtcrn.onnx fue entrenado con hop=160 (10 ms).
+/// Esto da un overlap del 50% con kDnnFftSize=320.
+/// Inferencia: 100 frames/s. En arm64 (~1.5 ms/frame) = 150 ms/s = ~15% de un core.
+static constexpr int kDnnHopSize = 160;
 
 /// NOTE: kDnnDualBlock has been removed. The dual-channel path now operates
-/// frame-by-frame at kDnnHopSize (128 samples = 8 ms), same as the mono path.
+/// frame-by-frame at kDnnHopSize (160 samples = 10 ms), same as the mono path.
 /// The WPE beamformer + ONNX GTCRN core replaces the previous 3-second block.
 /// Spec: gtcrn-dual-channel (Option D: WPE in C++ + ONNX core).
 
-/// Tamaño de ventana STFT del modelo GTCRN (FFT 512, ventana Hann).
-static constexpr int kDnnFftSize = 512;
+/// Tamaño de ventana STFT del modelo GTCRN.
+///
+/// El modelo ONNX gtcrn.onnx tiene input shape [1,1,161,2], lo que implica
+/// 161 frequency bins = FFT de 320 puntos (320/2+1 = 161).
+/// La ventana Hann y los buffers STFT se dimensionan con este valor.
+/// Para la FFT usamos un DFT real de 320 puntos (no radix-2, ya que 320
+/// no es potencia de 2). La implementacion usa DFT directo optimizado
+/// (solo 161 bins de salida) que es suficientemente rapido para arm64.
+static constexpr int kDnnFftSize = 320;
 
 /// Crossfade lineal al togglear enabled (en samples a 16 kHz).
-///
-/// MEJORA #1 (ruido-profundo.md, Tier 3 #12 “gratis”): crossfade subido de 30 ms a 50 ms.
-/// 50 ms × 16 000 Hz / 1000 = 800 samples. Beneficio: transición ON/OFF aún más
-/// suave (especialmente perceptible en habla con consonantes plosivas durante el
-/// toggle). No afecta latencia de procesamiento; solo el ramp de la mezcla dry/wet.
+/// 50 ms x 16000 Hz / 1000 = 800 samples.
 static constexpr int kDnnCrossfadeSamples = 800;
 
 /// Capacidad de cada ring buffer (input/output) en samples.
 ///
-/// With frame-by-frame processing at kDnnHopSize=128, we only need enough
+/// With frame-by-frame processing at kDnnHopSize=160, we only need enough
 /// buffer to absorb jitter between audio thread and worker thread.
 /// 4096 samples = ~256 ms at 16 kHz, which is more than sufficient for
-/// frame-by-frame operation (each frame is only 8 ms). Power of 2 for
+/// frame-by-frame operation (each frame is only 10 ms). Power of 2 for
 /// efficient SPSC ring buffer masking.
 static constexpr int kDnnRingCapacity = 4096;
 
@@ -178,20 +174,20 @@ public:
     /// y lanza el worker thread en modo dual (WPE beamformer + ONNX GTCRN core).
     ///
     /// Contrato del modelo: misma interfaz que el modelo mono GTCRN:
-    ///   inputs[0] = "mix" [1,257,1,2] (real+imag per freq bin, single channel)
+    ///   inputs[0] = "mix" [1,161,1,2] (real+imag per freq bin, single channel)
     ///   inputs[1..3] = recurrent caches (conv, tra, inter)
-    ///   outputs[0] = "enh" [1,257,1,2] (enhanced spectrum)
+    ///   outputs[0] = "enh" [1,161,1,2] (enhanced spectrum)
     ///   outputs[1..3] = updated caches
     ///
     /// The dual-channel pipeline (Option D) works as follows:
-    ///   1. STFT of both ch0 and ch1 (done in C++, kDnnFftSize=512)
+    ///   1. STFT of both ch0 and ch1 (done in C++, kDnnFftSize=320)
     ///   2. WPE beamformer: combines 2ch spectra into 1ch enhanced spectrum
     ///   3. ONNX GTCRN core: processes the beamformed spectrum frame-by-frame
     ///   4. iSTFT/OLA: reconstructs time-domain output
     ///
     /// This replaces the previous approach that ran STFT/WPE/IVA inside
     /// the .ptl model with 3-second blocks. Now operates frame-by-frame at
-    /// kDnnHopSize=128 (8ms latency), same as the mono path.
+    /// kDnnHopSize=160 (10ms latency), same as the mono path.
     ///
     /// @param assetMgr  Asset manager Android (nullptr -> falla limpia).
     /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn_dual_core.onnx".
@@ -252,8 +248,7 @@ public:
     void processStereo(const float* ch0, const float* ch1,
                        float* output, int blockSize);
 
-    /// Toggle ON/OFF. Inicia crossfade anti-clic de 50 ms (800 samples a 16 kHz;
-    /// MEJORA #1 Tier 3 #12, antes 30 ms).
+    /// Toggle ON/OFF. Inicia crossfade anti-clic de 50 ms (800 samples a 16 kHz).
     /// Thread-safe: lock-free. Puede llamarse desde cualquier hilo.
     void setEnabled(bool enabled);
 
@@ -322,7 +317,7 @@ public:
         return voiceCap_.load(std::memory_order_acquire);
     }
 
-    /// @return total de hops (kDnnHopSize = 128 samples) procesados con DNN.
+    /// @return total de hops (kDnnHopSize = 160 samples) procesados con DNN.
     uint64_t getProcessedFrames() const {
         return processedFrames_.load(std::memory_order_relaxed);
     }

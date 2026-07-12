@@ -11,7 +11,7 @@
 ///   └───────────────┘        └───────────────┘        └─────┬───────┘
 ///        │                                                   │
 ///        │  (parallel: also pushes to dryDelayRing_)          ▼
-///        ▼                                              STFT(512,Hann)
+///        ▼                                              STFT(320,Hann)
 ///   ┌───────────────┐                                        │
 ///   │ dryDelayRing_ │◀───────── time-aligned delay           ▼
 ///   │ (SPSC float)  │                                  ONNX session.Run()
@@ -136,12 +136,79 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FFT radix-2 (in-place complex)
+// Real-signal DFT for non-power-of-2 sizes (N=320 -> 161 bins)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// FFT in-place compleja, decimación-en-tiempo, radix-2.
-/// re/im: arrays de longitud N (potencia de 2). N=512 para nuestro caso.
-/// Si invert=true → IFFT (escala por 1/N al final).
+/// Forward real DFT: computes nBins = N/2+1 complex bins from N real samples.
+/// This is a direct computation (O(N * nBins)) suitable for small N (320).
+/// On arm64 at 100 frames/sec: 320*161*100 = ~5.2M multiplies/sec (trivial).
+///
+/// @param x      Input: N real samples (windowed time-domain signal).
+/// @param outRe  Output: real parts of nBins frequency bins.
+/// @param outIm  Output: imaginary parts of nBins frequency bins.
+/// @param N      DFT size (e.g. 320). Does NOT need to be power of 2.
+inline void realDftForward(const float* x, float* outRe, float* outIm, int N) {
+    const int nBins = N / 2 + 1;
+    const float invN = 1.0f / static_cast<float>(N);
+    for (int k = 0; k < nBins; ++k) {
+        float sumRe = 0.0f;
+        float sumIm = 0.0f;
+        const float w = -2.0f * kPi * static_cast<float>(k) * invN;
+        for (int n = 0; n < N; ++n) {
+            const float angle = w * static_cast<float>(n);
+            sumRe += x[n] * std::cos(angle);
+            sumIm += x[n] * std::sin(angle);
+        }
+        outRe[k] = sumRe;
+        outIm[k] = sumIm;
+    }
+}
+
+/// Inverse real DFT: reconstructs N real samples from nBins = N/2+1 complex bins.
+/// Uses Hermitian symmetry to reconstruct the full spectrum internally.
+///
+/// @param inRe   Input: real parts of nBins frequency bins.
+/// @param inIm   Input: imaginary parts of nBins frequency bins.
+/// @param out    Output: N real time-domain samples.
+/// @param N      DFT size (e.g. 320). Does NOT need to be power of 2.
+inline void realDftInverse(const float* inRe, const float* inIm, float* out, int N) {
+    const int nBins = N / 2 + 1;
+    const float invN = 1.0f / static_cast<float>(N);
+    for (int n = 0; n < N; ++n) {
+        float sum = 0.0f;
+        // DC component (k=0)
+        sum += inRe[0];
+        // Middle bins (k=1..nBins-2): contribute twice due to Hermitian symmetry
+        const float baseAngle = 2.0f * kPi * static_cast<float>(n) * invN;
+        for (int k = 1; k < nBins - 1; ++k) {
+            const float angle = baseAngle * static_cast<float>(k);
+            // X[k]*exp(j*2*pi*k*n/N) + X[N-k]*exp(j*2*pi*(N-k)*n/N)
+            // = 2*Re(X[k]*exp(j*2*pi*k*n/N))  (Hermitian symmetry)
+            sum += 2.0f * (inRe[k] * std::cos(angle) - inIm[k] * std::sin(angle));
+        }
+        // Nyquist component (k=N/2) -- only if N is even
+        if (N % 2 == 0) {
+            const float angle = baseAngle * static_cast<float>(nBins - 1);
+            sum += inRe[nBins - 1] * std::cos(angle) - inIm[nBins - 1] * std::sin(angle);
+        } else {
+            // N is odd: last bin also has a conjugate partner
+            const int kLast = nBins - 1;
+            const float angle = baseAngle * static_cast<float>(kLast);
+            sum += 2.0f * (inRe[kLast] * std::cos(angle) - inIm[kLast] * std::sin(angle));
+        }
+        out[n] = sum * invN;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FFT radix-2 (in-place complex) - kept for WPE beamformer or other uses
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// FFT in-place compleja, decimacion-en-tiempo, radix-2.
+/// re/im: arrays de longitud N (potencia de 2).
+/// Si invert=true -> IFFT (escala por 1/N al final).
+/// NOTE: Not used for the DNN STFT path (which uses realDftForward/Inverse
+/// for N=320). Kept for potential use by other modules that need power-of-2 FFT.
 inline void fftRadix2(float* re, float* im, int N, bool invert) {
     // Bit-reversal permutation.
     int j = 0;
@@ -593,6 +660,9 @@ struct DnnDenoiser::Impl {
     std::vector<float> fftRe;              // [kDnnFftSize]
     std::vector<float> fftIm;              // [kDnnFftSize]
 
+    /// Workspace for windowed time-domain signal before DFT.
+    std::vector<float> dftWorkBuf;         // [kDnnFftSize]
+
     /// Buffer staging del frame de salida ya finalizado (kDnnHopSize samples).
     std::vector<float> outputFrame;
 
@@ -666,6 +736,7 @@ struct DnnDenoiser::Impl {
         olaBuf.assign(kDnnFftSize, 0.0f);
         fftRe.assign(kDnnFftSize, 0.0f);
         fftIm.assign(kDnnFftSize, 0.0f);
+        dftWorkBuf.assign(kDnnFftSize, 0.0f);
         outputFrame.assign(kDnnHopSize, 0.0f);
 
         // Hann window — versión PERIÓDICA (no simétrica).
@@ -748,8 +819,8 @@ struct DnnDenoiser::Impl {
     /// Loads the dual-channel ONNX model (gtcrn_dual_core.onnx) from assets.
     /// Uses the same OnnxRuntime infrastructure as the mono path (initialize()).
     /// The dual model has the same interface as the mono model:
-    ///   inputs[0] = "mix" [1,257,1,2], inputs[1..3] = caches
-    ///   outputs[0] = "enh" [1,257,1,2], outputs[1..3] = updated caches
+    ///   inputs[0] = "mix" [1,161,1,2], inputs[1..3] = caches
+    ///   outputs[0] = "enh" [1,161,1,2], outputs[1..3] = updated caches
     ///
     /// Returns true if the model loaded and introspection passed.
     /// Spec: gtcrn-dual-channel (Option D).
@@ -791,6 +862,8 @@ struct DnnDenoiser::Impl {
     /// @param vadActive  Current VAD state (for WPE noise estimation)
     /// @return true if frame processed OK; false -> bypass (model failure)
     bool processDualFrame(const float* hopCh0, const float* hopCh1, bool vadActive) {
+        constexpr int nBins = kDnnFftSize / 2 + 1;  // 161
+
         // ── 1. STFT for channel 0 ───────────────────────────────────────
         // Shift stftInBuf left by kDnnHopSize and append new samples.
         std::memmove(stftInBuf.data(),
@@ -799,15 +872,13 @@ struct DnnDenoiser::Impl {
         std::memcpy(stftInBuf.data() + (kDnnFftSize - kDnnHopSize),
                     hopCh0, kDnnHopSize * sizeof(float));
 
-        // Apply analysis window (sqrt-Hann) and FFT for ch0.
+        // Apply analysis window (sqrt-Hann) and forward DFT for ch0.
         for (int i = 0; i < kDnnFftSize; ++i) {
-            fftRe[i] = stftInBuf[i] * hannWin[i];
-            fftIm[i] = 0.0f;
+            dftWorkBuf[i] = stftInBuf[i] * hannWin[i];
         }
-        fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/false);
+        realDftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data(), kDnnFftSize);
 
         // Store ch0 spectrum in complex format for WPE.
-        constexpr int nBins = kDnnFftSize / 2 + 1;  // 257
         WpeBeamformer::Complex X0[WpeBeamformer::kNumBins];
         for (int f = 0; f < nBins; ++f) {
             X0[f] = WpeBeamformer::Complex(fftRe[f], fftIm[f]);
@@ -821,10 +892,9 @@ struct DnnDenoiser::Impl {
                     hopCh1, kDnnHopSize * sizeof(float));
 
         for (int i = 0; i < kDnnFftSize; ++i) {
-            fftReCh1[i] = stftInBufCh1[i] * hannWin[i];
-            fftImCh1[i] = 0.0f;
+            dftWorkBuf[i] = stftInBufCh1[i] * hannWin[i];
         }
-        fftRadix2(fftReCh1.data(), fftImCh1.data(), kDnnFftSize, /*invert=*/false);
+        realDftForward(dftWorkBuf.data(), fftReCh1.data(), fftImCh1.data(), kDnnFftSize);
 
         WpeBeamformer::Complex X1[WpeBeamformer::kNumBins];
         for (int f = 0; f < nBins; ++f) {
@@ -835,11 +905,11 @@ struct DnnDenoiser::Impl {
         WpeBeamformer::Complex Y[WpeBeamformer::kNumBins];
         wpeBeamformer.process(X0, X1, Y, vadActive);
 
-        // ── 4. Pack enhanced spectrum into ONNX input [1,257,1,2] ────────
+        // ── 4. Pack enhanced spectrum into ONNX input [1,nBins,1,2] ──────
         const auto& mixShape = inputShapes[mixInputIdx];
         if (mixShape.size() != 4 || mixShape[0] != 1 || mixShape[1] != nBins ||
             mixShape[2] != 1 || mixShape[3] != 2) {
-            DNN_LOGE("processDualFrame: unsupported mix shape (expected [1,257,1,2])");
+            DNN_LOGE("processDualFrame: unsupported mix shape (expected [1,%d,1,2])", nBins);
             return false;
         }
         std::fill(mixTensorData.begin(), mixTensorData.end(), 0.0f);
@@ -903,30 +973,25 @@ struct DnnDenoiser::Impl {
             std::memcpy(caches[k].data(), p, n * sizeof(float));
         }
 
-        // ── 7. Unpack enhanced tensor -> fftRe/fftIm ────────────────────
+        // ── 7. Unpack enhanced tensor -> nBins complex spectrum ──────────
         const float* enhData = outputs[enhOutputIdx].GetTensorData<float>();
-        std::fill(fftRe.begin(), fftRe.end(), 0.0f);
-        std::fill(fftIm.begin(), fftIm.end(), 0.0f);
         for (int f = 0; f < nBins; ++f) {
             fftRe[f] = enhData[f * 2 + 0];
             fftIm[f] = enhData[f * 2 + 1];
         }
-        // Hermitian symmetry for real-valued reconstruction.
-        for (int f = 1; f < kDnnFftSize / 2; ++f) {
-            fftRe[kDnnFftSize - f] =  fftRe[f];
-            fftIm[kDnnFftSize - f] = -fftIm[f];
-        }
 
-        // ── 8. iFFT ─────────────────────────────────────────────────────
-        fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/true);
+        // ── 8. Inverse DFT -> kDnnFftSize real samples ───────────────────
+        // realDftInverse handles Hermitian symmetry internally.
+        // Output goes to dftWorkBuf to avoid aliasing with fftRe/fftIm inputs.
+        realDftInverse(fftRe.data(), fftIm.data(), dftWorkBuf.data(), kDnnFftSize);
 
         // ── 9. Synthesis window (sqrt-Hann) + OLA ────────────────────────
         static constexpr float kOlaScale =
             (2.0f * static_cast<float>(kDnnHopSize)) /
             static_cast<float>(kDnnFftSize);
         for (int i = 0; i < kDnnFftSize; ++i) {
-            fftRe[i] *= hannWin[i] * kOlaScale;
-            olaBuf[i] += fftRe[i];
+            dftWorkBuf[i] *= hannWin[i] * kOlaScale;
+            olaBuf[i] += dftWorkBuf[i];
         }
 
         // ── 10. Extract kDnnHopSize samples from OLA buffer ──────────────
@@ -1103,6 +1168,7 @@ struct DnnDenoiser::Impl {
         std::fill(olaBuf.begin(),     olaBuf.end(),     0.0f);
         std::fill(fftRe.begin(),      fftRe.end(),      0.0f);
         std::fill(fftIm.begin(),      fftIm.end(),      0.0f);
+        std::fill(dftWorkBuf.begin(), dftWorkBuf.end(), 0.0f);
         std::fill(outputFrame.begin(),outputFrame.end(),0.0f);
         // Dual-channel state.
         std::fill(stftInBufCh1.begin(), stftInBufCh1.end(), 0.0f);
@@ -1123,22 +1189,21 @@ struct DnnDenoiser::Impl {
         std::memcpy(stftInBuf.data() + (kDnnFftSize - kDnnHopSize),
                     hopIn, kDnnHopSize * sizeof(float));
 
-        // ── 2. Aplicar ventana de análisis (sqrt-Hann) ───────────────────
+        // ── 2. Aplicar ventana de analisis (sqrt-Hann) ───────────────────
         for (int i = 0; i < kDnnFftSize; ++i) {
-            fftRe[i] = stftInBuf[i] * hannWin[i];
-            fftIm[i] = 0.0f;
+            dftWorkBuf[i] = stftInBuf[i] * hannWin[i];
         }
 
-        // ── 3. FFT → 257 bins complejos ──────────────────────────────────
-        fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/false);
+        // ── 3. Forward DFT -> nBins complex bins ─────────────────────────
+        constexpr int nBins = kDnnFftSize / 2 + 1;  // 161
+        realDftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data(), kDnnFftSize);
 
-        // ── 4. Empacar en mixTensorData con shape esperada [1,257,1,2] ───
-        // Asumimos [batch, freq, time, complex]. Si el modelo usa otro orden
-        // (p.ej. [B, T, F, 2]) introspectModel lo aceptará pero el packing
-        // será incorrecto y el output será inutilizable. En ese caso fallback.
+        // ── 4. Empacar en mixTensorData con shape del modelo ─────────────
+        // El modelo tiene shape [1, nBins, 1, 2] donde nBins=161.
+        // Validamos dinamicamente contra el shape introspectado.
         const auto& mixShape = inputShapes[mixInputIdx];
-        const int nBins = kDnnFftSize / 2 + 1;  // 257
-        // Heurística: ¿la dim con valor 257 es freq? Buscamos.
+
+        // Buscar la dim que coincide con nBins en el shape del modelo.
         int freqDim = -1;
         for (size_t i = 0; i < mixShape.size(); ++i) {
             if (mixShape[i] == nBins) {
@@ -1151,18 +1216,17 @@ struct DnnDenoiser::Impl {
             return false;
         }
 
-        // Para simplicidad asumimos shape [1, 257, 1, 2] (caso GTCRN simple).
-        // Si el orden es distinto, el packing puede estar mal — log y bypass.
+        // Para simplicidad asumimos shape [1, nBins, 1, 2].
         std::fill(mixTensorData.begin(), mixTensorData.end(), 0.0f);
         if (mixShape.size() == 4 && mixShape[0] == 1 && mixShape[1] == nBins &&
             mixShape[2] == 1 && mixShape[3] == 2) {
-            // [1, 257, 1, 2] → idx = freq * 2 + complex
+            // [1, nBins, 1, 2] -> idx = freq * 2 + complex
             for (int f = 0; f < nBins; ++f) {
                 mixTensorData[f * 2 + 0] = fftRe[f];
                 mixTensorData[f * 2 + 1] = fftIm[f];
             }
         } else {
-            DNN_LOGE("Unsupported mix shape (expected [1,257,1,2])");
+            DNN_LOGE("Unsupported mix shape (expected [1,%d,1,2])", nBins);
             return false;
         }
 
@@ -1170,9 +1234,8 @@ struct DnnDenoiser::Impl {
         std::vector<Ort::Value> inputs;
         inputs.reserve(inputNames.size());
 
-        // Pre-asignar el slot del mix; vamos a llenar el array por índice.
         for (size_t i = 0; i < inputNames.size(); ++i) {
-            inputs.push_back(Ort::Value(nullptr));  // placeholder
+            inputs.push_back(Ort::Value(nullptr));
         }
 
         inputs[mixInputIdx] = Ort::Value::CreateTensor<float>(
@@ -1224,45 +1287,30 @@ struct DnnDenoiser::Impl {
             std::memcpy(caches[k].data(), p, n * sizeof(float));
         }
 
-        // ── 8. Desempacar enh tensor → fftRe/fftIm ───────────────────────
+        // ── 8. Desempacar enh tensor -> fftRe/fftIm (nBins) ─────────────
         const float* enhData = outputs[enhOutputIdx].GetTensorData<float>();
-        std::fill(fftRe.begin(), fftRe.end(), 0.0f);
-        std::fill(fftIm.begin(), fftIm.end(), 0.0f);
-        // Asumimos misma shape [1,257,1,2] que el mix.
         for (int f = 0; f < nBins; ++f) {
             fftRe[f] = enhData[f * 2 + 0];
             fftIm[f] = enhData[f * 2 + 1];
         }
-        // Simetría hermitica para reconstrucción real.
-        for (int f = 1; f < kDnnFftSize / 2; ++f) {
-            fftRe[kDnnFftSize - f] =  fftRe[f];
-            fftIm[kDnnFftSize - f] = -fftIm[f];
-        }
 
-        // ── 9. iFFT → samples reales ─────────────────────────────────────
-        fftRadix2(fftRe.data(), fftIm.data(), kDnnFftSize, /*invert=*/true);
+        // ── 9. Inverse DFT -> kDnnFftSize real samples ───────────────────
+        // realDftInverse handles Hermitian symmetry internally.
+        // Output goes to dftWorkBuf to avoid aliasing with fftRe/fftIm inputs.
+        realDftInverse(fftRe.data(), fftIm.data(), dftWorkBuf.data(), kDnnFftSize);
 
-        // ── 10. Aplicar ventana de síntesis (sqrt-Hann) y OLA ────────────
+        // ── 10. Aplicar ventana de sintesis (sqrt-Hann) y OLA ────────────
         //
-        // MEJORA #1 (ruido-profundo.md) — Compensación COLA al bajar el hop:
-        //
-        // Con sqrt-Hann en análisis y síntesis, el producto efectivo aplicado
-        // a cada muestra del OLA es Hann completa. Para Hann periódica de
-        // longitud N con hop H, la suma de ventanas superpuestas vale:
-        //     Σ_k w[n + k·H]  =  N / (2·H)
-        // → hop = N/2 (50% overlap, viejo): suma = 1.0  → unity-gain OLA, sin scale.
-        // → hop = N/4 (75% overlap, nuevo): suma = 2.0  → +6 dB si no compensamos.
-        //
-        // Para mantener el invariante del steering "solo EQ y Volume amplifican",
-        // escalamos la ventana de síntesis por (2·H/N), que es exactamente la
-        // inversa de la suma anterior. Con hop=256 en FFT=512 → factor 1.0
-        // (nada cambia respecto al comportamiento previo). Con hop=128 → factor 0.5.
+        // Compensacion COLA: con sqrt-Hann en analisis y sintesis, el
+        // producto aplicado a cada muestra del OLA es Hann completa.
+        // Para hop = N/2 (50% overlap), la suma de ventanas vale 1.0
+        // -> unity-gain OLA, factor = 2*H/N = 2*160/320 = 1.0.
         static constexpr float kOlaScale =
             (2.0f * static_cast<float>(kDnnHopSize)) /
             static_cast<float>(kDnnFftSize);
         for (int i = 0; i < kDnnFftSize; ++i) {
-            fftRe[i] *= hannWin[i] * kOlaScale;
-            olaBuf[i] += fftRe[i];
+            dftWorkBuf[i] *= hannWin[i] * kOlaScale;
+            olaBuf[i] += dftWorkBuf[i];
         }
 
         // ── 11. Extraer kDnnHopSize samples del inicio del olaBuf ────────
@@ -1277,9 +1325,6 @@ struct DnnDenoiser::Impl {
                   olaBuf.end(), 0.0f);
 
         // ── 12. Push outputFrame al outputRing ───────────────────────────
-        // Si no hay espacio TOTAL, descartamos el frame y contamos drop.
-        // Esto evita meter solo "media porción" que después rompa la
-        // alineación 1:1 con el dryDelayRing (causa de clicks periódicos).
         if (outputRing.freeSpace() < kDnnHopSize) {
             droppedFramesLocal.fetch_add(1, std::memory_order_relaxed);
             return true;
@@ -1313,7 +1358,7 @@ struct DnnDenoiser::Impl {
             }
 
             const bool dual = (channels.load(std::memory_order_acquire) == 2);
-            // Both paths now use kDnnHopSize (frame-by-frame, 8ms latency).
+            // Both paths now use kDnnHopSize (frame-by-frame, 10ms latency).
             const int  need = kDnnHopSize;
 
             // Esperar hasta tener `need` samples disponibles (ambos canales si dual).
@@ -1542,7 +1587,7 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
              assetPath ? assetPath : "(null)");
 
     // Load the ONNX model using the same OnnxRuntime infrastructure as mono.
-    // The dual model has the same interface: [1,257,1,2] + caches.
+    // The dual model has the same interface: [1,161,1,2] + caches.
     if (!impl_->loadDualOnnxModel(assetMgr, assetPath)) {
         DNN_LOGE("initializeDual: model load/validation failed -> bypass");
         impl_->channels.store(1, std::memory_order_release);
