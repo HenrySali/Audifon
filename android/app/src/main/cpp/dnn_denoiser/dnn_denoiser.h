@@ -95,7 +95,7 @@ static constexpr int kDnnSampleRate = 16000;
 
 /// Tamaño de hop (frame de inferencia GTCRN) en samples a 16 kHz.
 ///
-/// El modelo ONNX gtcrn.onnx fue entrenado con hop=160 (10 ms).
+/// El modelo ONNX dpdfnet8.onnx fue entrenado con hop=160 (10 ms).
 /// Esto da un overlap del 50% con kDnnFftSize=320.
 /// Inferencia: 100 frames/s. En arm64 (~1.5 ms/frame) = 150 ms/s = ~15% de un core.
 static constexpr int kDnnHopSize = 160;
@@ -107,7 +107,7 @@ static constexpr int kDnnHopSize = 160;
 
 /// Tamaño de ventana STFT del modelo GTCRN.
 ///
-/// El modelo ONNX gtcrn.onnx tiene input shape [1,1,161,2], lo que implica
+/// El modelo ONNX dpdfnet8.onnx tiene input shape [1,1,161,2], lo que implica
 /// 161 frequency bins = FFT de 320 puntos (320/2+1 = 161).
 /// La ventana Hann y los buffers STFT se dimensionan con este valor.
 /// Para la FFT usamos un DFT real de 320 puntos (no radix-2, ya que 320
@@ -147,7 +147,7 @@ static constexpr float kVoiceCapReleaseMs = 300.0f;
 ///
 /// Lifecycle:
 ///   1. Construcción: barata, no carga modelo.
-///   2. initialize(AAssetManager*, "dnn_denoiser/gtcrn.onnx"):
+///   2. initialize(AAssetManager*, "dnn_denoiser/dpdfnet8.onnx"):
 ///      carga el modelo, crea OnnxRuntime session, lanza worker thread.
 ///      Si falla, isActive_ queda en false y la clase actúa como bypass.
 ///   3. setEnabled(true): habilita el procesamiento (con crossfade).
@@ -164,7 +164,7 @@ public:
 
     /// Carga el modelo ONNX desde assets y lanza el worker thread.
     /// @param assetMgr  Asset manager Android (puede ser nullptr → falla limpia)
-    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/gtcrn.onnx"
+    /// @param assetPath Ruta dentro de assets/, ej "dnn_denoiser/dpdfnet8.onnx"
     /// @return true si el modelo se cargó y la sesión está lista.
     ///         false → la clase queda en modo bypass permanente.
     /// NOTE: Llamar UNA SOLA VEZ. Idempotente: llamadas siguientes no-op.
