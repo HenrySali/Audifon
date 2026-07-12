@@ -334,7 +334,7 @@ class AudioMethodChannel(
                 // DNN Denoiser (GTCRN vía OnnxRuntime) — Fase 3
                 "initDnnDenoiser" -> {
                     // Inicialización lazy: pasamos AAssetManager al nativo
-                    // para que cargue dpdfnet8.onnx desde assets/.
+                    // para que cargue gtcrn.onnx desde assets/.
                     val ok = try {
                         nativeBridge.nativeInitDnnDenoiser(context.assets)
                     } catch (t: Throwable) {
