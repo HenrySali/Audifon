@@ -8,9 +8,9 @@ Atenúa el ruido ambiental (calle, tráfico, viento, multitalker) preservando la
 
 ## Especificaciones
 
-- **Modelo:** GTCRN (112K parámetros, 0.22 MMAC)
+- **Modelo:** DPDFNet8 (misma interfaz que GTCRN, mejor calidad)
 - **Latencia:** < 5 ms
-- **Asset:** `dnn_denoiser/gtcrn.onnx` (en `assets/`)
+- **Asset:** `dnn_denoiser/dpdfnet8.onnx` (en `assets/`)
 - **Frecuencias atenuadas:** broadband (100–8000 Hz), con mayor eficacia en ruido estacionario (motor, AC) y buena en no-estacionario (bocinas, babble)
 - **Preserva inteligibilidad del habla:** sí
 
