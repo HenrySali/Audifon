@@ -853,6 +853,7 @@ class AmplificationBloc
           .invokeMethod<void>('setDnnEnabled', {'enabled': true});
       double dnnInt = 0.6;
       try { dnnInt = _settingsRepository.dnnIntensity; } catch (_) {}
+      if (dnnInt <= 0.0) dnnInt = 0.6;
       await _audioBridge.setDnnIntensity(dnnInt);
     } catch (e, st) {
       developer.log(

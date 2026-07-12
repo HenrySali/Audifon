@@ -4280,7 +4280,10 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     // Leer intensidad desde settings si está disponible.
     try {
       final bloc = context.read<AmplificationBloc>();
-      final intensity = bloc.settingsRepository.dnnIntensity;
+      double intensity = bloc.settingsRepository.dnnIntensity;
+      // Si el valor es 0.0 (residuo del Modo Música), usar default funcional.
+      // Un usuario nunca quiere intensidad 0 — para eso está el toggle OFF.
+      if (intensity <= 0.0) intensity = 0.6;
       if (mounted) {
         setState(() => _intensity = intensity);
         // Sincronizar el valor con el motor C++ al iniciar, para que el slider
@@ -4321,6 +4324,11 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
         'setDnnIntensity',
         {'intensity': value},
       );
+    } catch (_) {}
+    // Persistir el valor en Hive para que sobreviva reinicios.
+    try {
+      final bloc = context.read<AmplificationBloc>();
+      await bloc.settingsRepository.setDnnIntensity(value);
     } catch (_) {}
   }
 
