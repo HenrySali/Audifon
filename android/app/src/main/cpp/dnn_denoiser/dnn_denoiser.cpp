@@ -1442,8 +1442,15 @@ struct DnnDenoiser::Impl {
         outputRing.clear();
         dryDelayRing.clear();
         // Reset estado interno worker para evitar mezclar buffers de la rate vieja.
-        resetRequested.store(true, std::memory_order_release);
-        workerCv.notify_one();
+        // Solo disparar reset si el worker ya estaba produciendo output con una
+        // rate previa (processedFramesLocal > 0). En la primera configuracion
+        // (startup), los rings estan vacios y no hay estado previo que limpiar;
+        // disparar reset aqui provocaria que el worker descarte el primer bloque
+        // y nunca arranque (Frames: 0 permanente).
+        if (processedFramesLocal.load(std::memory_order_relaxed) > 0) {
+            resetRequested.store(true, std::memory_order_release);
+            workerCv.notify_one();
+        }
     }
 };
 
