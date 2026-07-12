@@ -4244,7 +4244,12 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     try {
       final bloc = context.read<AmplificationBloc>();
       final intensity = bloc.settingsRepository.dnnIntensity;
-      if (mounted) setState(() => _intensity = intensity);
+      if (mounted) {
+        setState(() => _intensity = intensity);
+        // Sincronizar el valor con el motor C++ al iniciar, para que el slider
+        // refleje el mismo valor que realmente usa el denoiser.
+        _setIntensity(_intensity);
+      }
     } catch (_) {}
   }
 
