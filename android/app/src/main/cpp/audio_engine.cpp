@@ -501,7 +501,7 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
 
     // ─── Instancia mono legacy (GTCRN mono, ONNXRuntime) ────────────────
     // Stage `process()` del chain post-realce, controlado por setDnnEnabled().
-    const bool okMono = dnnDenoiser_.initialize(mgr, "dnn_denoiser/dpdfnet8.onnx");
+    const bool okMono = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
     if (!okMono) {
         LOGW("initDnnDenoiser[mono]: model not loaded — mono DNN permanently bypassed");
     } else {

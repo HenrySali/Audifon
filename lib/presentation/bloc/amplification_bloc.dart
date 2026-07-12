@@ -1498,7 +1498,7 @@ class AmplificationBloc
       _subscribeToStreams();
 
       // smart-continuo-dnn-modulado: cargar el modelo DNN denoiser
-      // (`dpdfnet8.onnx`) en el motor recién arrancado. Antes de este push,
+      // (`gtcrn.onnx`) en el motor recién arrancado. Antes de este push,
       // el técnico solo cargaba el DNN cuando se abría la pantalla
       // SmartSceneScreen (`_initDnnDenoiser` en `initState`). Si el
       // usuario nunca abría esa pantalla, la DNN nunca se inicializaba
