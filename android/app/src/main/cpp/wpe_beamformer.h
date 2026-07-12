@@ -22,7 +22,7 @@
 /// Design:
 ///   - Header-only (like mvdr_beamformer.h) to avoid CMakeLists.txt changes
 ///   - Operates on pre-computed complex spectra (caller handles STFT/iSTFT)
-///   - Uses kNumBins=257 (matching kDnnFftSize=512 in dnn_denoiser)
+///   - Uses kNumBins=161 (matching kDnnFftSize=320 in dnn_denoiser)
 ///   - Exponential smoothing with separate alphas for signal and noise
 ///   - VAD-driven: noise covariance updated only during noise-only segments
 ///   - 2x2 complex matrix inversion via analytic closed-form with regularization
@@ -52,8 +52,8 @@
 /// enhanced spectrum suitable for feeding into the GTCRN neural denoiser.
 class WpeBeamformer {
 public:
-    /// Number of frequency bins (kDnnFftSize/2 + 1 = 257).
-    static constexpr int kNumBins = 257;
+    /// Number of frequency bins (kDnnFftSize/2 + 1 = 161).
+    static constexpr int kNumBins = 161;
 
     /// Exponential smoothing factor for the noise covariance matrix Rnn.
     /// Higher values = more memory (slower adaptation). 0.98 provides a
