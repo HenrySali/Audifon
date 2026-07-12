@@ -174,9 +174,9 @@ public:
     /// y lanza el worker thread en modo dual (WPE beamformer + ONNX GTCRN core).
     ///
     /// Contrato del modelo: misma interfaz que el modelo mono GTCRN:
-    ///   inputs[0] = "mix" [1,161,1,2] (real+imag per freq bin, single channel)
+    ///   inputs[0] = "mix" [1,1,161,2] (real+imag per freq bin, single channel)
     ///   inputs[1..3] = recurrent caches (conv, tra, inter)
-    ///   outputs[0] = "enh" [1,161,1,2] (enhanced spectrum)
+    ///   outputs[0] = "enh" [1,1,161,2] (enhanced spectrum)
     ///   outputs[1..3] = updated caches
     ///
     /// The dual-channel pipeline (Option D) works as follows:

@@ -819,8 +819,8 @@ struct DnnDenoiser::Impl {
     /// Loads the dual-channel ONNX model (gtcrn_dual_core.onnx) from assets.
     /// Uses the same OnnxRuntime infrastructure as the mono path (initialize()).
     /// The dual model has the same interface as the mono model:
-    ///   inputs[0] = "mix" [1,161,1,2], inputs[1..3] = caches
-    ///   outputs[0] = "enh" [1,161,1,2], outputs[1..3] = updated caches
+    ///   inputs[0] = "mix" [1,1,161,2], inputs[1..3] = caches
+    ///   outputs[0] = "enh" [1,1,161,2], outputs[1..3] = updated caches
     ///
     /// Returns true if the model loaded and introspection passed.
     /// Spec: gtcrn-dual-channel (Option D).
@@ -905,11 +905,11 @@ struct DnnDenoiser::Impl {
         WpeBeamformer::Complex Y[WpeBeamformer::kNumBins];
         wpeBeamformer.process(X0, X1, Y, vadActive);
 
-        // ── 4. Pack enhanced spectrum into ONNX input [1,nBins,1,2] ──────
+        // ── 4. Pack enhanced spectrum into ONNX input [1,1,nBins,2] ──────
         const auto& mixShape = inputShapes[mixInputIdx];
-        if (mixShape.size() != 4 || mixShape[0] != 1 || mixShape[1] != nBins ||
-            mixShape[2] != 1 || mixShape[3] != 2) {
-            DNN_LOGE("processDualFrame: unsupported mix shape (expected [1,%d,1,2])", nBins);
+        if (mixShape.size() != 4 || mixShape[0] != 1 || mixShape[1] != 1 ||
+            mixShape[2] != nBins || mixShape[3] != 2) {
+            DNN_LOGE("processDualFrame: unsupported mix shape (expected [1,1,%d,2])", nBins);
             return false;
         }
         std::fill(mixTensorData.begin(), mixTensorData.end(), 0.0f);
@@ -1199,7 +1199,7 @@ struct DnnDenoiser::Impl {
         realDftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data(), kDnnFftSize);
 
         // ── 4. Empacar en mixTensorData con shape del modelo ─────────────
-        // El modelo tiene shape [1, nBins, 1, 2] donde nBins=161.
+        // El modelo tiene shape [1, 1, nBins, 2] donde nBins=161.
         // Validamos dinamicamente contra el shape introspectado.
         const auto& mixShape = inputShapes[mixInputIdx];
 
@@ -1216,17 +1216,17 @@ struct DnnDenoiser::Impl {
             return false;
         }
 
-        // Para simplicidad asumimos shape [1, nBins, 1, 2].
+        // Para simplicidad asumimos shape [1, 1, nBins, 2].
         std::fill(mixTensorData.begin(), mixTensorData.end(), 0.0f);
-        if (mixShape.size() == 4 && mixShape[0] == 1 && mixShape[1] == nBins &&
-            mixShape[2] == 1 && mixShape[3] == 2) {
-            // [1, nBins, 1, 2] -> idx = freq * 2 + complex
+        if (mixShape.size() == 4 && mixShape[0] == 1 && mixShape[1] == 1 &&
+            mixShape[2] == nBins && mixShape[3] == 2) {
+            // [1, 1, nBins, 2] -> idx = freq * 2 + complex
             for (int f = 0; f < nBins; ++f) {
                 mixTensorData[f * 2 + 0] = fftRe[f];
                 mixTensorData[f * 2 + 1] = fftIm[f];
             }
         } else {
-            DNN_LOGE("Unsupported mix shape (expected [1,%d,1,2])", nBins);
+            DNN_LOGE("Unsupported mix shape (expected [1,1,%d,2])", nBins);
             return false;
         }
 
@@ -1587,7 +1587,7 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
              assetPath ? assetPath : "(null)");
 
     // Load the ONNX model using the same OnnxRuntime infrastructure as mono.
-    // The dual model has the same interface: [1,161,1,2] + caches.
+    // The dual model has the same interface: [1,1,161,2] + caches.
     if (!impl_->loadDualOnnxModel(assetMgr, assetPath)) {
         DNN_LOGE("initializeDual: model load/validation failed -> bypass");
         impl_->channels.store(1, std::memory_order_release);
