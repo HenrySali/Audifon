@@ -710,17 +710,14 @@ struct DnnDenoiser::Impl {
             }
         }
 
-        // Hann window — versión PERIÓDICA (no simétrica).
-        // GTCRN/sherpa-onnx esperan ventana Hann periódica, equivalente a
-        // numpy.hanning(N+1)[:N] o torch.hann_window(N, periodic=True),
-        // que cumple COLA exacta con hop = N/2. Si usáramos la simétrica
-        // ((N-1) en el denominador) introduciríamos un sesgo de amplitud
-        // de ~0.4% en cada bin que el modelo no espera.
-        // Aplicamos sqrt-Hann en análisis y síntesis, así el producto
-        // (window² sumado en el solapamiento) cumple unity-gain OLA.
+        // Vorbis window (DPDFNet8 training convention).
+        // DPDFNet8 fue entrenado con ventana Vorbis (sherpa-onnx MakeVorbisWindow).
+        // Fórmula: w[n] = sin(π/2 · sin²(π·n/N))
+        // Cumple COLA con hop = N/2 (50% overlap): sum(w²) = 1.
         for (int i = 0; i < kDnnFftSize; ++i) {
-            const float w = 0.5f * (1.0f - std::cos(2.0f * kPi * i / kDnnFftSize));
-            hannWin[i] = std::sqrt(w);
+            const float sinArg = kPi * static_cast<float>(i) / static_cast<float>(kDnnFftSize);
+            const float sinSq = std::sin(sinArg) * std::sin(sinArg);
+            hannWin[i] = std::sin(kPi * 0.5f * sinSq);
         }
 
         inputRing.init(kDnnRingCapacity);
