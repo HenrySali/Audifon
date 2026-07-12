@@ -136,69 +136,11 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Real-signal DFT for non-power-of-2 sizes (N=320 -> 161 bins)
+// Real-signal DFT twiddle factors are precomputed in Impl (see twiddleRe/Im).
+// The naive cos/sin-per-sample approach was removed because it accumulated
+// floating-point precision errors with large angles, producing metallic
+// artifacts ("matraca") that increased with intensity.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Forward real DFT: computes nBins = N/2+1 complex bins from N real samples.
-/// This is a direct computation (O(N * nBins)) suitable for small N (320).
-/// On arm64 at 100 frames/sec: 320*161*100 = ~5.2M multiplies/sec (trivial).
-///
-/// @param x      Input: N real samples (windowed time-domain signal).
-/// @param outRe  Output: real parts of nBins frequency bins.
-/// @param outIm  Output: imaginary parts of nBins frequency bins.
-/// @param N      DFT size (e.g. 320). Does NOT need to be power of 2.
-inline void realDftForward(const float* x, float* outRe, float* outIm, int N) {
-    const int nBins = N / 2 + 1;
-    const float invN = 1.0f / static_cast<float>(N);
-    for (int k = 0; k < nBins; ++k) {
-        float sumRe = 0.0f;
-        float sumIm = 0.0f;
-        const float w = -2.0f * kPi * static_cast<float>(k) * invN;
-        for (int n = 0; n < N; ++n) {
-            const float angle = w * static_cast<float>(n);
-            sumRe += x[n] * std::cos(angle);
-            sumIm += x[n] * std::sin(angle);
-        }
-        outRe[k] = sumRe;
-        outIm[k] = sumIm;
-    }
-}
-
-/// Inverse real DFT: reconstructs N real samples from nBins = N/2+1 complex bins.
-/// Uses Hermitian symmetry to reconstruct the full spectrum internally.
-///
-/// @param inRe   Input: real parts of nBins frequency bins.
-/// @param inIm   Input: imaginary parts of nBins frequency bins.
-/// @param out    Output: N real time-domain samples.
-/// @param N      DFT size (e.g. 320). Does NOT need to be power of 2.
-inline void realDftInverse(const float* inRe, const float* inIm, float* out, int N) {
-    const int nBins = N / 2 + 1;
-    const float invN = 1.0f / static_cast<float>(N);
-    for (int n = 0; n < N; ++n) {
-        float sum = 0.0f;
-        // DC component (k=0)
-        sum += inRe[0];
-        // Middle bins (k=1..nBins-2): contribute twice due to Hermitian symmetry
-        const float baseAngle = 2.0f * kPi * static_cast<float>(n) * invN;
-        for (int k = 1; k < nBins - 1; ++k) {
-            const float angle = baseAngle * static_cast<float>(k);
-            // X[k]*exp(j*2*pi*k*n/N) + X[N-k]*exp(j*2*pi*(N-k)*n/N)
-            // = 2*Re(X[k]*exp(j*2*pi*k*n/N))  (Hermitian symmetry)
-            sum += 2.0f * (inRe[k] * std::cos(angle) - inIm[k] * std::sin(angle));
-        }
-        // Nyquist component (k=N/2) -- only if N is even
-        if (N % 2 == 0) {
-            const float angle = baseAngle * static_cast<float>(nBins - 1);
-            sum += inRe[nBins - 1] * std::cos(angle) - inIm[nBins - 1] * std::sin(angle);
-        } else {
-            // N is odd: last bin also has a conjugate partner
-            const int kLast = nBins - 1;
-            const float angle = baseAngle * static_cast<float>(kLast);
-            sum += 2.0f * (inRe[kLast] * std::cos(angle) - inIm[kLast] * std::sin(angle));
-        }
-        out[n] = sum * invN;
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FFT radix-2 (in-place complex) - kept for WPE beamformer or other uses
@@ -207,8 +149,9 @@ inline void realDftInverse(const float* inRe, const float* inIm, float* out, int
 /// FFT in-place compleja, decimacion-en-tiempo, radix-2.
 /// re/im: arrays de longitud N (potencia de 2).
 /// Si invert=true -> IFFT (escala por 1/N al final).
-/// NOTE: Not used for the DNN STFT path (which uses realDftForward/Inverse
-/// for N=320). Kept for potential use by other modules that need power-of-2 FFT.
+/// NOTE: Not used for the DNN STFT path (which uses dftForward/dftInverse
+/// with precomputed twiddle factors for N=320). Kept for potential use by
+/// other modules that need power-of-2 FFT.
 inline void fftRadix2(float* re, float* im, int N, bool invert) {
     // Bit-reversal permutation.
     int j = 0;
@@ -663,6 +606,13 @@ struct DnnDenoiser::Impl {
     /// Workspace for windowed time-domain signal before DFT.
     std::vector<float> dftWorkBuf;         // [kDnnFftSize]
 
+    /// Precomputed twiddle factors for the real DFT (forward and inverse).
+    /// twiddleRe[k*N+n] = cos(-2*pi*k*n/N), twiddleIm[k*N+n] = sin(-2*pi*k*n/N)
+    /// for k=0..nBins-1, n=0..N-1. Eliminates repeated cos/sin calls with large
+    /// angles that caused floating-point precision drift ("matraca" artifact).
+    std::vector<float> twiddleRe;          // [nBins * kDnnFftSize] = 161*320 = 51520
+    std::vector<float> twiddleIm;          // [nBins * kDnnFftSize] = 161*320 = 51520
+
     /// Buffer staging del frame de salida ya finalizado (kDnnHopSize samples).
     std::vector<float> outputFrame;
 
@@ -738,6 +688,27 @@ struct DnnDenoiser::Impl {
         fftIm.assign(kDnnFftSize, 0.0f);
         dftWorkBuf.assign(kDnnFftSize, 0.0f);
         outputFrame.assign(kDnnHopSize, 0.0f);
+
+        // Precompute twiddle factors for the DFT (forward/inverse).
+        // twiddleRe[k*N+n] = cos(-2*pi*k*n/N)
+        // twiddleIm[k*N+n] = sin(-2*pi*k*n/N)
+        // for k=0..nBins-1 (161), n=0..N-1 (320).
+        {
+            constexpr int N = kDnnFftSize;
+            constexpr int nBins = N / 2 + 1;
+            twiddleRe.resize(nBins * N);
+            twiddleIm.resize(nBins * N);
+            for (int k = 0; k < nBins; ++k) {
+                for (int n = 0; n < N; ++n) {
+                    const double angle = -2.0 * static_cast<double>(kPi)
+                                         * static_cast<double>(k)
+                                         * static_cast<double>(n)
+                                         / static_cast<double>(N);
+                    twiddleRe[k * N + n] = static_cast<float>(std::cos(angle));
+                    twiddleIm[k * N + n] = static_cast<float>(std::sin(angle));
+                }
+            }
+        }
 
         // Hann window — versión PERIÓDICA (no simétrica).
         // GTCRN/sherpa-onnx esperan ventana Hann periódica, equivalente a
@@ -876,7 +847,7 @@ struct DnnDenoiser::Impl {
         for (int i = 0; i < kDnnFftSize; ++i) {
             dftWorkBuf[i] = stftInBuf[i] * hannWin[i];
         }
-        realDftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data(), kDnnFftSize);
+        dftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data());
 
         // Store ch0 spectrum in complex format for WPE.
         WpeBeamformer::Complex X0[WpeBeamformer::kNumBins];
@@ -894,7 +865,7 @@ struct DnnDenoiser::Impl {
         for (int i = 0; i < kDnnFftSize; ++i) {
             dftWorkBuf[i] = stftInBufCh1[i] * hannWin[i];
         }
-        realDftForward(dftWorkBuf.data(), fftReCh1.data(), fftImCh1.data(), kDnnFftSize);
+        dftForward(dftWorkBuf.data(), fftReCh1.data(), fftImCh1.data());
 
         WpeBeamformer::Complex X1[WpeBeamformer::kNumBins];
         for (int f = 0; f < nBins; ++f) {
@@ -981,9 +952,9 @@ struct DnnDenoiser::Impl {
         }
 
         // ── 8. Inverse DFT -> kDnnFftSize real samples ───────────────────
-        // realDftInverse handles Hermitian symmetry internally.
+        // dftInverse handles Hermitian symmetry internally.
         // Output goes to dftWorkBuf to avoid aliasing with fftRe/fftIm inputs.
-        realDftInverse(fftRe.data(), fftIm.data(), dftWorkBuf.data(), kDnnFftSize);
+        dftInverse(fftRe.data(), fftIm.data(), dftWorkBuf.data());
 
         // ── 9. Synthesis window (sqrt-Hann) + OLA ────────────────────────
         static constexpr float kOlaScale =
@@ -1177,6 +1148,51 @@ struct DnnDenoiser::Impl {
         wpeBeamformer.reset();
     }
 
+    /// Forward real DFT using precomputed twiddle factors.
+    /// Computes nBins = N/2+1 complex bins from N real samples.
+    /// Uses the precomputed twiddleRe/twiddleIm tables to avoid repeated
+    /// cos/sin calls that caused floating-point precision drift.
+    void dftForward(const float* x, float* outRe, float* outIm) {
+        constexpr int N = kDnnFftSize;
+        constexpr int nBins = N / 2 + 1;
+        for (int k = 0; k < nBins; ++k) {
+            float sumRe = 0, sumIm = 0;
+            const int base = k * N;
+            for (int n = 0; n < N; ++n) {
+                sumRe += x[n] * twiddleRe[base + n];
+                sumIm += x[n] * twiddleIm[base + n];
+            }
+            outRe[k] = sumRe;
+            outIm[k] = sumIm;
+        }
+    }
+
+    /// Inverse real DFT using precomputed twiddle factors (conjugate).
+    /// Reconstructs N real samples from nBins = N/2+1 complex bins.
+    /// Reuses twiddleRe and negates twiddleIm for the conjugate (inverse) transform.
+    void dftInverse(const float* inRe, const float* inIm, float* out) {
+        constexpr int N = kDnnFftSize;
+        constexpr int nBins = N / 2 + 1;
+        const float invN = 1.0f / static_cast<float>(N);
+        for (int n = 0; n < N; ++n) {
+            float sum = inRe[0]; // DC
+            for (int k = 1; k < nBins - 1; ++k) {
+                const int idx = k * N + n;
+                // Hermitian: X[k]*exp(j*w) + X[N-k]*exp(-j*w) = 2*Re(X[k]*exp(j*w))
+                // exp(j*2pi*k*n/N) = twiddleRe[idx] - j*twiddleIm[idx] (conjugate)
+                float cosKN = twiddleRe[idx];   // cos(-2pi*k*n/N) = cos(2pi*k*n/N)
+                float sinKN = -twiddleIm[idx];  // -sin(-2pi*k*n/N) = sin(2pi*k*n/N)
+                sum += 2.0f * (inRe[k] * cosKN - inIm[k] * sinKN);
+            }
+            // Nyquist (k = nBins-1 = N/2)
+            const int idxNyq = (nBins - 1) * N + n;
+            float cosNyq = twiddleRe[idxNyq];
+            float sinNyq = -twiddleIm[idxNyq];
+            sum += inRe[nBins-1] * cosNyq - inIm[nBins-1] * sinNyq;
+            out[n] = sum * invN;
+        }
+    }
+
     /// Ejecuta una inferencia GTCRN sobre un frame de kDnnHopSize samples
     /// nuevos provenientes de inputRing. Empuja kDnnHopSize samples al outputRing.
     /// Devuelve true si el frame se procesó OK (false → falla, el wrapper
@@ -1196,7 +1212,7 @@ struct DnnDenoiser::Impl {
 
         // ── 3. Forward DFT -> nBins complex bins ─────────────────────────
         constexpr int nBins = kDnnFftSize / 2 + 1;  // 161
-        realDftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data(), kDnnFftSize);
+        dftForward(dftWorkBuf.data(), fftRe.data(), fftIm.data());
 
         // ── 4. Empacar en mixTensorData con shape del modelo ─────────────
         // El modelo tiene shape [1, 1, nBins, 2] donde nBins=161.
@@ -1295,9 +1311,9 @@ struct DnnDenoiser::Impl {
         }
 
         // ── 9. Inverse DFT -> kDnnFftSize real samples ───────────────────
-        // realDftInverse handles Hermitian symmetry internally.
+        // dftInverse handles Hermitian symmetry internally.
         // Output goes to dftWorkBuf to avoid aliasing with fftRe/fftIm inputs.
-        realDftInverse(fftRe.data(), fftIm.data(), dftWorkBuf.data(), kDnnFftSize);
+        dftInverse(fftRe.data(), fftIm.data(), dftWorkBuf.data());
 
         // ── 10. Aplicar ventana de sintesis (sqrt-Hann) y OLA ────────────
         //
