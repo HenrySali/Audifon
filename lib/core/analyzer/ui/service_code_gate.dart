@@ -46,7 +46,6 @@ class ServiceCodeGate extends StatefulWidget {
   State<ServiceCodeGate> createState() => _ServiceCodeGateState();
 }
 
-@visibleForTesting
 class _ServiceCodeGateState extends State<ServiceCodeGate> {
   String _entered = '';
   int _failedAttempts = 0;

@@ -9,7 +9,6 @@ import 'package:hive/hive.dart';
 import '../../domain/entities/eq_preset.dart';
 import '../bloc/amplification_bloc.dart';
 import '../bloc/amplification_event.dart';
-import '../bloc/amplification_state.dart';
 
 /// Pantalla de configuración avanzada del audífono.
 ///
@@ -54,7 +53,6 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
   /// If no preset was saved, defaults to Normal preset.
   Future<void> _loadSavedEqPreset() async {
     try {
-      const channel = MethodChannel('com.psk.hearing_aid/audio');
       // We use the settings box directly via a method channel call
       // or read from the BLoC state. For simplicity, read from Hive directly.
       final box = await Hive.openBox('settings_box');
