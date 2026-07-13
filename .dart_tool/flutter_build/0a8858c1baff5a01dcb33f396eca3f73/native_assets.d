@@ -1,1 +1,0 @@
- C:\\Users\\Elsa\ y\ Henry\\Desktop\\Amplificador\\Audifon\\Audifon-main\\.dart_tool\\flutter_build\\0a8858c1baff5a01dcb33f396eca3f73\\native_assets.yaml: 
