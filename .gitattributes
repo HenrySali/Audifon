@@ -1,11 +1,21 @@
 # =============================================================================
-# Git LFS — Track large binary files
+# Git attributes — Audifon
 # =============================================================================
 
-# DNN Models
-android/app/src/main/assets/dnn_denoiser/*.onnx filter=lfs diff=lfs merge=lfs -text
-android/app/src/main/assets/dnn_denoiser/*.pt filter=lfs diff=lfs merge=lfs -text
-android/app/src/main/assets/dnn_denoiser/*.ptl filter=lfs diff=lfs merge=lfs -text
+# Ensure consistent line endings for source files
+*.dart text=auto
+*.java text=auto
+*.kt text=auto
+*.cpp text=auto
+*.h text=auto
+*.yaml text=auto
+*.yml text=auto
+*.json text=auto
+*.md text=auto
 
-# Native shared libraries
-android/app/src/main/jniLibs/**/*.so filter=lfs diff=lfs merge=lfs -text
+# Binary files (tracked via GitHub Releases, not LFS)
+# See scripts/setup.sh for download instructions
+*.onnx binary
+*.pt binary
+*.ptl binary
+*.so binary

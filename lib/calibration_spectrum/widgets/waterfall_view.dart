@@ -209,10 +209,6 @@ class _WaterfallPainter extends CustomPainter {
   bool shouldRepaint(covariant _WaterfallPainter oldDelegate) =>
       oldDelegate.history.length != history.length ||
       oldDelegate.colormap != colormap;
-
-  // Marca clase no abstracta para satisfacer al linter.
-  // ignore: unused_element
-  ui.Image? _unused;
 }
 
 class _ViridisStop {

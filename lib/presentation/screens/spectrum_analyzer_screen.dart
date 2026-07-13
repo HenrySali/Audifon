@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,7 +47,6 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
 
   // Export state
   bool _hasRecordingData = false;
-  String? _lastExportPath;
 
   // Pulsing animation for record button
   late AnimationController _pulseController;
@@ -200,7 +198,6 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
       final file = File(filePath);
       await file.writeAsString(const JsonEncoder.withIndent('  ').convert(json));
 
-      setState(() => _lastExportPath = filePath);
       _showSnackBar('Saved: $filePath');
     } catch (e) {
       _showSnackBar('Export error: $e');
@@ -337,7 +334,6 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
   Widget _buildStatusBar() {
     final snap = _currentSnapshot;
     final inputLevel = snap?.inputLevelDb ?? 0.0;
-    final outputLevel = snap?.outputLevelDb ?? 0.0;
     final gain = snap != null ? snap.effectiveGainDb : 0.0;
     final envName = snap?.environmentClassName ?? 'N/A';
 

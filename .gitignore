@@ -61,12 +61,12 @@ Thumbs.db
 *.dill
 
 # -----------------------------------------------------------------------------
-# DNN Models (large binaries — use Git LFS or GitHub Releases)
+# Large binaries (downloaded via scripts/setup.sh from GitHub Releases)
 # -----------------------------------------------------------------------------
-# Uncomment the next lines if using Git LFS instead:
-# android/app/src/main/assets/dnn_denoiser/*.onnx
-# android/app/src/main/assets/dnn_denoiser/*.pt
-# android/app/src/main/assets/dnn_denoiser/*.ptl
+android/app/src/main/assets/dnn_denoiser/*.onnx
+android/app/src/main/assets/dnn_denoiser/*.pt
+android/app/src/main/assets/dnn_denoiser/*.ptl
+android/app/src/main/jniLibs/
 
 # -----------------------------------------------------------------------------
 # Test artifacts

@@ -19,7 +19,6 @@ import '../../data/services/adaptive_learning_service.dart';
 import '../../domain/adaptive_learning/learning_observation.dart';
 import '../../scene/scene_snapshot.dart' show SceneClass, sceneClassLabel;
 import '../bloc/amplification_bloc.dart';
-import '../bloc/amplification_state.dart';
 
 class AdaptiveLearningScreen extends StatefulWidget {
   const AdaptiveLearningScreen({super.key});

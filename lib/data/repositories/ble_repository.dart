@@ -144,6 +144,7 @@ class BleDisconnectedException implements Exception {
 ///
 /// Maneja escaneo, conexión, reconexión automática, y transmisión
 /// de comandos al dispositivo con timeout y manejo de errores.
+// TODO: _flutterBluePlus and _responseCharacteristic are written but never read — wire up or remove
 class BleRepository {
   final FlutterBluePlus _flutterBluePlus;
 

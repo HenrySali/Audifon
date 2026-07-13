@@ -75,6 +75,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   int _micStep = 0; // 0=method select, 1=instructions, 2=measuring, 3=result
   MicCalibrationResult? _micResult;
   String? _micError;
+  // TODO: _micMeasuring written but never read in UI (covered by _micStep)
   bool _micMeasuring = false;
 
   // Headphone calibration state

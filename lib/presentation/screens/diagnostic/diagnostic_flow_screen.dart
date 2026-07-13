@@ -30,7 +30,6 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
 
   // Si ya está calibrado, se salta el paso de calibración
   bool _skipCalibration = false;
-  bool _calibrationChecked = false;
 
   // Datos recopilados durante el flujo
   List<int> _questionnaireAnswers = [];
@@ -57,7 +56,6 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
     if (mounted) {
       setState(() {
         _skipCalibration = true;
-        _calibrationChecked = true;
       });
     }
   }

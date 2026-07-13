@@ -304,6 +304,7 @@ class AmplificationBloc
   /// Cache de la última prescripción NL3 calculada para el audiograma
   /// activo. Permite componer ganancias CIN en `_onSceneClassUpdated`
   /// sin recalcular toda la prescripción.
+  // TODO: _lastNl3Result is assigned but never read — implement CIN composition or remove
   NL3PrescriptionResult? _lastNl3Result;
 
   /// Cache de las últimas ganancias NL2 (sin correcciones NL3) para

@@ -12,7 +12,6 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../../result/analysis_result.dart';
-import '../../result/spectrogram_result.dart';
 
 class SpectrumTab extends StatelessWidget {
   final AnalysisResult result;
