@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create Python export script that extracts ONLY the GTCRN encoder/decoder neural core from GTCRN_IVA and exports it to ONNX with recurrent caches, WITHOUT STFT/WPE/IVA/complex ops. The script will run on the user's Windows machine.",
+  "status": "completed",
+  "steps": [
+    "Create tools/export_gtcrn_dual_core.py that: (a) imports GTCRN_IVA from gtcrn_iva.py, (b) loads checkpoint from checkpoints/best_model_0121.tar, (c) creates a GTCRNCoreWrapper nn.Module that receives spectral input [B, F, T, 2] (real+imag for 2 channels after WPE) and outputs enhanced spectrum [B, F, T, 2], extracting only the encoder/decoder/sequence_model layers from GTCRN_IVA, (d) exports via torch.onnx.export with dynamic axes for T, opset 17, with recurrent state caches as additional inputs/outputs following the same convention as the existing gtcrn.onnx (inputs[0]=mix, inputs[1..]=caches, outputs[0]=enh, outputs[1..]=updated_caches)",
+    "The wrapper class GTCRNCoreWrapper should: accept 2-channel spectral input (both channels post-WPE beamforming, so the network sees a beamformed single-channel spectrum), have the same STFT frame-by-frame interface as the mono model [1, 257, 1, 2] (real+imag per freq bin), so it integrates into the existing processOneFrame() infrastructure with minimal changes",
+    "Include validation in the script: run a dummy forward with T=1 (single frame) to verify the exported model produces correct output shape [1, 257, 1, 2], print input/output names and shapes, verify no complex ops or linalg.inv in the ONNX graph",
+    "Add usage instructions as docstring: how to run from H-GTCRN directory, what to copy to assets, expected output file name (gtcrn_dual_core.onnx)",
+    "The script must handle the case where GTCRN_IVA.forward() does STFT->WPE->IVA->encoder/decoder->iSTFT internally: the wrapper must bypass STFT/WPE/IVA and call only the encoder+decoder portion. If the internal structure uses self.encoder, self.decoder, self.sequence_model etc., extract those. If the architecture is a single forward with complex ops interleaved, provide guidance comments on which lines to modify in gtcrn_iva.py to make the core extractable."
+  ],
+  "acceptance_criteria": [
+    "tools/export_gtcrn_dual_core.py exists and parses without syntax errors (ast.parse succeeds)",
+    "The script follows the same structure as the existing tools/export_gtcrn_script.py (load checkpoint, create model, export, validate)",
+    "The wrapper exposes the same [1, 257, 1, 2] input/output interface as the existing mono GTCRN model for compatibility with processOneFrame()",
+    "The script includes proper error handling for missing files, import errors, and shape mismatches",
+    "No torch.stft, torch.istft, torch.linalg.inv, or complex64 operations are used in the wrapper forward()"
+  ],
+  "verification": [
+    "Run: python3 -c \"import ast; ast.parse(open('tools/export_gtcrn_dual_core.py').read()); print('OK')\"",
+    "Inspect the script for proper structure: wrapper class inheriting nn.Module, forward() with spectral I/O, torch.onnx.export call with opset_version>=17"
+  ],
+  "blocked_reason": null,
+  "findings": "Script created at tools/export_gtcrn_dual_core.py (800 lines). AST parse passes. Wrapper class is AdaptiveGTCRNCore with forward(self, mix, conv_cache, tra_cache, inter_cache) signature. Uses auto-discovery of encoder/decoder/sequence_model layers with heuristic fallbacks. opset_version=17, dynamic T axis. Includes ONNX graph validation for forbidden ops. No torch.stft/istft/linalg.inv/complex64 in code. Manual mode available via --manual flag."
+}

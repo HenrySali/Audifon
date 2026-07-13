@@ -1,0 +1,851 @@
+/* =============================================================================
+   Simulador DSP — Audífono Digital V2 — Estilos
+   Modo oscuro (default) + Modo claro (toggle)
+   Responsive optimizado para móvil
+   ============================================================================= */
+
+/* --- Tema Oscuro (default) --- */
+:root {
+    --bg-primary: #0f1419;
+    --bg-card: #1a2332;
+    --bg-input: #0d1520;
+    --text-primary: #e8edf2;
+    --text-secondary: #8899aa;
+    --accent: #00bcd4;
+    --accent-hover: #00e5ff;
+    --success: #4caf50;
+    --danger: #f44336;
+    --warning: #ff9800;
+    --border: #2a3a4a;
+    --radius: 12px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* --- Tema Claro --- */
+[data-theme="light"] {
+    --bg-primary: #f5f7fa;
+    --bg-card: #ffffff;
+    --bg-input: #eef2f7;
+    --text-primary: #1a2332;
+    --text-secondary: #5a6a7a;
+    --accent: #0097a7;
+    --accent-hover: #00838f;
+    --success: #388e3c;
+    --danger: #d32f2f;
+    --warning: #f57c00;
+    --border: #d0d8e0;
+    --shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+    transition: background 0.3s, color 0.3s;
+}
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* --- Header --- */
+header {
+    text-align: center;
+    margin-bottom: 24px;
+    padding: 16px;
+    position: relative;
+}
+
+header h1 {
+    font-size: 1.6rem;
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* --- Theme Toggle --- */
+.theme-toggle {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.theme-toggle:hover {
+    border-color: var(--accent);
+}
+
+.theme-toggle-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+/* --- Cards --- */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+    transition: background 0.3s, border-color 0.3s;
+}
+
+.card h2 {
+    color: var(--accent);
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.description {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-bottom: 14px;
+}
+
+/* --- Upload Area --- */
+.upload-area {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 30px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.upload-area:hover, .upload-area.dragover {
+    border-color: var(--accent);
+    background: rgba(0, 188, 212, 0.05);
+}
+
+.upload-icon {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.upload-content p {
+    color: var(--text-secondary);
+    margin: 4px 0;
+    font-size: 0.9rem;
+}
+
+.hint {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-input);
+    border-radius: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.file-info #file-name {
+    font-weight: 600;
+    color: var(--accent);
+    word-break: break-all;
+}
+
+.file-info #file-duration {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+/* --- Buttons --- */
+.btn {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    color: #000;
+}
+
+.btn-primary.active {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+}
+
+.btn-success {
+    background: var(--success);
+    color: #fff;
+    border-color: var(--success);
+}
+
+.btn-danger {
+    background: var(--danger);
+    color: #fff;
+    border-color: var(--danger);
+}
+
+.btn-large {
+    padding: 12px 24px;
+    font-size: 1rem;
+    border-radius: 8px;
+}
+
+.btn-small {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+}
+
+.link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    font-size: inherit;
+}
+
+/* --- Audiogram Sliders --- */
+.audiogram-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+    gap: 6px;
+    margin: 12px 0;
+}
+
+.audiogram-band {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 3px;
+    background: var(--bg-input);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.audiogram-band label {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    margin-bottom: 3px;
+    white-space: nowrap;
+}
+
+.audiogram-band input[type="range"] {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    height: 100px;
+    width: 22px;
+    margin: 3px 0;
+    accent-color: var(--accent);
+}
+
+.audiogram-band .value {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent);
+    min-width: 30px;
+    text-align: center;
+}
+
+/* --- EQ Sliders --- */
+.eq-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+    gap: 6px;
+    margin: 12px 0;
+}
+
+.eq-band {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 3px;
+    background: var(--bg-input);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    transition: border-color 0.2s;
+}
+
+.eq-band.active {
+    border-color: var(--success);
+}
+
+.eq-band label {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    margin-bottom: 3px;
+}
+
+.eq-band input[type="range"] {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    height: 110px;
+    width: 22px;
+    margin: 3px 0;
+    accent-color: var(--success);
+}
+
+.eq-band .value {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--success);
+    min-width: 30px;
+    text-align: center;
+}
+
+/* --- Prescription Selector --- */
+.prescription-selector {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.prescription-selector select {
+    padding: 6px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+/* --- Presets --- */
+.presets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.presets label {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    width: 100%;
+}
+
+/* --- DSP Params --- */
+.dsp-params {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+}
+
+.param-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.param-group label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.param-group select, .param-group input[type="range"] {
+    padding: 6px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.param-group input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent);
+}
+
+/* --- Player Controls --- */
+.player-controls {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin: 14px 0;
+}
+
+.player-group {
+    text-align: center;
+}
+
+.player-group h3 {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: normal;
+}
+
+/* --- Progress Bar --- */
+.progress-bar {
+    height: 5px;
+    background: var(--bg-input);
+    border-radius: 3px;
+    margin-top: 14px;
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-bar .progress {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.1s linear;
+}
+
+#progress-time {
+    display: block;
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+/* --- Report --- */
+.report {
+    font-family: 'Courier New', monospace;
+    font-size: 0.82rem;
+    background: var(--bg-input);
+    padding: 14px;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    line-height: 1.7;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.report .gain-positive { color: var(--success); }
+.report .gain-zero { color: var(--text-secondary); }
+.report .gain-high { color: var(--warning); }
+
+/* --- EQ Controls --- */
+.eq-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.eq-info {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+/* --- Status Message --- */
+.status-message {
+    font-size: 0.85rem;
+    margin-top: 8px;
+    text-align: center;
+}
+
+/* --- Utilities --- */
+.hidden {
+    display: none !important;
+}
+
+/* =============================================================================
+   Calibración ANSI S3.22
+   ============================================================================= */
+
+#calibration-section {
+    border-top: 2px solid var(--accent);
+}
+
+.calib-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+    margin-bottom: 16px;
+}
+
+.calib-result {
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.calib-di-display {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding: 14px;
+    background: var(--bg-input);
+    border-radius: var(--radius);
+    flex-wrap: wrap;
+}
+
+.di-gauge {
+    flex: 1;
+    min-width: 120px;
+    height: 22px;
+    background: #1a2a3a;
+    border-radius: 11px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+[data-theme="light"] .di-gauge {
+    background: #d0d8e0;
+}
+
+.di-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 11px;
+    transition: width 0.5s ease, background 0.3s ease;
+}
+
+.di-info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    min-width: 100px;
+}
+
+.di-value {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.di-label {
+    font-size: 11px;
+    margin-top: 3px;
+    text-align: right;
+}
+
+.calib-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.metric {
+    background: var(--bg-input);
+    padding: 10px;
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid var(--border);
+}
+
+.metric-label {
+    display: block;
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 3px;
+}
+
+.metric-value {
+    display: block;
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.calib-compensation {
+    margin-top: 14px;
+}
+
+.calib-compensation h3 {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+.comp-bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    height: 120px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.comp-bar-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    height: 100%;
+    justify-content: flex-end;
+}
+
+.comp-bar {
+    width: 18px;
+    min-height: 2px;
+    border-radius: 3px 3px 0 0;
+    transition: height 0.4s ease;
+}
+
+.comp-bar-value {
+    font-size: 9px;
+    color: var(--text-primary);
+    margin-top: 3px;
+}
+
+.comp-bar-freq {
+    font-size: 8px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.comp-legend {
+    display: flex;
+    gap: 14px;
+    margin-top: 6px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+
+.legend-color {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+/* =============================================================================
+   Exportar Configuración DSP
+   ============================================================================= */
+
+#export-section {
+    border-top: 2px solid var(--accent);
+}
+
+.export-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+}
+
+.export-status {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    animation: fadeIn 0.3s ease;
+}
+
+.export-status--success {
+    background: rgba(76, 175, 80, 0.12);
+    border: 1px solid var(--success);
+    color: var(--success);
+}
+
+.export-status--error {
+    background: rgba(244, 67, 54, 0.12);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+}
+
+/* =============================================================================
+   Responsive — Móvil
+   ============================================================================= */
+
+@media (max-width: 768px) {
+    .container {
+        padding: 8px;
+    }
+
+    header {
+        padding: 12px 8px;
+        margin-bottom: 16px;
+    }
+
+    header h1 {
+        font-size: 1.3rem;
+        padding-right: 50px;
+    }
+
+    .theme-toggle {
+        top: 12px;
+        right: 8px;
+        padding: 5px 8px;
+    }
+
+    .theme-toggle-label {
+        display: none;
+    }
+
+    .card {
+        padding: 14px;
+        margin-bottom: 12px;
+        border-radius: 10px;
+    }
+
+    .card h2 {
+        font-size: 1rem;
+    }
+
+    .audiogram-grid, .eq-grid {
+        grid-template-columns: repeat(6, 1fr);
+        gap: 4px;
+    }
+
+    .audiogram-band input[type="range"],
+    .eq-band input[type="range"] {
+        height: 80px;
+        width: 20px;
+    }
+
+    .audiogram-band label, .eq-band label {
+        font-size: 0.6rem;
+    }
+
+    .audiogram-band .value, .eq-band .value {
+        font-size: 0.65rem;
+    }
+
+    .player-controls {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .player-controls .btn-large {
+        width: 100%;
+        padding: 14px;
+    }
+
+    .dsp-params {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .presets {
+        gap: 4px;
+    }
+
+    .presets .btn-small {
+        padding: 4px 6px;
+        font-size: 0.7rem;
+    }
+
+    .prescription-selector {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .calib-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .export-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .calib-metrics {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .comp-bars {
+        height: 90px;
+    }
+
+    .comp-bar {
+        width: 14px;
+    }
+
+    .report {
+        font-size: 0.75rem;
+        padding: 10px;
+        max-height: 300px;
+    }
+
+    .upload-area {
+        padding: 20px 12px;
+    }
+
+    .upload-icon {
+        font-size: 1.6rem;
+    }
+}
+
+@media (max-width: 400px) {
+    .audiogram-grid, .eq-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+
+    .calib-metrics {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    header h1 {
+        font-size: 1.1rem;
+    }
+}

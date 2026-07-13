@@ -1,0 +1,278 @@
+Flutter crash report.
+Please report a bug at https://github.com/flutter/flutter/issues.
+
+## command
+
+flutter test
+
+## exception
+
+RangeError: RangeError (start): Invalid value: Not in inclusive range 0..204: 205
+
+```
+#0      RangeError.checkValidRange (dart:core/errors.dart:387:7)
+#1      _StringBase.substring (dart:core-patch/string_patch.dart:440:27)
+#2      truncate (package:test_core/src/util/pretty_print.dart:65:21)
+#3      CompactReporter._progressLine (package:test_core/src/runner/reporter/compact.dart:446:35)
+#4      CompactReporter._onTestStarted (package:test_core/src/runner/reporter/compact.dart:216:7)
+#5      _rootRunUnary (dart:async/zone_root.dart:56:13)
+#6      _CustomZone.runUnary (dart:async/zone.dart:733:19)
+#7      _CustomZone.runUnaryGuarded (dart:async/zone.dart:633:7)
+#8      _BufferingStreamSubscription._sendData (dart:async/stream_impl.dart:381:11)
+#9      _BufferingStreamSubscription._add (dart:async/stream_impl.dart:312:7)
+#10     _SyncBroadcastStreamController._sendData (dart:async/broadcast_stream_controller.dart:385:25)
+#11     _BroadcastStreamController.add (dart:async/broadcast_stream_controller.dart:257:5)
+#12     _rootRunUnary (dart:async/zone_root.dart:48:47)
+#13     _CustomZone.runUnary (dart:async/zone.dart:733:19)
+#14     _CustomZone.runUnaryGuarded (dart:async/zone.dart:633:7)
+#15     _BufferingStreamSubscription._sendData (dart:async/stream_impl.dart:381:11)
+#16     _BufferingStreamSubscription._add (dart:async/stream_impl.dart:312:7)
+#17     _SyncBroadcastStreamController._sendData (dart:async/broadcast_stream_controller.dart:385:25)
+#18     _BroadcastStreamController.add (dart:async/broadcast_stream_controller.dart:257:5)
+#19     LiveSuiteController.reportLiveTest (package:test_core/src/runner/live_suite_controller.dart:134:30)
+#20     Engine._runLiveTest (package:test_core/src/runner/engine.dart:419:21)
+<asynchronous suspension>
+#21     Engine._runGroup (package:test_core/src/runner/engine.dart:373:13)
+<asynchronous suspension>
+#22     Engine._runGroup (package:test_core/src/runner/engine.dart:368:13)
+<asynchronous suspension>
+#23     Engine.run.<anonymous closure>.<anonymous closure> (package:test_core/src/runner/engine.dart:303:13)
+<asynchronous suspension>
+#24     FutureGroup.add.<anonymous closure> (package:async/src/future_group.dart:79:15)
+<asynchronous suspension>
+```
+
+## flutter doctor
+
+```
+[32m[✓][39m Flutter
+    (Channel
+    stable,
+    3.41.9, on
+    Microsoft
+    Windows
+    [Versi¢n
+    10.0.19045.64
+    66], locale
+    es-AR)
+    [959ms]
+    [32m•[39m Flutter
+      version
+      3.41.9 on
+      channel
+      stable at
+      C:\Users\El
+      sa y
+      Henry\Downl
+      oads\flutte
+      r
+    [32m•[39m Upstream
+      repository
+      https://git
+      hub.com/flu
+      tter/flutte
+      r.git
+    [32m•[39m Framework
+      revision
+      00b0c91f06
+      (4 weeks
+      ago),
+      2026-04-29
+      10:03:19
+      -0700
+    [32m•[39m Engine
+      revision
+      42d3d75a56
+    [32m•[39m Dart
+      version
+      3.11.5
+    [32m•[39m DevTools
+      version
+      2.54.2
+    [32m•[39m Feature
+      flags:
+      enable-web,
+      enable-linu
+      x-desktop,
+      enable-maco
+      s-desktop,
+      enable-wind
+      ows-desktop
+      ,
+      enable-andr
+      oid,
+      enable-ios,
+      cli-animati
+      ons,
+      enable-nati
+      ve-assets,
+      omit-legacy
+      -version-fi
+      le,
+      enable-lldb
+      -debugging,
+      enable-uisc
+      ene-migrati
+      on
+
+[32m[✓][39m Windows
+    Version (10
+    Home 64 bits,
+    22H2, 2009)
+    [6,7s]
+
+[33m[!][39m Android
+    toolchain -
+    develop for
+    Android
+    devices
+    (Android SDK
+    version
+    36.1.0)
+    [8,6s]
+    [32m•[39m Android SDK
+      at
+      C:\Users\El
+      sa y
+      Henry\AppDa
+      ta\Local\An
+      droid\Sdk
+    [32m•[39m Emulator
+      version
+      36.5.11.0
+      (build_id
+      15261927)
+      (CL:N/A)
+    [32m•[39m Platform
+      android-36.
+      1,
+      build-tools
+      36.1.0
+    [31m✗[39m Android SDK
+      location
+      currently
+      contains
+      spaces,
+      which is
+      not
+      supported
+      by the
+      Android SDK
+      as it
+      causes
+      problems
+      with NDK
+      tools. Try
+      moving it
+      from
+      C:\Users\El
+      sa y
+      Henry\AppDa
+      ta\Local\An
+      droid\Sdk
+      to a path
+      without
+      spaces.
+    [32m•[39m Try
+      re-installi
+      ng or
+      updating
+      your
+      Android
+      SDK,
+      visit
+      https://flu
+      tter.dev/to
+      /windows-an
+      droid-setup
+      for
+      detailed
+      instruction
+      s.
+
+[32m[✓][39m Chrome -
+    develop for
+    the web
+    [317ms]
+    [32m•[39m Chrome at
+      C:\Program
+      Files\Googl
+      e\Chrome\Ap
+      plication\c
+      hrome.exe
+
+[32m[✓][39m Visual Studio
+    - develop
+    Windows apps
+    (Visual
+    Studio Build
+    Tools 2019
+    16.11.49)
+    [315ms]
+    [32m•[39m Visual
+      Studio at
+      C:\Program
+      Files
+      (x86)\Micro
+      soft Visual
+      Studio\2019
+      \BuildTools
+    [32m•[39m Visual
+      Studio
+      Build Tools
+      2019
+      version
+      16.11.36227
+      .6
+    [32m•[39m Windows 10
+      SDK version
+      10.0.19041.
+      0
+
+[32m[✓][39m Connected
+    device (3
+    available)
+    [3,4s]
+    [32m•[39m Windows
+      (desktop) •
+      windows •
+      windows-x64
+      • Microsoft
+      Windows
+      [Versi¢n
+      10.0.19045.
+      6466]
+    [32m•[39m Chrome
+      (web)
+      • chrome  •
+      web-javascr
+      ipt •
+      Google
+      Chrome
+      148.0.7778.
+      179
+    [32m•[39m Edge (web)
+      • edge    •
+      web-javascr
+      ipt •
+      Microsoft
+      Edge
+      148.0.3967.
+      70
+      (unsupporte
+      d)
+
+[32m[✓][39m Network
+    resources
+    [1.406ms]
+    [32m•[39m All
+      expected
+      network
+      resources
+      are
+      available.
+
+[33m![39m Doctor found
+  issues in 1
+  category.
+```

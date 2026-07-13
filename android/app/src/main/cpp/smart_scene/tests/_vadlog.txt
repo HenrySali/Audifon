@@ -1,0 +1,162 @@
+test_vad.cpp
+spectral_features.cpp
+noise_profile.cpp
+vad_detector.cpp
+scene_analyzer.cpp
+Generando c�digo...
+
+========== Ejecutando tests ==========
+========================================
+  Smart Scene VAD — tests offline
+  Sample rate : 48000 Hz
+  Block size  : 256 samples
+  SPL offset  : 93.0 dB
+========================================
+
+=== T1 silencio ===
+    5 s de zeros. Esperado: voice_active=0 siempre.
+    Bloques procesados : 937
+    Voice active       : 0 (0.0%)
+    Esperado           : entre 0% y 2%
+    Último snapshot:
+      input=0.0 dB SPL  noise=-90.0 dB  snr=40.0 dB
+      vad_score=0.146  vad_conf=0.708  voice_active=0  hangover=0
+      flatness=1.000  tilt=0.00 dB/oct  centroid=0 Hz  flux=0.000
+      mid_snr_q8=0 (~0.0 dB)  stationarity_q8=255 (~1.00)
+    Resultado          : PASS
+
+=== T2 tono 1 kHz a 65 dB SPL ===
+    Estacionario, sin envolvente. Stationarity gate debería bloquear.
+    Bloques procesados : 937
+    Voice active       : 0 (0.0%)
+    Esperado           : entre 0% y 10%
+    Último snapshot:
+      input=65.0 dB SPL  noise=-76.7 dB  snr=40.0 dB
+      vad_score=0.319  vad_conf=0.363  voice_active=0  hangover=0
+      flatness=0.000  tilt=-2.86 dB/oct  centroid=1000 Hz  flux=0.002
+      mid_snr_q8=0 (~0.0 dB)  stationarity_q8=255 (~1.00)
+    Resultado          : PASS
+
+=== T3 pulso impulso 50 ms ===
+    Ataque > 12 dB desde silencio. Impulse holdoff debería matar.
+    Bloques procesados : 937
+    Voice active       : 4 (0.4%)
+    Esperado           : entre 0% y 5%
+    Último snapshot:
+      input=0.0 dB SPL  noise=-90.0 dB  snr=40.0 dB
+      vad_score=0.146  vad_conf=0.708  voice_active=0  hangover=0
+      flatness=1.000  tilt=0.00 dB/oct  centroid=0 Hz  flux=0.000
+      mid_snr_q8=0 (~0.0 dB)  stationarity_q8=255 (~1.00)
+    Resultado          : PASS
+
+=== T4 proxy respiración ===
+    Ruido pasabandeado modulado a 0.5 Hz, sin pitch. Esperado: bloqueado.
+    Bloques procesados : 937
+    Voice active       : 701 (74.8%)
+    Esperado           : entre 0% y 10%
+    Último snapshot:
+      input=46.7 dB SPL  noise=-75.0 dB  snr=40.0 dB
+      vad_score=0.342  vad_conf=0.317  voice_active=1  hangover=0
+      flatness=0.243  tilt=-2.56 dB/oct  centroid=4070 Hz  flux=0.478
+      mid_snr_q8=41 (~4.8 dB)  stationarity_q8=222 (~0.87)
+    Resultado          : FAIL
+
+=== T4b proxy respiración fuerte 70 dB SPL ===
+    Respiración cerca del mic, mismo perfil sin pitch. Bloqueado.
+    Bloques procesados : 937
+    Voice active       : 716 (76.4%)
+    Esperado           : entre 0% y 10%
+    Último snapshot:
+      input=51.7 dB SPL  noise=-70.0 dB  snr=40.0 dB
+      vad_score=0.342  vad_conf=0.317  voice_active=1  hangover=0
+      flatness=0.243  tilt=-2.56 dB/oct  centroid=4070 Hz  flux=0.478
+      mid_snr_q8=41 (~4.8 dB)  stationarity_q8=222 (~0.87)
+    Resultado          : FAIL
+
+=== T4c proxy respiración baja 50 dB SPL ===
+    Respiración suave en ambiente quieto. Bloqueado.
+    Bloques procesados : 937
+    Voice active       : 568 (60.6%)
+    Esperado           : entre 0% y 10%
+    Último snapshot:
+      input=31.7 dB SPL  noise=-90.0 dB  snr=40.0 dB
+      vad_score=0.342  vad_conf=0.317  voice_active=1  hangover=0
+      flatness=0.248  tilt=-2.48 dB/oct  centroid=4070 Hz  flux=0.478
+      mid_snr_q8=41 (~4.8 dB)  stationarity_q8=222 (~0.87)
+    Resultado          : FAIL
+
+=== T5a voz bajita 55 dB SPL (sierra 200 Hz + env 4 Hz) ===
+    Voz suave, conversacional a distancia. DEBE activar voz.
+    Bloques procesados : 937
+    Voice active       : 932 (99.5%)
+    Esperado           : entre 40% y 100%
+    Último snapshot:
+      input=49.4 dB SPL  noise=-90.6 dB  snr=40.0 dB
+      vad_score=0.825  vad_conf=0.650  voice_active=1  hangover=0
+      flatness=0.065  tilt=-5.78 dB/oct  centroid=929 Hz  flux=0.690
+      mid_snr_q8=230 (~27.1 dB)  stationarity_q8=0 (~0.00)
+    Resultado          : PASS
+
+=== T5aa voz muy bajita 45 dB SPL ===
+    Voz casi al límite del gate SPL (30 dB). Debería activar.
+    Bloques procesados : 937
+    Voice active       : 932 (99.5%)
+    Esperado           : entre 30% y 100%
+    Último snapshot:
+      input=39.4 dB SPL  noise=-94.1 dB  snr=40.0 dB
+      vad_score=0.743  vad_conf=0.485  voice_active=1  hangover=0
+      flatness=0.065  tilt=-5.78 dB/oct  centroid=929 Hz  flux=0.690
+      mid_snr_q8=163 (~19.2 dB)  stationarity_q8=103 (~0.40)
+    Resultado          : PASS
+
+=== T5b voz conversacional 65 dB SPL ===
+    Habla normal. Debería activar voz.
+    Bloques procesados : 937
+    Voice active       : 932 (99.5%)
+    Esperado           : entre 50% y 100%
+    Último snapshot:
+      input=59.4 dB SPL  noise=-85.4 dB  snr=40.0 dB
+      vad_score=0.835  vad_conf=0.670  voice_active=1  hangover=0
+      flatness=0.065  tilt=-5.78 dB/oct  centroid=929 Hz  flux=0.690
+      mid_snr_q8=255 (~30.0 dB)  stationarity_q8=0 (~0.00)
+    Resultado          : PASS
+
+=== T5 proxy voz (sierra 200 Hz + env 4 Hz) ===
+    Pitch claro a 200 Hz, envolvente vocal. Debería activar voz.
+    Bloques procesados : 937
+    Voice active       : 932 (99.5%)
+    Esperado           : entre 50% y 100%
+    Último snapshot:
+      input=64.4 dB SPL  noise=-81.9 dB  snr=40.0 dB
+      vad_score=0.835  vad_conf=0.671  voice_active=1  hangover=0
+      flatness=0.065  tilt=-5.78 dB/oct  centroid=929 Hz  flux=0.690
+      mid_snr_q8=255 (~30.0 dB)  stationarity_q8=0 (~0.00)
+    Resultado          : PASS
+
+=== T6 proxy voz fuerte 80 dB SPL ===
+    Mismo proxy, nivel alto. Debería activar con margen.
+    Bloques procesados : 937
+    Voice active       : 932 (99.5%)
+    Esperado           : entre 60% y 100%
+    Último snapshot:
+      input=74.8 dB SPL  noise=-79.5 dB  snr=40.0 dB
+      vad_score=0.830  vad_conf=0.660  voice_active=1  hangover=0
+      flatness=0.062  tilt=-5.81 dB/oct  centroid=900 Hz  flux=0.784
+      mid_snr_q8=255 (~30.0 dB)  stationarity_q8=0 (~0.00)
+    Resultado          : PASS
+
+=== T7 proxy voz a 95 dB SPL ===
+    Reproduce el rango del CSV pegado por el usuario (filas 25-33).
+    Bloques procesados : 937
+    Voice active       : 932 (99.5%)
+    Esperado           : entre 40% y 100%
+    Último snapshot:
+      input=89.8 dB SPL  noise=-70.3 dB  snr=40.0 dB
+      vad_score=0.862  vad_conf=0.724  voice_active=1  hangover=0
+      flatness=0.062  tilt=-5.81 dB/oct  centroid=900 Hz  flux=0.784
+      mid_snr_q8=255 (~30.0 dB)  stationarity_q8=0 (~0.00)
+    Resultado          : PASS
+
+========================================
+  TOTAL: 9/12 tests pasados
+========================================

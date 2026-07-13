@@ -1,0 +1,8 @@
+# Spec oir-pro-rebrand-harden-and-remote-config — Fase 4.
+# Copiar a key.properties (NO commitear) y completar con los datos
+# generados con keytool. Ver KEYSTORE_GUIDE.md.
+
+storeFile=oirpro-release.jks
+storePassword=CAMBIAR_POR_PASS_DEL_STORE
+keyAlias=oirpro
+keyPassword=CAMBIAR_POR_PASS_DE_LA_KEY

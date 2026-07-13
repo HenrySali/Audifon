@@ -1,0 +1,4 @@
+# Spec oir-pro-rebrand-harden-and-remote-config (Fase 4) — keystore release.
+key.properties
+*.jks
+*.b64
