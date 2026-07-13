@@ -29,7 +29,6 @@ class _CalibrationStepState extends State<CalibrationStep> {
   final HeadphoneCalibrator _calibrator = HeadphoneCalibrator();
 
   _CalibrationState _state = _CalibrationState.checking;
-  bool _isAlreadyCalibrated = false;
   double _progress = 0;
   int _currentFreq = 0;
   double _currentAmplitude = 0;
@@ -58,7 +57,6 @@ class _CalibrationStepState extends State<CalibrationStep> {
       await _calibrator.loadCalibration();
       if (mounted) {
         setState(() {
-          _isAlreadyCalibrated = true;
           _calibrationResults = _calibrator.calibrationTable;
           _calibrationTime = _calibrator.calibrationTimestamp;
           _state = _CalibrationState.alreadyCalibrated;

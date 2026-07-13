@@ -10,7 +10,6 @@
 /// para que el orquestador no tenga dependencias innecesarias y para
 /// facilitar testing puro (Property 8).
 
-import 'tone_test_result.dart';
 import 'validator_orchestrator.dart';
 
 const String calibrationReportDisclaimer =
