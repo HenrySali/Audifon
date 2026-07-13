@@ -1,0 +1,134 @@
+# =============================================================================
+# CI Core — Runs on every PR and push to main
+#
+# Purpose: catch regressions early. Runs ALL Dart/Flutter unit tests.
+# This is the "always green" gate — if this fails, nothing merges.
+# =============================================================================
+
+name: CI Core (unit tests)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze (warnings = OK, errors = block)
+        run: flutter analyze --no-fatal-warnings
+
+  unit-tests:
+    name: Unit tests (all 94 test files)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: analyze
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run all unit tests
+        run: |
+          flutter test \
+            --reporter expanded \
+            --concurrency=4 \
+            --timeout 120s
+
+      - name: Generate coverage report
+        if: success()
+        run: |
+          flutter test --coverage || true
+          if [ -f coverage/lcov.info ]; then
+            echo "## Coverage generated" >> "$GITHUB_STEP_SUMMARY"
+            echo "Lines: $(grep -c 'DA:' coverage/lcov.info || echo 0) instrumented" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          retention-days: 14
+          if-no-files-found: ignore
+
+  dsp-compile-check:
+    name: Native DSP compilation (NDK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: analyze
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Set up Android SDK + NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK (debug) — validates native C++ compiles
+        run: |
+          flutter build apk --debug 2>&1 | tee build.log
+          if grep -qi "error:" build.log; then
+            echo "::error::Native C++ compilation errors detected"
+            exit 1
+          fi
+        # This validates that all C++ DSP code (audio_engine, dnn_denoiser,
+        # dsp_pipeline, wdrc, mpo, etc.) compiles cleanly with the NDK.

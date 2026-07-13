@@ -1,0 +1,11 @@
+# =============================================================================
+# Git LFS — Track large binary files
+# =============================================================================
+
+# DNN Models
+android/app/src/main/assets/dnn_denoiser/*.onnx filter=lfs diff=lfs merge=lfs -text
+android/app/src/main/assets/dnn_denoiser/*.pt filter=lfs diff=lfs merge=lfs -text
+android/app/src/main/assets/dnn_denoiser/*.ptl filter=lfs diff=lfs merge=lfs -text
+
+# Native shared libraries
+android/app/src/main/jniLibs/**/*.so filter=lfs diff=lfs merge=lfs -text
