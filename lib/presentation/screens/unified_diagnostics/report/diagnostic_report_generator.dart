@@ -274,6 +274,7 @@ class DiagnosticReportGenerator {
     final clips = d['clipsAcumulados'] as int? ?? 0;
     final sustained = d['sostenido%'] as String? ?? '0%';
     final peakStr = d['peakMáximo'] as String? ?? '0';
+    // ignore: unused_local_variable
     final peak = double.tryParse(peakStr) ?? 0;
 
     // Lógica inteligente basada en Giannoulis/Massberg/Reiss (2012):

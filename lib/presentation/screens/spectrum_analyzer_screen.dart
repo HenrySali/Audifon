@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,6 +47,7 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
 
   // Export state
   bool _hasRecordingData = false;
+  // ignore: unused_field
   String? _lastExportPath;
 
   // Pulsing animation for record button
@@ -337,6 +337,7 @@ class _SpectrumAnalyzerScreenState extends State<SpectrumAnalyzerScreen>
   Widget _buildStatusBar() {
     final snap = _currentSnapshot;
     final inputLevel = snap?.inputLevelDb ?? 0.0;
+    // ignore: unused_local_variable
     final outputLevel = snap?.outputLevelDb ?? 0.0;
     final gain = snap != null ? snap.effectiveGainDb : 0.0;
     final envName = snap?.environmentClassName ?? 'N/A';

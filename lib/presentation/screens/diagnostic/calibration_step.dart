@@ -29,6 +29,7 @@ class _CalibrationStepState extends State<CalibrationStep> {
   final HeadphoneCalibrator _calibrator = HeadphoneCalibrator();
 
   _CalibrationState _state = _CalibrationState.checking;
+  // ignore: unused_field
   bool _isAlreadyCalibrated = false;
   double _progress = 0;
   int _currentFreq = 0;

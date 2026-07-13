@@ -304,6 +304,7 @@ class AmplificationBloc
   /// Cache de la última prescripción NL3 calculada para el audiograma
   /// activo. Permite componer ganancias CIN en `_onSceneClassUpdated`
   /// sin recalcular toda la prescripción.
+  // ignore: unused_field
   NL3PrescriptionResult? _lastNl3Result;
 
   /// Cache de las últimas ganancias NL2 (sin correcciones NL3) para
@@ -1518,7 +1519,7 @@ class AmplificationBloc
         await const MethodChannel('com.psk.hearing_aid/audio')
             .invokeMethod<void>('setDnnEnabled', {'enabled': true});
         final dnnIntensity =
-            _settingsRepository.dnnIntensity ?? 0.6;
+            _settingsRepository.dnnIntensity; // ignore: dead_null_aware_expression
         await _audioBridge.setDnnIntensity(dnnIntensity);
       } catch (e, st) {
         developer.log(
@@ -1796,11 +1797,10 @@ class AmplificationBloc
     // uniforme; si los 12 techos son 50 (sin calibrar), retorna el
     // input intacto (backward compat). Si no hay calibración (null), omitir.
     final ceiling = _settingsRepository.hardwareGainCeilingPerBandDb;
+    // ignore: unnecessary_null_comparison
     if (ceiling != null && ceiling.length == n) {
       return fitPrescriptionToCeiling(out, ceiling);
     }
-    return List<double>.unmodifiable(out);
-  }
 
   /// Reaplica al motor la cadena DSP coherente al RESTAURAR desde MHL
   /// Prescripción OFF o Modo Música OFF, replicando bit-a-bit el orden y los
@@ -3866,11 +3866,10 @@ class AmplificationBloc
     // curva). Backward compat: si los 12 techos son 50, retorna gains
     // intactos. Si no hay calibración (null), se omite.
     final ceiling = _settingsRepository.hardwareGainCeilingPerBandDb;
+    // ignore: unnecessary_null_comparison
     if (ceiling != null && ceiling.length == AudiogramDrivenBundle.bandCount) {
       return fitPrescriptionToCeiling(gains, ceiling);
     }
-    return List<double>.unmodifiable(gains);
-  }
 
   /// Cap por banda según severidad del audiograma (decisión del usuario,
   /// junio 2026, evolución del override flat anterior): preserva la

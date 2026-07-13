@@ -211,7 +211,7 @@ class _WaterfallPainter extends CustomPainter {
       oldDelegate.colormap != colormap;
 
   // Marca clase no abstracta para satisfacer al linter.
-  // ignore: unused_element
+  // ignore: unused_field
   ui.Image? _unused;
 }
 

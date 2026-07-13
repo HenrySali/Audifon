@@ -145,6 +145,7 @@ class BleDisconnectedException implements Exception {
 /// Maneja escaneo, conexión, reconexión automática, y transmisión
 /// de comandos al dispositivo con timeout y manejo de errores.
 class BleRepository {
+  // ignore: unused_field
   final FlutterBluePlus _flutterBluePlus;
 
   /// Timeout por defecto para operaciones BLE (ms)
@@ -161,6 +162,7 @@ class BleRepository {
 
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _commandCharacteristic;
+  // ignore: unused_field
   BluetoothCharacteristic? _responseCharacteristic;
 
   int _sequenceNumber = 0;

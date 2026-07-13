@@ -46,6 +46,7 @@ class ServiceCodeGate extends StatefulWidget {
   State<ServiceCodeGate> createState() => _ServiceCodeGateState();
 }
 
+// ignore: invalid_visibility_annotation
 @visibleForTesting
 class _ServiceCodeGateState extends State<ServiceCodeGate> {
   String _entered = '';

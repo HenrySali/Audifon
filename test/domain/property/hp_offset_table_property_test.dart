@@ -24,6 +24,7 @@ void main() {
       'compensation = -hp_offset → al sumar al output, reproduce target ± 2 dB',
       (hpOffsetDb) {
         const targetDbspl = 94.0;
+        // ignore: unused_local_variable
         final splMedido = targetDbspl + hpOffsetDb;
         final compensation = -hpOffsetDb;
         // App inyecta: target + compensation (= target - hp_offset).

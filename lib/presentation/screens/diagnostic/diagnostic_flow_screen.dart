@@ -30,6 +30,7 @@ class _DiagnosticFlowScreenState extends State<DiagnosticFlowScreen> {
 
   // Si ya está calibrado, se salta el paso de calibración
   bool _skipCalibration = false;
+  // ignore: unused_field
   bool _calibrationChecked = false;
 
   // Datos recopilados durante el flujo
