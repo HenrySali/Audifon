@@ -494,4 +494,145 @@ SPL offset:     93 dB (calibración del pipeline)
 
 ### Estado
 - Investigación: ✅ completada
-- Implementación: pendiente
+- Implementación: ✅ completada (auditory_model.h + toggle en UI + wiring JNI/Dart)
+
+
+---
+
+## Sesión 7 — 13 julio 2026
+
+### Objetivo
+Estabilización del repositorio, limpieza de deuda técnica, CI profesional, y auditoría completa del sistema.
+
+### 1. Estabilización del repositorio (PR #23 — mergeado)
+
+**Problema:** El repo tenía 8800 archivos en un solo commit, incluyendo 60+ MB de artefactos de build que no deberían estar versionados (.gradle/, .cxx/, .dart_tool/, .o, .dill).
+
+**Solución:**
+- `.gitignore` expandido de 1 línea a 80+ (cubre Flutter, Gradle, NDK, IDE, Python, Node)
+- 120 archivos eliminados del tracking (`.dart_tool/`, `android/.gradle/`, `android/app/.cxx/`, `.flutter-plugins*`, `test_hive_temp/`)
+- `.gitattributes` creado para binarios grandes
+- `docs/LARGE_FILES.md` documentando estrategia de manejo de binarios
+
+**Commit:** `ef2c3e3` (merge de PR #23)
+
+### 2. CI Core implementado (PR #23)
+
+**Nuevo workflow `.github/workflows/ci-core.yml`:**
+- Se ejecuta en toda PR y push a main
+- 3 jobs: análisis estático + 94 unit tests + compilación NDK
+- Concurrency groups para cancelar runs obsoletos
+- El analyze solo falla por errores reales (no warnings)
+
+### 3. Eliminación de código muerto (PR #26)
+
+**10 imports no usados eliminados:**
+- `calibration_report_json.dart`, `spectrum_tab.dart`, `adaptive_learning_screen.dart`, `dsp_config_detail_screen.dart`, `main_screen.dart` (4), `simulator_screen.dart`, `spectrum_analyzer_screen.dart`
+
+**8 campos/variables muertos eliminados:**
+- `_lastExportPath`, `_isAlreadyCalibrated`, `_calibrationChecked`, `outputLevel`, `splMedido`, `peak`, `channel` (MethodChannel sin uso), `_unused`
+
+**Anotación inválida corregida:**
+- `@visibleForTesting` en clase privada `_ServiceCodeGateState`
+
+### 4. WAV fixtures para DSP Quality CI (PR #26)
+
+**5 pares de WAVs sintéticos generados (16 kHz mono, 3s):**
+
+| Archivo | Ruido | SNR |
+|---------|-------|-----|
+| `voice_white_5dB` | Blanco gaussiano | 5 dB |
+| `voice_white_10dB` | Blanco gaussiano | 10 dB |
+| `voice_pink_5dB` | Rosa (1/f) | 5 dB |
+| `voice_babble_0dB` | Babble (6 hablantes) | 0 dB |
+| `voice_babble_5dB` | Babble (6 hablantes) | 5 dB |
+
+- Ubicación: `test/fixtures/dnn_eval/clean/` y `test/fixtures/dnn_eval/noisy/`
+- El workflow `dsp-quality.yml` ahora encuentra los fixtures y corre (antes skipeaba)
+- Script reproducible: `scripts/generate_eval_fixtures.py`
+
+### 5. Fix del CI analyze (PR #26)
+
+**Problema:** `flutter analyze --no-fatal-warnings` tiene un bug en Flutter <3.22 que retorna exit code 1 con warnings.
+
+**Solución:** Reemplazado por grep manual que solo busca la palabra "error" en el output. Warnings no bloquean.
+
+### 6. Script de sincronización técnico → usuario (PR #26)
+
+**Archivo:** `scripts/sync_to_usuario.bat`
+
+**Sincroniza:**
+- C++ DSP completo (pipeline, DNN, MVDR, beamformer, etc.)
+- Modelos DNN (ONNX/PT)
+- Librerías nativas (.so)
+- Domain layer Dart (entities, prescriber, presets)
+- Audio bridge + adaptive learning service
+- Scene engine + DNN controller
+
+**NO sincroniza (técnico-only):**
+- Pantallas de calibración/audiometría/servicio técnico
+- `lib/calibration_spectrum/`, `lib/biological_calibration/`, `lib/mic_calibration/`
+- Herramientas de diagnóstico, AI chat, bundle export
+
+**Uso:**
+```batch
+cd C:\Users\Elsa y Henry\Desktop\Amplificador\Repo Oir Pro4\Audifon
+scripts\sync_to_usuario.bat
+```
+
+### 7. Agente `audifon-expert` creado
+
+Agente personalizado en `.kiro/agents/audifon-expert.md` con conocimiento completo del sistema:
+- Pipeline DSP (HPF→TNR→NR→Expansor→SCE→EQ→[AuditoryModel|WDRC]→Volume→FBS→OC→MPO)
+- Flutter app (BLoC, screens, bridges, domain)
+- AI backend (Hermes v2.0.0, 6 módulos)
+- CI/CD (8 workflows)
+- 94 tests (property-based, unit, integration, regression)
+- Constantes clave (DNN win=320/hop=160, ERB 12 bandas, dwell 2s)
+
+### 8. Auditoría completa del sistema — Estado real validado
+
+| Feature | Estado |
+|---------|--------|
+| Pipeline DSP completo (14 módulos) | ✅ Implementado |
+| DPDFNet4 (reemplaza GTCRN) | ✅ Funcionando en Moto G32 |
+| Modelo Auditivo (12 bandas ERB) | ✅ Implementado + toggle |
+| MVDR Beamformer (SGJMAP) | ✅ Implementado |
+| Histéresis de escena (2s dwell) | ✅ Implementado |
+| 20 detecciones de audio | ✅ Implementado |
+| 5 reglas clínicas | ✅ Implementado |
+| Hermes v2.0.0 en VPS | ✅ Corriendo (aiEnabled: true) |
+| Audio routing + mic selector | ✅ Implementado |
+| Smart Scene | ✅ Implementado |
+| Adaptive Feedback Canceller | ✅ Implementado |
+| Calibración espectro (ISO 17025) | ✅ Implementado |
+| Audiometría biológica (Hughson-Westlake) | ✅ Implementado |
+| Diagnóstico unificado (13 tests) | ✅ Modularizado (20 archivos) |
+| CI Core (analyze + tests + NDK) | ✅ Funcionando |
+| DSP Quality CI (PESQ+STOI) | ✅ Fixtures listos, passthrough mode |
+
+### Commits de esta sesión
+
+| Commit | Mensaje |
+|--------|---------|
+| `ef2c3e3` | Merge PR #23: repo stabilization |
+| `e059338` | chore: remove dead code and unused imports |
+| `1bf8e4c` | fix: add WAV fixtures for DSP CI + fix analyze |
+| `cd06e3a` | feat: add sync script técnico → usuario |
+
+### PRs
+
+| PR | Estado | Contenido |
+|----|--------|-----------|
+| [#23](https://github.com/HenrySali/Audifon/pull/23) | ✅ Mergeado | Repo stabilization |
+| [#24](https://github.com/HenrySali/Audifon/pull/24) | Superseded by #26 | Analyze warnings (// ignore) |
+| [#25](https://github.com/HenrySali/Audifon/pull/25) | ❌ Cerrar | Binarios removidos sin release (falló CI) |
+| [#26](https://github.com/HenrySali/Audifon/pull/26) | Pendiente merge | Dead code + WAV fixtures + CI fix + sync script |
+
+### Pendiente para próxima sesión
+- Mergear PR #26 y cerrar PR #24 y #25
+- Implementar batch + cache de OpenAI (reducir llamadas de 50+/día a 1-2)
+- Reemplazar WAVs sintéticos por grabaciones reales del Moto G32 (vía `adb pull`)
+- Ejecutar `scripts\sync_to_usuario.bat` para sincronizar app usuario
+- Crear el GitHub Release `v1.0-binaries` cuando se quiera sacar binarios del repo
+- Evaluar implementación del spec `oir-pro-patient-mode` (bundle JSON firmado por WhatsApp)
