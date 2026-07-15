@@ -4206,9 +4206,15 @@ class _SceneChip extends StatelessWidget {
 // =============================================================================
 
 /// Control del filtro de ruido IA (DNN GTCRN) accesible directamente desde la
-/// pantalla principal. Toggle on/off + slider de intensidad. Autocontenido:
-/// maneja su estado interno y se comunica directo con el MethodChannel sin
-/// pasar por el AmplificationBloc (mismo patrón que _ConversationModeToggleCard).
+/// pantalla principal. Toggle on/off + slider de intensidad.
+///
+/// Se suscribe al [AmplificationBloc] para reaccionar al estado de
+/// Modo Música (Req 1.2): cuando Música está ON, el widget se deshabilita
+/// visualmente y bloquea interacción para evitar sobreescribir los valores
+/// de DNN que el Bloc forzó a cero.
+///
+/// Comunica con el motor nativo vía [AudioBridgeImpl] (no MethodChannel
+/// directo) para centralizar la lógica de validación y persistencia.
 class _DnnNoiseCleanerCard extends StatefulWidget {
   const _DnnNoiseCleanerCard();
 
@@ -4219,17 +4225,25 @@ class _DnnNoiseCleanerCard extends StatefulWidget {
 class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
   static const _channel = MethodChannel('com.psk.hearing_aid/audio');
 
+  /// Intensidad mínima funcional del slider. Un usuario que quiere
+  /// desactivar el DNN usa el toggle OFF; el slider solo controla la
+  /// fuerza de limpieza cuando está activo.
+  static const double _kMinIntensity = 0.05;
+
   bool _enabled = true;
   double _intensity = 0.6;
 
   // ─── Diagnostics state ─────────────────────────────────────────────────
   Timer? _diagTimer;
   Map<String, dynamic>? _diagnostics;
+  /// Contador de polls consecutivos fallidos — si supera el umbral,
+  /// se muestra estado de error en el panel de diagnósticos.
+  int _consecutivePollFailures = 0;
+  static const int _kPollFailureThreshold = 4; // 2 segundos sin respuesta
 
   @override
   void initState() {
     super.initState();
-    // Leer el estado inicial del DNN desde el motor (best-effort).
     _loadState();
   }
 
@@ -4239,19 +4253,37 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     super.dispose();
   }
 
+  // ─── Helpers: Modo Música ────────────────────────────────────────────────
+
+  /// Consulta si Modo Música está activo leyendo el estado actual del Bloc.
+  bool _isMusicModeActive() {
+    try {
+      final state = context.read<AmplificationBloc>().state;
+      if (state is AmplificationActive) return state.musicModeActive;
+    } catch (_) {}
+    return false;
+  }
+
+  // ─── Diagnostics ─────────────────────────────────────────────────────────
+
   void _startDiagTimer() {
     _diagTimer?.cancel();
+    _consecutivePollFailures = 0;
     _diagTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       _pollDiagnostics();
     });
-    // Poll immediately on start
     _pollDiagnostics();
   }
 
   void _stopDiagTimer() {
     _diagTimer?.cancel();
     _diagTimer = null;
-    if (mounted) setState(() => _diagnostics = null);
+    if (mounted) {
+      setState(() {
+        _diagnostics = null;
+        _consecutivePollFailures = 0;
+      });
+    }
   }
 
   Future<void> _pollDiagnostics() async {
@@ -4260,10 +4292,27 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
         'getDnnDiagnostics',
       );
       if (mounted && result != null) {
-        setState(() => _diagnostics = result);
+        final isActive = result['isActive'] as bool? ?? false;
+        setState(() {
+          _diagnostics = result;
+          // Si el motor reporta inactivo pero nosotros creemos que está ON,
+          // contarlo como falla para mostrar advertencia.
+          if (!isActive && _enabled) {
+            _consecutivePollFailures++;
+          } else {
+            _consecutivePollFailures = 0;
+          }
+        });
       }
-    } catch (_) {}
+    } catch (_) {
+      // El poll falló (crash C++, timeout, etc.)
+      if (mounted) {
+        setState(() => _consecutivePollFailures++);
+      }
+    }
   }
+
+  // ─── State loading ──────────────────────────────────────────────────────
 
   Future<void> _loadState() async {
     try {
@@ -4273,23 +4322,28 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
         if (active) _startDiagTimer();
       }
     } catch (_) {}
-    // Leer intensidad desde settings si está disponible.
+    // Leer intensidad desde settings.
     try {
       final bloc = context.read<AmplificationBloc>();
       double intensity = bloc.settingsRepository.dnnIntensity;
-      // Si el valor es 0.0 (residuo del Modo Música), usar default funcional.
-      // Un usuario nunca quiere intensidad 0 — para eso está el toggle OFF.
-      if (intensity <= 0.0) intensity = 0.6;
+      // Garantizar que la intensidad está en el rango funcional del slider.
+      if (intensity < _kMinIntensity) intensity = 0.6;
       if (mounted) {
         setState(() => _intensity = intensity);
-        // Sincronizar el valor con el motor C++ al iniciar, para que el slider
-        // refleje el mismo valor que realmente usa el denoiser.
-        _setIntensity(_intensity);
+        // Sincronizar con el motor solo si Modo Música NO está activo.
+        if (!_isMusicModeActive()) {
+          _applyIntensityToEngine(intensity);
+        }
       }
     } catch (_) {}
   }
 
+  // ─── Engine communication ───────────────────────────────────────────────
+
   Future<void> _setEnabled(bool enabled) async {
+    // Bloquear si Modo Música está activo — el DNN es controlado por el Bloc.
+    if (_isMusicModeActive()) return;
+
     setState(() => _enabled = enabled);
     if (enabled) {
       _startDiagTimer();
@@ -4297,38 +4351,73 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
       _stopDiagTimer();
     }
     try {
-      // Activar/desactivar DNN mono (limpieza directa del pipeline)
+      // Activar/desactivar DNN mono
       await _channel.invokeMethod<void>('setDnnEnabled', {'enabled': enabled});
-      // Activar/desactivar DualDNN (motor de realce dual-channel)
-      // 1 = DualChannelDnn, 0 = Bypass
-      await _channel.invokeMethod<void>(
-        'setEnhancementEngineMode',
-        {'mode': enabled ? 1 : 0},
-      );
+      // Activar/desactivar DualDNN vía AudioBridgeImpl (centralizado)
+      final mode = enabled
+          ? EnhancementEngineMode.dualChannelDnn
+          : EnhancementEngineMode.bypass;
+      await AudioBridgeImpl().setEnhancementEngineMode(mode);
     } catch (_) {}
-    // Persistir el modo en Hive para que se restaure al reiniciar
+    // Persistir el modo vía AudioBridgeImpl + settings_box (una sola fuente)
     try {
       final box = await Hive.openBox<dynamic>('settings_box');
-      await box.put('enhancementEngineMode', enabled ? 1 : 0);
+      await box.put(
+        'enhancementEngineMode',
+        enabled
+            ? EnhancementEngineMode.dualChannelDnn.nativeValue
+            : EnhancementEngineMode.bypass.nativeValue,
+      );
     } catch (_) {}
   }
 
   Future<void> _setIntensity(double value) async {
+    // Bloquear si Modo Música está activo — no sobreescribir intensity=0.
+    if (_isMusicModeActive()) return;
+
     setState(() => _intensity = value);
-    try {
-      await _channel.invokeMethod<void>(
-        'setDnnIntensity',
-        {'intensity': value},
-      );
-    } catch (_) {}
-    // Persistir el valor en Hive para que sobreviva reinicios.
+    await _applyIntensityToEngine(value);
+    // Persistir el valor en Hive.
     try {
       final bloc = context.read<AmplificationBloc>();
       await bloc.settingsRepository.setDnnIntensity(value);
     } catch (_) {}
   }
 
+  /// Envía la intensidad al motor nativo sin persistir (usado también
+  /// desde [_loadState] para sincronizar al arranque).
+  Future<void> _applyIntensityToEngine(double value) async {
+    try {
+      await _channel.invokeMethod<void>(
+        'setDnnIntensity',
+        {'intensity': value},
+      );
+    } catch (_) {}
+  }
+
+  // ─── Diagnostics UI ─────────────────────────────────────────────────────
+
   Widget _buildDiagnosticsPanel() {
+    // Si hay demasiados polls fallidos, mostrar estado de error.
+    if (_consecutivePollFailures >= _kPollFailureThreshold) {
+      return Container(
+        margin: const EdgeInsets.only(top: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.25),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Text(
+          '\u26A0 Motor DNN no responde — posible fallo interno',
+          style: TextStyle(
+            color: Colors.orangeAccent,
+            fontSize: 11,
+            fontFamily: 'monospace',
+          ),
+        ),
+      );
+    }
+
     final diag = _diagnostics;
     if (diag == null) {
       return const SizedBox.shrink();
@@ -4338,7 +4427,8 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     final processedFrames = diag['processedFrames'] as int? ?? 0;
     final droppedFrames = diag['droppedFrames'] as int? ?? 0;
     final lastInferenceUs = diag['lastInferenceUs'] as int? ?? 0;
-    final effectiveIntensity = (diag['effectiveIntensity'] as num?)?.toDouble() ?? 0.0;
+    final effectiveIntensity =
+        (diag['effectiveIntensity'] as num?)?.toDouble() ?? 0.0;
 
     final inferenceMs = (lastInferenceUs / 1000.0).toStringAsFixed(1);
     final effectivePct = (effectiveIntensity * 100).round();
@@ -4393,9 +4483,22 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
     );
   }
 
+  // ─── Build ──────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
+    // Fix 1: Escuchar musicModeActive del Bloc para deshabilitarse cuando
+    // Modo Música está activo — el DNN está forzado a bypass por el Bloc.
+    final blocState = context.watch<AmplificationBloc>().state;
+    final bool musicModeOn = blocState is AmplificationActive &&
+        blocState.musicModeActive;
+
+    // Cuando Modo Música está ON, el widget se desactiva visualmente.
+    // El estado interno (_enabled/_intensity) se preserva para restaurar
+    // al desactivar Música.
+    final bool effectiveEnabled = _enabled && !musicModeOn;
     final intensityPct = (_intensity * 100).round();
+
     return Card(
       color: const Color(0xFF16213e),
       child: Padding(
@@ -4406,21 +4509,38 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
             // ─── Fila: Titulo + Toggle ─────────────────────────────────
             Row(
               children: [
-                const Icon(Icons.psychology, color: Colors.cyanAccent, size: 20),
+                Icon(
+                  Icons.psychology,
+                  color: musicModeOn ? Colors.white38 : Colors.cyanAccent,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    'Limpiador de ruido (IA)',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Limpiador de ruido (IA)',
+                        style: TextStyle(
+                          color: musicModeOn ? Colors.white38 : Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (musicModeOn)
+                        const Text(
+                          'Desactivado por Modo M\u00fasica',
+                          style: TextStyle(
+                            color: Colors.orangeAccent,
+                            fontSize: 10,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 Switch(
-                  value: _enabled,
-                  onChanged: _setEnabled,
+                  value: effectiveEnabled,
+                  onChanged: musicModeOn ? null : _setEnabled,
                   activeColor: Colors.cyanAccent,
                   inactiveThumbColor: Colors.white60,
                   inactiveTrackColor: Colors.white12,
@@ -4429,9 +4549,9 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
             ),
             // ─── Slider de intensidad ─────────────────────────────────
             Opacity(
-              opacity: _enabled ? 1.0 : 0.4,
+              opacity: effectiveEnabled ? 1.0 : 0.4,
               child: AbsorbPointer(
-                absorbing: !_enabled,
+                absorbing: !effectiveEnabled,
                 child: Row(
                   children: [
                     const Icon(Icons.tune, color: Colors.white60, size: 16),
@@ -4443,9 +4563,9 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
                     Expanded(
                       child: Slider(
                         value: _intensity,
-                        min: 0.0,
-             max: 1.0,
-                        divisions: 20,
+                        min: _kMinIntensity,
+                        max: 1.0,
+                        divisions: 19,
                         label: '$intensityPct%',
                         activeColor: Colors.cyanAccent,
                         inactiveColor: Colors.white24,
@@ -4466,7 +4586,7 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
               ),
             ),
             // ─── Panel de diagnostico DNN (solo visible cuando ON) ────
-            if (_enabled) _buildDiagnosticsPanel(),
+            if (effectiveEnabled) _buildDiagnosticsPanel(),
           ],
         ),
       ),
