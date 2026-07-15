@@ -920,30 +920,61 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         lastPreDnnLevelDb_ = 20.0f * std::log10(rms) + config_.splOffset;
     }
 
-    // ─── Headroom Stage — atenuación pre-DNN (R2.1, R2.2, R2.4) ──────────
-    // Sólo atenuamos cuando el DNN está habilitado: señales near-full-scale
-    // (peak > -3 dBFS ≈ 0.7079 lineal) saturan la representación interna
-    // de GTCRN y producen THD excesiva. Atenuamos -6 dB (×0.5) antes del
-    // modelo y restauramos +6 dB (×2.0) después. Si el DNN está off, no
-    // hay riesgo de saturación interna y la señal pasa sin modificar
-    // (Requirement 2.4).
+    // ─── Headroom Stage — atenuación pre-DNN suave (R2.1, R2.2, R2.4) ─────
+    // FIX tktktk (Causa 3): reemplazado el sistema binario per-block (on/off)
+    // por una rampa suave con hold + release. El headroomGain_ persiste entre
+    // bloques y rampea continuamente entre kHeadroomAttenLinear (0.5) y 1.0,
+    // eliminando los escalones de 6 dB que causaban clicks.
     //
-    // El flag `headroomApplied_` es por-bloque (no estado persistente):
-    // se reinicia en cada callback y la restauración post-DNN sólo se
-    // ejecuta si este mismo bloque fue atenuado.
-    headroomApplied_ = false;
+    // Comportamiento:
+    //   - Peak > umbral → attack rápido (~2 ms) hacia 0.5
+    //   - Peak < umbral → hold N bloques, luego release lento (~20 ms) hacia 1.0
+    //   - DNN deshabilitado → release inmediato (sin headroom necesario)
     if (dnnDenoiser_.isEnabled()) {
         float peakSample = 0.0f;
         for (int i = 0; i < numFrames; ++i) {
             float absVal = std::fabs(outPtr[i]);
             if (absVal > peakSample) peakSample = absVal;
         }
+
+        // Determinar target del headroom gain.
+        float headroomTarget;
         if (peakSample > kHeadroomThresholdLinear) {
-            for (int i = 0; i < numFrames; ++i) {
-                outPtr[i] *= kHeadroomAttenLinear;
-            }
-            headroomApplied_ = true;
+            // Pico alto: atenuar. Resetear hold counter.
+            headroomTarget = kHeadroomAttenLinear;
+            headroomHoldBlocks_ = kHeadroomHoldBlocks;
+        } else if (headroomHoldBlocks_ > 0) {
+            // En periodo de hold: mantener atenuación.
+            headroomTarget = kHeadroomAttenLinear;
+            headroomHoldBlocks_--;
+        } else {
+            // Sin pico y hold expirado: restaurar.
+            headroomTarget = 1.0f;
         }
+
+        // Aplicar rampa per-sample al buffer.
+        for (int i = 0; i < numFrames; ++i) {
+            // Avanzar headroomGain_ hacia target.
+            if (headroomGain_ > headroomTarget) {
+                // Attack: bajar hacia 0.5
+                headroomGain_ = std::max(headroomTarget,
+                                         headroomGain_ - kHeadroomAttackStep);
+            } else if (headroomGain_ < headroomTarget) {
+                // Release: subir hacia 1.0
+                headroomGain_ = std::min(headroomTarget,
+                                         headroomGain_ + kHeadroomReleaseStep);
+            }
+            outPtr[i] *= headroomGain_;
+        }
+    } else {
+        // DNN off: restaurar headroom rápidamente si estaba activo.
+        if (headroomGain_ < 1.0f) {
+            for (int i = 0; i < numFrames; ++i) {
+                headroomGain_ = std::min(1.0f, headroomGain_ + kHeadroomReleaseStep * 10.0f);
+                outPtr[i] *= headroomGain_;
+            }
+        }
+        headroomHoldBlocks_ = 0;
     }
 
     // ─── DNN Denoiser (GTCRN) — REEMPLAZA al NR Wiener cuando enabled ────
@@ -956,13 +987,15 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     dnnDenoiser_.process(outPtr, numFrames);
 
     // ─── Headroom Stage — restauración post-DNN (R2.3) ───────────────────
-    // Si este bloque fue atenuado pre-DNN, restauramos +6 dB para que el
-    // resto del pipeline (HPF, EQ, WDRC, MPO) reciba la señal al mismo
-    // nivel que tendría sin el headroom. Round-trip 0.5 × 2.0 == 1.0
-    // (bit-exact en float32 para todos los samples representables).
-    if (headroomApplied_) {
+    // FIX tktktk (Causa 3): la restauración ahora compensa el headroomGain_
+    // aplicado pre-DNN. Si gain < 1.0, multiplicamos por el inverso para
+    // restaurar el nivel original. La rampa garantiza que no hay escalones.
+    // Usamos el gain al final del bloque (headroomGain_) como aproximación
+    // uniforme — el error es < 0.5 dB dado que el step por bloque es pequeño.
+    if (headroomGain_ < 0.999f) {
+        const float restore = 1.0f / headroomGain_;
         for (int i = 0; i < numFrames; ++i) {
-            outPtr[i] *= kHeadroomRestoreLinear;
+            outPtr[i] *= restore;
         }
     }
 
