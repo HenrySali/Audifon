@@ -676,6 +676,14 @@ struct DnnDenoiser::Impl {
     std::atomic<uint64_t>   droppedFramesLocal{0};
     std::atomic<uint32_t>   lastInferenceUsLocal{0};
 
+    // ─── Noise gate con hysteresis (FIX tktktk Causa 2) ──────────────────
+    /// Ganancia actual del noise gate [0..1]. Rampea suavemente entre abierto
+    /// (1.0) y cerrado (0.0) para evitar clicks por conmutación rápida.
+    float gateGain_ = 1.0f;
+    /// Contador de frames consecutivos por debajo del umbral de cierre.
+    /// El gate solo cierra después de kHystFrames consecutivos (~60 ms).
+    int   gateHoldCounter_ = 0;
+
     Impl() {
         sessionOpts.SetIntraOpNumThreads(1);
         sessionOpts.SetInterOpNumThreads(1);
@@ -1212,6 +1220,9 @@ struct DnnDenoiser::Impl {
         std::fill(fftReCh1.begin(), fftReCh1.end(), 0.0f);
         std::fill(fftImCh1.begin(), fftImCh1.end(), 0.0f);
         wpeBeamformer.reset();
+        // Noise gate state.
+        gateGain_ = 1.0f;
+        gateHoldCounter_ = 0;
     }
 
     /// Forward real DFT using precomputed twiddle factors.
@@ -1403,25 +1414,58 @@ struct DnnDenoiser::Impl {
         std::fill(olaBuf.begin() + (kDnnFftSize - kDnnHopSize),
                   olaBuf.end(), 0.0f);
 
-        // ── 11b. Noise gate suave: atenúa frames con energía muy baja ────
-        // Evita "golpecitos" cuando el modelo bombea ganancia en silencio.
-        // Umbral: -60 dBFS (≈0.001 RMS). Gate suave con rampa cuadrática.
+        // ── 11b. Noise gate suave con hysteresis temporal ─────────────────
+        // FIX tktktk (Causa 2): el gate anterior tenía un knee de solo 2 dB
+        // (0.001→0.003) y sin hysteresis temporal. Señales borderline (ventilador,
+        // AC) conmutaban frame a frame entre gate-on y gate-off, generando
+        // clicks periódicos. Ahora:
+        //   - Knee ampliado a ~10 dB (0.001 → 0.01) para transición gradual.
+        //   - Hysteresis temporal: el gate necesita N frames consecutivos por
+        //     debajo del umbral para cerrar, y 1 frame por encima para abrir.
+        //   - Rampa de ganancia suave (attack/release) en vez de step.
         {
             float energy = 0.0f;
             for (int i = 0; i < kDnnHopSize; ++i) {
                 energy += outputFrame[i] * outputFrame[i];
             }
             const float rms = std::sqrt(energy / static_cast<float>(kDnnHopSize));
-            constexpr float kGateThreshold = 0.001f;  // -60 dBFS
-            constexpr float kGateKnee = 0.003f;       // transición suave
-            if (rms < kGateThreshold) {
-                // Debajo del umbral: silenciar completamente
-                std::fill(outputFrame.begin(), outputFrame.end(), 0.0f);
-            } else if (rms < kGateKnee) {
-                // En la rodilla: atenuar proporcionalmente (rampa suave)
-                const float gain = (rms - kGateThreshold) / (kGateKnee - kGateThreshold);
+
+            // Umbrales ampliados: knee de ~10 dB.
+            constexpr float kGateClose  = 0.001f;   // -60 dBFS: umbral para cerrar
+            constexpr float kGateOpen   = 0.01f;    // -40 dBFS: umbral para abrir completamente
+            // Hysteresis: necesita 6 frames (~60 ms) debajo para cerrar.
+            constexpr int   kHystFrames = 6;
+
+            if (rms >= kGateOpen) {
+                // Claramente por encima: abrir inmediatamente.
+                gateHoldCounter_ = 0;
+                // Rampa de apertura: subir gateGain_ hacia 1.0 (release ~30 ms = 3 frames)
+                gateGain_ = std::min(1.0f, gateGain_ + 0.33f);
+            } else if (rms < kGateClose) {
+                // Debajo del umbral de cierre: incrementar contador de hysteresis.
+                gateHoldCounter_++;
+                if (gateHoldCounter_ >= kHystFrames) {
+                    // Confirmado silencio sostenido: bajar gateGain_ hacia 0.
+                    gateGain_ = std::max(0.0f, gateGain_ - 0.25f);
+                }
+                // Si aún no se alcanzó el hold, gateGain_ se mantiene (no cierra).
+            } else {
+                // En la zona de transición (knee): interpolar ganancia target.
+                gateHoldCounter_ = 0;
+                const float kneeTarget = (rms - kGateClose) / (kGateOpen - kGateClose);
+                // Rampa suave hacia el target: no saltar, acercarse gradualmente.
+                const float step = 0.2f; // ~50 ms para recorrer el rango completo
+                if (gateGain_ < kneeTarget) {
+                    gateGain_ = std::min(kneeTarget, gateGain_ + step);
+                } else {
+                    gateGain_ = std::max(kneeTarget, gateGain_ - step);
+                }
+            }
+
+            // Aplicar ganancia del gate al frame.
+            if (gateGain_ < 0.999f) {
                 for (int i = 0; i < kDnnHopSize; ++i) {
-                    outputFrame[i] *= gain;
+                    outputFrame[i] *= gateGain_;
                 }
             }
         }
@@ -1799,21 +1843,69 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
     const int gotDry = impl_->dryDelayRing.pop(dry.data(), blockSize);
 
     if (underrun) {
-        // El worker no alcanzó la tasa: salida = dry original (buffer no se toca).
-        // Avanzar el crossfade en cada sample.
+        // ── FIX tktktk (Causa 1): crossfade suave hacia dry en underrun ──
+        // En vez de saltar abruptamente a dry, hacemos un crossfade rápido
+        // (5 ms) desde la mezcla actual hacia dry puro. Si hay wet parcial
+        // disponible (wetWritten > 0), lo usamos para los primeros samples
+        // y transicionamos a dry para el resto, evitando el click abrupto.
+        //
+        // Además, forzamos crossfadeTarget_ a 0 temporalmente para que si
+        // el underrun persiste varios bloques, el gain baje gradualmente
+        // (no se quede en 1.0 intentando mezclar wet que no existe).
+        const float savedTarget = crossfadeTarget_;
+        // Step rápido de underrun: 5 ms (~80 samples @ 16 kHz, ~240 @ 48 kHz).
+        // Más rápido que el crossfade normal (50 ms) pero sin ser instantáneo.
+        const float kUnderrunStep = 1.0f / (0.005f * static_cast<float>(
+            impl_->inputSr > 0 ? impl_->inputSr : 16000));
+
+        const float userIntensity = intensity_.load(std::memory_order_acquire);
+        const bool  vadActive     = voiceActive_.load(std::memory_order_acquire);
+        const float voiceCap      = voiceCap_.load(std::memory_order_acquire);
+        const float target        = vadActive ? std::min(userIntensity, voiceCap)
+                                              : userIntensity;
+
         for (int i = 0; i < blockSize; ++i) {
-            if (crossfadeGain_ < crossfadeTarget_) {
-                crossfadeGain_ = std::min(crossfadeTarget_,
-                                          crossfadeGain_ + kCrossfadeStep);
-            } else if (crossfadeGain_ > crossfadeTarget_) {
-                crossfadeGain_ = std::max(crossfadeTarget_,
-                                          crossfadeGain_ - kCrossfadeStep);
+            // Bajar crossfadeGain_ rápidamente hacia 0 durante underrun.
+            if (crossfadeGain_ > 0.0f) {
+                crossfadeGain_ = std::max(0.0f, crossfadeGain_ - kUnderrunStep);
             }
+
+            // Rampa de effectiveIntensity_ sigue avanzando.
+            if (effectiveIntensity_ > target) {
+                effectiveIntensity_ = std::max(target,
+                    effectiveIntensity_ - (stepAttackPerSample_ > 0.0f
+                        ? stepAttackPerSample_ : 1.0f));
+            } else if (effectiveIntensity_ < target) {
+                effectiveIntensity_ = std::min(target,
+                    effectiveIntensity_ + (stepReleasePerSample_ > 0.0f
+                        ? stepReleasePerSample_ : 1.0f));
+            }
+
+            const float dnnAmount = crossfadeGain_ * effectiveIntensity_;
+            const float drySample = (gotDry > i) ? dry[i] : buffer[i];
+
+            float mixed;
+            if (i < wetWritten) {
+                // Usar wet parcial disponible para suavizar la transición.
+                mixed = drySample * (1.0f - dnnAmount)
+                      + impl_->wetNativeRate[i] * dnnAmount;
+            } else {
+                // Sin wet: salida es dry puro (dnnAmount ya baja a 0).
+                mixed = drySample;
+            }
+            buffer[i] = std::max(-1.0f, std::min(1.0f, mixed));
         }
-        // Si quedó wet parcial, descartarlo: ya no nos sirve (sale tarde).
+
+        // Restaurar target para que el siguiente bloque (si ya no hay
+        // underrun) vuelva a subir el crossfade normalmente.
+        crossfadeTarget_ = savedTarget;
+
         if (wetWritten > 0) {
             droppedFrames_.fetch_add(1, std::memory_order_relaxed);
         }
+
+        effectiveIntensityAtomic_.store(effectiveIntensity_,
+                                        std::memory_order_release);
         return;
     }
 
