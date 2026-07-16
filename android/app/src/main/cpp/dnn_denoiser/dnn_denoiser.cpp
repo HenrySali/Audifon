@@ -735,11 +735,13 @@ struct DnnDenoiser::Impl {
 
         // Pre-fill dryDelayRing with zeros to compensate for the latency
         // of the wet path (STFT hop + resampler group delays).
-        // Tuned empirically: 450 samples (~9.4ms at 48kHz).
+        // FIX matraca: valor recalculado dinámicamente en applyInputSampleRate().
+        // Este pre-fill inicial es solo para el caso de que process() se llame
+        // antes de setInputSampleRate (asumimos 16 kHz = ~1.3 hops).
         {
-            constexpr int kDryPreFillSamples = 450;
-            std::vector<float> zeros(kDryPreFillSamples, 0.0f);
-            dryDelayRing.push(zeros.data(), kDryPreFillSamples);
+            const int kInitialPreFill = static_cast<int>(kDnnHopSize * 1.3f); // 208 @ 16k
+            std::vector<float> zeros(kInitialPreFill, 0.0f);
+            dryDelayRing.push(zeros.data(), kInitialPreFill);
         }
 
         // ── Resampler: prototipo Kaiser y modo identidad por default ──
@@ -1632,6 +1634,59 @@ struct DnnDenoiser::Impl {
         inputRingCh1.clear();
         outputRing.clear();
         dryDelayRing.clear();
+
+        // ── Re-aplicar pre-fill del dryDelayRing según la rate actual ────
+        // FIX matraca: el pre-fill compensa la latencia del wet path
+        // (down + STFT hop + worker handoff + up). Sin esto, dry se
+        // adelanta al wet y la mezcla produce comb filtering audible
+        // ("matraca") que empeora a mayor intensity.
+        //
+        // Cálculo de latencia del wet path en samples @ inputSr:
+        //   1. Downsampler: group delay = (kProtoTaps-1)/2 samples @ inputSr
+        //      (para polyphase; 0 para identity/linear)
+        //   2. STFT: 1 hop de buffering = kDnnHopSize samples @ 16k
+        //      → convertido a inputSr: kDnnHopSize * (inputSr / 16000)
+        //   3. Worker handoff: ~1 hop adicional (peor caso asíncrono)
+        //      → otro kDnnHopSize * (inputSr / 16000)
+        //   4. Upsampler: group delay ≈ (kProtoTaps-1)/2 samples @ inputSr
+        //      (para polyphase; 0 para identity/linear)
+        //
+        // Total para 48 kHz polyphase:
+        //   35.5 + 480 + 480 + 35.5 = 1031... pero empíricamente el worker
+        //   suele entregar en <1 hop, así que usamos factor 1.3 del hop mínimo.
+        {
+            int preFill = 0;
+            if (inputSr == kDnnSampleRate) {
+                // 16 kHz: sin resampler. Latencia = STFT hop + handoff jitter.
+                // ~1.3 hops de espera empírica.
+                preFill = static_cast<int>(kDnnHopSize * 1.3f);
+            } else if (inputSr == 48000) {
+                // 48 kHz polyphase: resampler delays + STFT hop + jitter.
+                // Down delay: (72-1)/2 = 35.5 @ 48k
+                // 1 STFT hop @ 48k = 160 * 3 = 480
+                // Up delay: 35.5 @ 48k
+                // Total base: 35.5 + 480 + 35.5 = 551
+                // + jitter empírico (~30%): 551 * 1.3 ≈ 716
+                const float downDelay = static_cast<float>(kProtoTaps - 1) / 2.0f;
+                const float hopAt48k = static_cast<float>(kDnnHopSize) * 3.0f;
+                const float upDelay = downDelay;
+                preFill = static_cast<int>((downDelay + hopAt48k + upDelay) * 1.3f);
+            } else {
+                // Rate genérica: estimar con ratio.
+                const float ratio = static_cast<float>(inputSr) /
+                                    static_cast<float>(kDnnSampleRate);
+                preFill = static_cast<int>(kDnnHopSize * ratio * 1.5f);
+            }
+            if (preFill > 0 && preFill < kDnnRingCapacity / 2) {
+                std::vector<float> zeros(preFill, 0.0f);
+                dryDelayRing.push(zeros.data(), preFill);
+                DNN_LOGI("dryDelayRing pre-fill: %d samples @ %d Hz (%.1f ms)",
+                         preFill, inputSr,
+                         1000.0f * static_cast<float>(preFill) /
+                         static_cast<float>(inputSr));
+            }
+        }
+
         // Reset estado interno worker para evitar mezclar buffers de la rate vieja.
         // Solo disparar reset si el worker ya estaba produciendo output con una
         // rate previa (processedFramesLocal > 0). En la primera configuracion
