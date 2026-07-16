@@ -734,12 +734,11 @@ struct DnnDenoiser::Impl {
         dryDelayRing.init(kDnnRingCapacity);
 
         // Pre-fill dryDelayRing with zeros to compensate for the latency
-        // of the wet path (STFT hop + resampler group delays).
-        // FIX matraca: valor recalculado dinámicamente en applyInputSampleRate().
-        // Este pre-fill inicial es solo para el caso de que process() se llame
-        // antes de setInputSampleRate (asumimos 16 kHz = ~1.3 hops).
+        // of the wet path. Valor exacto para 16 kHz (sin resampler):
+        // 1 hop STFT buffering = kDnnHopSize = 160 samples = 10 ms.
+        // Se recalcula en applyInputSampleRate() para la rate real de Oboe.
         {
-            const int kInitialPreFill = static_cast<int>(kDnnHopSize * 1.3f); // 208 @ 16k
+            constexpr int kInitialPreFill = kDnnHopSize; // 160 @ 16k = 10 ms
             std::vector<float> zeros(kInitialPreFill, 0.0f);
             dryDelayRing.push(zeros.data(), kInitialPreFill);
         }
@@ -1636,51 +1635,47 @@ struct DnnDenoiser::Impl {
         dryDelayRing.clear();
 
         // ── Re-aplicar pre-fill del dryDelayRing según la rate actual ────
-        // FIX matraca: el pre-fill compensa la latencia del wet path
-        // (down + STFT hop + worker handoff + up). Sin esto, dry se
+        // FIX matraca: el pre-fill compensa la latencia ALGORÍTMICA exacta
+        // del wet path (down + STFT buffering + up). Sin esto, dry se
         // adelanta al wet y la mezcla produce comb filtering audible
         // ("matraca") que empeora a mayor intensity.
         //
-        // Cálculo de latencia del wet path en samples @ inputSr:
-        //   1. Downsampler: group delay = (kProtoTaps-1)/2 samples @ inputSr
-        //      (para polyphase; 0 para identity/linear)
-        //   2. STFT: 1 hop de buffering = kDnnHopSize samples @ 16k
+        // Latencia exacta del wet path en samples @ inputSr:
+        //   1. Downsampler group delay: (kProtoTaps-1)/2 samples @ inputSr
+        //   2. STFT buffering: 1 hop = kDnnHopSize samples @ 16 kHz
         //      → convertido a inputSr: kDnnHopSize * (inputSr / 16000)
-        //   3. Worker handoff: ~1 hop adicional (peor caso asíncrono)
-        //      → otro kDnnHopSize * (inputSr / 16000)
-        //   4. Upsampler: group delay ≈ (kProtoTaps-1)/2 samples @ inputSr
-        //      (para polyphase; 0 para identity/linear)
+        //   3. Upsampler group delay: (kProtoTaps-1)/2 samples @ inputSr
         //
-        // Total para 48 kHz polyphase:
-        //   35.5 + 480 + 480 + 35.5 = 1031... pero empíricamente el worker
-        //   suele entregar en <1 hop, así que usamos factor 1.3 del hop mínimo.
+        // El OLA NO introduce hop extra porque stftInBuf arranca con zeros.
+        // El jitter del worker thread NO se compensa aquí — se absorbe por
+        // el ring buffer (4096 capacidad) y por el crossfade suave de underrun.
         {
             int preFill = 0;
             if (inputSr == kDnnSampleRate) {
-                // 16 kHz: sin resampler. Latencia = STFT hop + handoff jitter.
-                // ~1.3 hops de espera empírica.
-                preFill = static_cast<int>(kDnnHopSize * 1.3f);
+                // 16 kHz: sin resampler. Latencia = 1 hop STFT buffering.
+                preFill = kDnnHopSize; // 160 samples = 10 ms
             } else if (inputSr == 48000) {
-                // 48 kHz polyphase: resampler delays + STFT hop + jitter.
-                // Down delay: (72-1)/2 = 35.5 @ 48k
-                // 1 STFT hop @ 48k = 160 * 3 = 480
-                // Up delay: 35.5 @ 48k
-                // Total base: 35.5 + 480 + 35.5 = 551
-                // + jitter empírico (~30%): 551 * 1.3 ≈ 716
+                // 48 kHz polyphase: resamplers + 1 hop STFT.
+                // Down: (72-1)/2 = 35.5 samples @ 48 kHz
+                // Hop:  160 * 3 = 480 samples @ 48 kHz
+                // Up:   (72-1)/2 = 35.5 samples @ 48 kHz
+                // Total exacto: 551 samples @ 48 kHz (11.48 ms)
                 const float downDelay = static_cast<float>(kProtoTaps - 1) / 2.0f;
-                const float hopAt48k = static_cast<float>(kDnnHopSize) * 3.0f;
+                const float hopAtNative = static_cast<float>(kDnnHopSize) * 3.0f;
                 const float upDelay = downDelay;
-                preFill = static_cast<int>((downDelay + hopAt48k + upDelay) * 1.3f);
+                preFill = static_cast<int>(
+                    std::round(downDelay + hopAtNative + upDelay));
             } else {
-                // Rate genérica: estimar con ratio.
+                // Rate genérica: resampler lineal (delay≈0) + hop escalado.
                 const float ratio = static_cast<float>(inputSr) /
                                     static_cast<float>(kDnnSampleRate);
-                preFill = static_cast<int>(kDnnHopSize * ratio * 1.5f);
+                preFill = static_cast<int>(
+                    std::round(static_cast<float>(kDnnHopSize) * ratio));
             }
             if (preFill > 0 && preFill < kDnnRingCapacity / 2) {
                 std::vector<float> zeros(preFill, 0.0f);
                 dryDelayRing.push(zeros.data(), preFill);
-                DNN_LOGI("dryDelayRing pre-fill: %d samples @ %d Hz (%.1f ms)",
+                DNN_LOGI("dryDelayRing pre-fill: %d samples @ %d Hz (%.2f ms)",
                          preFill, inputSr,
                          1000.0f * static_cast<float>(preFill) /
                          static_cast<float>(inputSr));
