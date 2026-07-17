@@ -15,6 +15,7 @@
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
+#include "dfn3_denoiser.h"
 #include "latency_loopback_tester.h"
 #include "mvdr_beamformer.h"
 
@@ -232,9 +233,13 @@ public:
     /// Mezcla dry/wet del DNN denoiser (0..1).
     void setDnnIntensity(float intensity);
     /// @return true si el DNN denoiser está procesando audio (no en bypass por error).
-    bool getDnnIsActive() const { return dnnDenoiser_.isActive(); }
+    bool getDnnIsActive() const {
+        return useDfn3_ ? dfn3Denoiser_.isActive() : dnnDenoiser_.isActive();
+    }
     /// @return true si el flag de configuración enabled está en true.
-    bool getDnnIsEnabled() const { return dnnDenoiser_.isEnabled(); }
+    bool getDnnIsEnabled() const {
+        return useDfn3_ ? dfn3Denoiser_.isEnabled() : dnnDenoiser_.isEnabled();
+    }
     /// @return total de hops procesados por el worker del DNN.
     uint64_t getDnnProcessedFrames() const { return dnnDenoiser_.getProcessedFrames(); }
     /// @return total de frames descartados por congestión del worker.
@@ -406,6 +411,15 @@ private:
     /// del DspPipeline. Por default desactivado para arrancar igual que hoy.
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
+
+    // ─── DeepFilterNet3 (reemplazo de GTCRN) ─────────────────────────────
+    /// Motor DFN3 (48 kHz nativo, tract/Rust backend). Cuando está activo,
+    /// reemplaza completamente al GTCRN (dnnDenoiser_). La selección se
+    /// hace en initDnnDenoiser: si los modelos DFN3 están en assets/dfn3/,
+    /// se usa DFN3; si no, se cae al GTCRN como fallback.
+    dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
+    /// true cuando DFN3 es el motor activo (en vez de GTCRN).
+    bool useDfn3_ = false;
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.
