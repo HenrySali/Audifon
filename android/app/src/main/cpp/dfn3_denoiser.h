@@ -26,8 +26,14 @@
 #include <cstdint>
 #include <string>
 
-// Forward declare the C API (linked from libdfn3.so).
-#include "dfn3_rust/include/dfn3_api.h"
+// Constants from DFN3 (duplicated here to avoid header dependency on dfn3_api.h
+// since we load libdfn3.so dynamically via dlopen).
+#ifndef DFN3_HOP_SIZE
+#define DFN3_HOP_SIZE 480
+#endif
+#ifndef DFN3_SAMPLE_RATE
+#define DFN3_SAMPLE_RATE 48000
+#endif
 
 namespace dfn3_denoiser {
 

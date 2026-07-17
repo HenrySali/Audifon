@@ -499,8 +499,7 @@ int32_t AudioEngine::getInputSessionId() const {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── DeepFilterNet3 (preferido si los modelos están disponibles) ─────
-#ifdef ENABLE_DFN3
+    // ─── DeepFilterNet3 (preferido si libdfn3.so está disponible) ────────
     {
         const std::string dfn3Dir = "/data/data/com.psk.hearing_aid/files/dfn3";
         const bool okDfn3 = dfn3Denoiser_.initialize(dfn3Dir);
@@ -511,7 +510,6 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
         }
         LOGI("initDnnDenoiser: DFN3 no disponible, usando GTCRN como fallback");
     }
-#endif
 
     // ─── Fallback: GTCRN mono legacy (ONNXRuntime) ──────────────────────
     // Stage `process()` del chain post-realce, controlado por setDnnEnabled().
@@ -537,12 +535,9 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {
-#ifdef ENABLE_DFN3
     if (useDfn3_) {
         dfn3Denoiser_.setEnabled(enabled);
-    } else
-#endif
-    {
+    } else {
         dnnDenoiser_.setEnabled(enabled);
     }
     pipeline_.setNrBypassed(enabled);
@@ -553,12 +548,9 @@ void AudioEngine::setDnnEnabled(bool enabled) {
 }
 
 void AudioEngine::setDnnIntensity(float intensity) {
-#ifdef ENABLE_DFN3
     if (useDfn3_) {
         dfn3Denoiser_.setIntensity(intensity);
-    } else
-#endif
-    {
+    } else {
         dnnDenoiser_.setIntensity(intensity);
     }
 }
@@ -996,12 +988,9 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
-#ifdef ENABLE_DFN3
     if (useDfn3_) {
         dfn3Denoiser_.process(outPtr, numFrames);
-    } else
-#endif
-    {
+    } else {
         dnnDenoiser_.process(outPtr, numFrames);
     }
 
