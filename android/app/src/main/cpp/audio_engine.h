@@ -15,7 +15,9 @@
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
+#ifdef ENABLE_DFN3
 #include "dfn3_denoiser.h"
+#endif
 #include "latency_loopback_tester.h"
 #include "mvdr_beamformer.h"
 
@@ -234,11 +236,17 @@ public:
     void setDnnIntensity(float intensity);
     /// @return true si el DNN denoiser está procesando audio (no en bypass por error).
     bool getDnnIsActive() const {
-        return useDfn3_ ? dfn3Denoiser_.isActive() : dnnDenoiser_.isActive();
+#ifdef ENABLE_DFN3
+        if (useDfn3_) return dfn3Denoiser_.isActive();
+#endif
+        return dnnDenoiser_.isActive();
     }
     /// @return true si el flag de configuración enabled está en true.
     bool getDnnIsEnabled() const {
-        return useDfn3_ ? dfn3Denoiser_.isEnabled() : dnnDenoiser_.isEnabled();
+#ifdef ENABLE_DFN3
+        if (useDfn3_) return dfn3Denoiser_.isEnabled();
+#endif
+        return dnnDenoiser_.isEnabled();
     }
     /// @return total de hops procesados por el worker del DNN.
     uint64_t getDnnProcessedFrames() const { return dnnDenoiser_.getProcessedFrames(); }
@@ -417,7 +425,9 @@ private:
     /// reemplaza completamente al GTCRN (dnnDenoiser_). La selección se
     /// hace en initDnnDenoiser: si los modelos DFN3 están en assets/dfn3/,
     /// se usa DFN3; si no, se cae al GTCRN como fallback.
+#ifdef ENABLE_DFN3
     dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
+#endif
     /// true cuando DFN3 es el motor activo (en vez de GTCRN).
     bool useDfn3_ = false;
 
