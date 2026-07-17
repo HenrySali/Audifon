@@ -499,20 +499,13 @@ int32_t AudioEngine::getInputSessionId() const {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── DeepFilterNet3 (preferido si los modelos están disponibles) ─────
-    // DFN3 opera a 48 kHz nativo, sin resampler, con mejor calidad (PESQ 3.3).
-    // Se intenta primero; si los ONNX no están en assets/dfn3/, se cae al GTCRN.
+    // ─── DeepFilterNet3 (preferido si libdfn3.so está disponible) ────────
     {
-        // Los modelos DFN3 se cargan desde el filesystem (extraídos del APK
-        // al data dir por el Kotlin layer). La ruta se pasa como string.
-        // Aquí solo verificamos si el init via path funciona (el Kotlin
-        // extrae los assets a getFilesDir()/dfn3/ antes de llamar al init).
         const std::string dfn3Dir = "/data/data/com.psk.hearing_aid/files/dfn3";
         const bool okDfn3 = dfn3Denoiser_.initialize(dfn3Dir);
         if (okDfn3) {
             useDfn3_ = true;
             LOGI("initDnnDenoiser: DeepFilterNet3 activo (48 kHz nativo)");
-            // DFN3 reemplaza al GTCRN mono — no inicializar GTCRN.
             return true;
         }
         LOGI("initDnnDenoiser: DFN3 no disponible, usando GTCRN como fallback");
@@ -547,8 +540,6 @@ void AudioEngine::setDnnEnabled(bool enabled) {
     } else {
         dnnDenoiser_.setEnabled(enabled);
     }
-    // Si activamos el DNN, deshabilitamos el NR Wiener clásico para
-    // evitar doble denoising. Si desactivamos, restauramos el NR clásico.
     pipeline_.setNrBypassed(enabled);
     LOGI("setDnnEnabled: %d (useDfn3=%d) — NR Wiener bypassed: %d",
          enabled ? 1 : 0,
@@ -997,8 +988,6 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
-    // Si DFN3 está activo, lo usa directamente (48 kHz nativo, sin headroom
-    // stage necesario porque DFN3 no satura internamente). Si no, usa GTCRN.
     if (useDfn3_) {
         dfn3Denoiser_.process(outPtr, numFrames);
     } else {

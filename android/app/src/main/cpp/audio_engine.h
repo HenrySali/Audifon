@@ -234,11 +234,13 @@ public:
     void setDnnIntensity(float intensity);
     /// @return true si el DNN denoiser está procesando audio (no en bypass por error).
     bool getDnnIsActive() const {
-        return useDfn3_ ? dfn3Denoiser_.isActive() : dnnDenoiser_.isActive();
+        if (useDfn3_) return dfn3Denoiser_.isActive();
+        return dnnDenoiser_.isActive();
     }
     /// @return true si el flag de configuración enabled está en true.
     bool getDnnIsEnabled() const {
-        return useDfn3_ ? dfn3Denoiser_.isEnabled() : dnnDenoiser_.isEnabled();
+        if (useDfn3_) return dfn3Denoiser_.isEnabled();
+        return dnnDenoiser_.isEnabled();
     }
     /// @return total de hops procesados por el worker del DNN.
     uint64_t getDnnProcessedFrames() const { return dnnDenoiser_.getProcessedFrames(); }
@@ -415,8 +417,8 @@ private:
     // ─── DeepFilterNet3 (reemplazo de GTCRN) ─────────────────────────────
     /// Motor DFN3 (48 kHz nativo, tract/Rust backend). Cuando está activo,
     /// reemplaza completamente al GTCRN (dnnDenoiser_). La selección se
-    /// hace en initDnnDenoiser: si los modelos DFN3 están en assets/dfn3/,
-    /// se usa DFN3; si no, se cae al GTCRN como fallback.
+    /// hace en initDnnDenoiser: si libdfn3.so está disponible y los modelos
+    /// cargan, se usa DFN3; si no, cae a GTCRN automáticamente.
     dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
     /// true cuando DFN3 es el motor activo (en vez de GTCRN).
     bool useDfn3_ = false;
