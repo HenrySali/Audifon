@@ -499,22 +499,36 @@ int32_t AudioEngine::getInputSessionId() const {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── Instancia mono legacy (GTCRN mono, ONNXRuntime) ────────────────
+    // ─── DeepFilterNet3 (preferido si los modelos están disponibles) ─────
+    // DFN3 opera a 48 kHz nativo, sin resampler, con mejor calidad (PESQ 3.3).
+    // Se intenta primero; si los ONNX no están en assets/dfn3/, se cae al GTCRN.
+    {
+        // Los modelos DFN3 se cargan desde el filesystem (extraídos del APK
+        // al data dir por el Kotlin layer). La ruta se pasa como string.
+        // Aquí solo verificamos si el init via path funciona (el Kotlin
+        // extrae los assets a getFilesDir()/dfn3/ antes de llamar al init).
+        const std::string dfn3Dir = "/data/data/com.psk.hearing_aid/files/dfn3";
+        const bool okDfn3 = dfn3Denoiser_.initialize(dfn3Dir);
+        if (okDfn3) {
+            useDfn3_ = true;
+            LOGI("initDnnDenoiser: DeepFilterNet3 activo (48 kHz nativo)");
+            // DFN3 reemplaza al GTCRN mono — no inicializar GTCRN.
+            return true;
+        }
+        LOGI("initDnnDenoiser: DFN3 no disponible, usando GTCRN como fallback");
+    }
+
+    // ─── Fallback: GTCRN mono legacy (ONNXRuntime) ──────────────────────
     // Stage `process()` del chain post-realce, controlado por setDnnEnabled().
+    useDfn3_ = false;
     const bool okMono = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
     if (!okMono) {
         LOGW("initDnnDenoiser[mono]: model not loaded — mono DNN permanently bypassed");
     } else {
-        LOGI("initDnnDenoiser[mono]: model ready");
+        LOGI("initDnnDenoiser[mono]: GTCRN model ready");
     }
 
     // ─── Instancia dual-channel (GTCRN dual, ONNX + WPE beamformer) ────
-    // Motor de realce del modo kDualChannelDnn (spec gtcrn-dual-channel).
-    // Se inicializa aparte porque initialize()/initializeDual() son
-    // mutuamente excluyentes en el wrapper (cada uno arma UN worker para UN
-    // runtime). Si el .onnx no carga o el shape no coincide, la instancia
-    // queda en bypass seguro (processStereo -> ch0 passthrough) y el modo
-    // kDualChannelDnn se degrada a passthrough sin cortar el audio (R4.x).
     const bool okDual =
         dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_core.onnx");
     if (!okDual) {
@@ -524,25 +538,31 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
              static_cast<int>(dnnDenoiserDual_.inputChannels()));
     }
 
-    // Retornamos el estado del mono para no romper el contrato JNI existente
-    // (nativeInitDnnDenoiser). El estado del dual se consulta vía
-    // getEnhancementEngineMode + isActive de la instancia dual (tarea 5).
     return okMono;
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {
-    dnnDenoiser_.setEnabled(enabled);
+    if (useDfn3_) {
+        dfn3Denoiser_.setEnabled(enabled);
+    } else {
+        dnnDenoiser_.setEnabled(enabled);
+    }
     // Si activamos el DNN, deshabilitamos el NR Wiener clásico para
     // evitar doble denoising. Si desactivamos, restauramos el NR clásico.
     pipeline_.setNrBypassed(enabled);
-    LOGI("setDnnEnabled: %d (active=%d) — NR Wiener bypassed: %d",
+    LOGI("setDnnEnabled: %d (useDfn3=%d) — NR Wiener bypassed: %d",
          enabled ? 1 : 0,
-         dnnDenoiser_.isActive() ? 1 : 0,
+         useDfn3_ ? 1 : 0,
          enabled ? 1 : 0);
+}
 }
 
 void AudioEngine::setDnnIntensity(float intensity) {
-    dnnDenoiser_.setIntensity(intensity);
+    if (useDfn3_) {
+        dfn3Denoiser_.setIntensity(intensity);
+    } else {
+        dnnDenoiser_.setIntensity(intensity);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -977,14 +997,14 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         headroomHoldBlocks_ = 0;
     }
 
-    // ─── DNN Denoiser (GTCRN) — REEMPLAZA al NR Wiener cuando enabled ────
-    // Por contrato del wrapper:
-    //   - Si dnnDenoiser_.isEnabled() == false y crossfadeGain == 0 →
-    //     bypass bit-exact (sin tocar el buffer).
-    //   - Si está enabled o haciendo crossfade out → procesa.
-    // El DspPipeline ya está configurado (vía setNrBypassed) para no
-    // ejecutar el NR Wiener cuando el DNN está activo.
-    dnnDenoiser_.process(outPtr, numFrames);
+    // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
+    // Si DFN3 está activo, lo usa directamente (48 kHz nativo, sin headroom
+    // stage necesario porque DFN3 no satura internamente). Si no, usa GTCRN.
+    if (useDfn3_) {
+        dfn3Denoiser_.process(outPtr, numFrames);
+    } else {
+        dnnDenoiser_.process(outPtr, numFrames);
+    }
 
     // ─── Headroom Stage — restauración post-DNN (R2.3) ───────────────────
     // FIX tktktk (Causa 3): la restauración ahora compensa el headroomGain_
