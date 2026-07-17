@@ -555,7 +555,6 @@ void AudioEngine::setDnnEnabled(bool enabled) {
          useDfn3_ ? 1 : 0,
          enabled ? 1 : 0);
 }
-}
 
 void AudioEngine::setDnnIntensity(float intensity) {
     if (useDfn3_) {
