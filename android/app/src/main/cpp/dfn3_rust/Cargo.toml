@@ -9,10 +9,20 @@ name = "dfn3"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-# DeepFilterNet crate — includes DfTract, DfParams, RuntimeParams, DFState,
-# and re-exports tract internally. This is the ONLY dep needed for the full
-# DFN3 inference pipeline.
-df = { git = "https://github.com/Rikorose/DeepFilterNet.git", branch = "main", package = "deep_filter" }
+# DeepFilterNet's DSP utilities (STFT/iSTFT, ERB filterbank, deep filtering)
+# Only the base crate — no "tract" feature (it has internal incompatibilities with tract 0.21.17)
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", rev = "d375b2d8309e0935d165700c91da9de862a99c31" }
+
+# tract core + ONNX loader (pulsed model support for streaming)
+tract-onnx = "0.21"
+tract-core = "0.21"
+tract-hir = "0.21"
+
+# ndarray for ArrayView2 / ArrayViewMut2
+ndarray = "0.15"
+
+# Complex number type
+num-complex = "0.4"
 
 # Logging via android logcat
 android_logger = "0.14"
@@ -20,9 +30,6 @@ log = "0.4"
 
 # For safe FFI pointer management
 once_cell = "1.19"
-
-# ndarray for ArrayView2 construction
-ndarray = "0.15"
 
 [profile.release]
 opt-level = 3
