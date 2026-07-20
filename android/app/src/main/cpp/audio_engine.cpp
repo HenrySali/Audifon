@@ -17,11 +17,13 @@
 #include <android/api-level.h>
 #include <android/asset_manager.h>
 #include <cstring>
+#include <cstdio>   // FILE, fopen/fwrite (extracción de modelos DFN3)
 #include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <thread>
 #include <time.h>   // clock_gettime, CLOCK_MONOTONIC (latency monitor)
+#include <sys/stat.h>  // mkdir, stat (extracción de modelos DFN3)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logging
@@ -496,19 +498,96 @@ int32_t AudioEngine::getInputSessionId() const {
 // DNN Denoiser (GTCRN) — wrappers thin sobre dnnDenoiser_
 // ─────────────────────────────────────────────────────────────────────────────
 
+namespace {
+
+/// Copia un asset (empaquetado en el APK) a un archivo del filesystem.
+/// DFN3 carga sus modelos por RUTA de filesystem (no por AssetManager), así
+/// que hay que extraerlos primero a la carpeta interna de la app.
+bool copyAssetToFile(AAssetManager* mgr, const char* assetPath,
+                     const std::string& destPath) {
+    AAsset* asset = AAssetManager_open(mgr, assetPath, AASSET_MODE_STREAMING);
+    if (asset == nullptr) {
+        LOGW("copyAssetToFile: no se pudo abrir asset '%s'", assetPath);
+        return false;
+    }
+    FILE* out = std::fopen(destPath.c_str(), "wb");
+    if (out == nullptr) {
+        LOGW("copyAssetToFile: no se pudo crear '%s'", destPath.c_str());
+        AAsset_close(asset);
+        return false;
+    }
+    char buf[8192];
+    int n;
+    bool ok = true;
+    while ((n = AAsset_read(asset, buf, sizeof(buf))) > 0) {
+        if (std::fwrite(buf, 1, static_cast<size_t>(n), out) !=
+            static_cast<size_t>(n)) {
+            ok = false;
+            break;
+        }
+    }
+    if (n < 0) ok = false;
+    std::fclose(out);
+    AAsset_close(asset);
+    return ok;
+}
+
+/// true si el archivo existe y tiene tamaño > 0.
+bool fileExistsNonEmpty(const std::string& p) {
+    struct stat st{};
+    return ::stat(p.c_str(), &st) == 0 && st.st_size > 0;
+}
+
+/// Extrae los 3 modelos ONNX de DeepFilterNet3 desde assets/dfn3/ a `destDir`.
+/// Idempotente: si un modelo ya está copiado (existe y no vacío), no lo recopia.
+/// @return true si los 3 modelos quedaron disponibles en destDir.
+bool extractDfn3Models(AAssetManager* mgr, const std::string& destDir) {
+    if (mgr == nullptr) {
+        LOGW("extractDfn3Models: AAssetManager nulo — no se pueden extraer modelos");
+        return false;
+    }
+    // Crea la carpeta destino (el padre files/ ya existe en la app).
+    ::mkdir(destDir.c_str(), 0770);
+
+    const char* models[] = {"df_dec.onnx", "enc.onnx", "erb_dec.onnx"};
+    for (const char* m : models) {
+        const std::string dest = destDir + "/" + m;
+        if (fileExistsNonEmpty(dest)) {
+            continue;  // ya extraído en un arranque anterior
+        }
+        const std::string assetPath = std::string("dfn3/") + m;
+        if (!copyAssetToFile(mgr, assetPath.c_str(), dest)) {
+            LOGW("extractDfn3Models: fallo copiando '%s'", m);
+            return false;
+        }
+        LOGI("extractDfn3Models: extraído '%s'", dest.c_str());
+    }
+    return true;
+}
+
+}  // namespace
+
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
     // ─── DeepFilterNet3 (preferido si libdfn3.so está disponible) ────────
     {
-        const std::string dfn3Dir = "/data/data/com.psk.hearing_aid/files/dfn3";
-        const bool okDfn3 = dfn3Denoiser_.initialize(dfn3Dir);
+        // Ruta interna correcta: el applicationId real es
+        // com.psk.hearing_aid_app (antes estaba hardcodeado sin "_app", por lo
+        // que la carpeta no existía y DFN3 siempre caía a GTCRN).
+        const std::string dfn3Dir =
+            "/data/data/com.psk.hearing_aid_app/files/dfn3";
+        // DFN3 carga los modelos por ruta de filesystem; hay que extraerlos
+        // desde assets/dfn3/ a la carpeta interna antes de inicializar.
+        const bool extracted = extractDfn3Models(mgr, dfn3Dir);
+        const bool okDfn3 = extracted && dfn3Denoiser_.initialize(dfn3Dir);
         if (okDfn3) {
             useDfn3_ = true;
             LOGI("initDnnDenoiser: DeepFilterNet3 activo (48 kHz nativo)");
             return true;
         }
-        LOGI("initDnnDenoiser: DFN3 no disponible, usando GTCRN como fallback");
+        LOGI("initDnnDenoiser: DFN3 no disponible (extracted=%d), usando GTCRN como fallback",
+             extracted ? 1 : 0);
     }
 
     // ─── Fallback: GTCRN mono legacy (ONNXRuntime) ──────────────────────
