@@ -9,3 +9,6 @@ android/app/src/main/assets/dnn_denoiser/*.ptl filter=lfs diff=lfs merge=lfs -te
 
 # Native shared libraries
 android/app/src/main/jniLibs/**/*.so filter=lfs diff=lfs merge=lfs -text
+
+# libdfn3.so se versiona como blob crudo (consistente con otros .so del repo); evita objeto LFS corrupto
+android/app/src/main/jniLibs/arm64-v8a/libdfn3.so -filter -diff -merge -text
