@@ -95,7 +95,10 @@ jobs:
           EOF
 
       - name: Build APK
-        run: flutter build apk --release --obfuscate --split-debug-info=build/debug-info -t lib/main_with_code.dart --dart-define=HMAC_SECRET=${{ secrets.HMAC_SECRET }}
+        # NOTA: --obfuscate rompe el denoiser DNN (los símbolos que resuelve
+        # dlsym/JNI quedan mangleados y el motor nativo crashea al arrancar).
+        # Por eso se compila SIN ofuscar (igual que el build local que funciona).
+        run: flutter build apk --release -t lib/main_with_code.dart --dart-define=HMAC_SECRET=${{ secrets.HMAC_SECRET }}
 
       - name: Rename APK to oir-pro-con-codigo.apk
         run: |
