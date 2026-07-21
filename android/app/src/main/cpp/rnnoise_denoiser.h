@@ -1,9 +1,9 @@
 /// @file rnnoise_denoiser.h
 /// @brief RNNoise (Xiph) C++ wrapper for the Audifon audio engine.
 ///
-/// Static linking of xiph/rnnoise v0.1.1 — the classic tiny model (~416 KB
-/// source, ~90 KB after -O3) used in production by OBS Studio, Mumble,
-/// ffmpeg (arnndn filter), and many hearing aid research prototypes.
+/// Static linking of xiph/rnnoise v0.1.1 — the classic tiny model used in
+/// production by OBS Studio, Mumble, ffmpeg (arnndn filter), and many
+/// hearing aid research prototypes.
 ///
 /// Pipeline position (same slot as Dfn3Denoiser / DnnDenoiser):
 ///
@@ -11,26 +11,15 @@
 ///
 /// Key characteristics:
 ///   - 48 kHz native (no resampler)
-///   - Frame size 480 samples (10 ms) — same as DFN3, matches Oboe bursts
-///   - ~10 ms algorithmic latency, ~0.1 ms compute on arm64 (single core)
-///   - Model baked into the .so (no filesystem I/O, no asset extraction)
-///   - BSD 3-Clause license — compatible with the app
+///   - Frame size 480 samples (10 ms)
+///   - Model baked into the .so (~90 KB compiled)
+///   - BSD 3-Clause license
 ///
-/// Compared to the alternatives in this project:
-///   - GTCRN (ONNX)   : better SNR floor but ~2 MB model, needs OnnxRuntime
-///   - DFN3 (Rust)    : best quality (~PESQ 3.3) but 8 MB models + dlopen
-///                      of libdfn3.so; SIGABRT crash observed in runtime
-///   - RNNoise        : most stable in production, tiniest footprint,
-///                      slightly lower SNR floor than GTCRN/DFN3 but zero
-///                      artifacts and zero crash surface — the safe pick
-///                      for shipping to end users.
-///
-/// THREAD SAFETY:
-///   - process(): safe from audio thread. No allocation. No lock. State is
-///     private to the instance; RNNoise's internal `DenoiseState` is single-
-///     threaded so we access it only from the audio thread.
-///   - setEnabled/setIntensity: thread-safe (atomic).
-///   - initialize()/destroy(): NOT thread-safe; call ONCE at startup.
+/// LATENCY: exactly one hop (~10 ms) after the first buffered hop lands.
+/// Every input sample eventually leaves as wet — no intermittent
+/// pass-through samples (that was the bug that made toggling appear to
+/// have no effect: with Oboe bursts of 256 samples and hops of 480,
+/// the previous "DFN3-style" algorithm left ~50 % of samples untouched).
 
 #ifndef HEARING_AID_RNNOISE_DENOISER_H
 #define HEARING_AID_RNNOISE_DENOISER_H
@@ -38,7 +27,7 @@
 #include <atomic>
 #include <cstdint>
 
-// Forward decl of RNNoise's opaque state (defined in rnnoise/include/rnnoise.h).
+// Forward decl of RNNoise's opaque state.
 struct DenoiseState;
 
 namespace rnnoise_denoiser {
@@ -60,9 +49,6 @@ static constexpr float kInt16Scale = 32768.0f;
 static constexpr float kInt16InvScale = 1.0f / 32768.0f;
 
 /// C++ wrapper around xiph/rnnoise DenoiseState.
-///
-/// Provides the same interface shape as Dfn3Denoiser so audio_engine can
-/// dispatch to any denoiser via a single flag.
 class RnnoiseDenoiser {
 public:
     RnnoiseDenoiser() = default;
@@ -71,64 +57,25 @@ public:
     RnnoiseDenoiser(const RnnoiseDenoiser&) = delete;
     RnnoiseDenoiser& operator=(const RnnoiseDenoiser&) = delete;
 
-    /// Initialize: allocate the DenoiseState with the default (baked-in) model.
-    /// @return true if allocation succeeded and engine is ready.
     bool initialize();
-
-    /// Process audio in-place. Call from audio thread only.
-    /// Handles crossfade on enable/disable, intensity mixing, clamping,
-    /// and non-hop-aligned block sizes via an internal residual buffer.
-    /// If not enabled and crossfade has fully faded out, the buffer is
-    /// left untouched (bypass).
-    ///
-    /// @param buffer     Float audio [-1,+1] at 48 kHz. Modified in-place.
-    /// @param blockSize  Number of samples. Any positive value accepted;
-    ///                   full 480-sample hops are processed and any tail
-    ///                   is stashed for the next call.
     void process(float* buffer, int blockSize);
-
-    /// Enable/disable the denoiser (with 50 ms crossfade).
     void setEnabled(bool enabled);
-
-    /// Set user intensity [0.0, 1.0].
-    /// 1.0 = fully denoised output, 0.0 = passthrough. Applied as a
-    /// linear dry/wet mix on top of the crossfade.
     void setIntensity(float intensity);
 
     // ─── Getters (thread-safe) ─────────────────────────────────────────
     bool isEnabled() const { return enabled_.load(std::memory_order_acquire); }
-    /// isActive == initialized and ready to process. Independent of the
-    /// enabled flag (an initialized denoiser that is currently in bypass
-    /// still reports isActive() == true).
     bool isActive() const { return initialized_ && state_ != nullptr; }
     float getIntensity() const {
         return intensity_.load(std::memory_order_acquire);
     }
     float getEffectiveIntensity() const { return effectiveIntensity_; }
-
-    /// Last VAD probability returned by RNNoise for the most recent frame
-    /// (in [0,1]). Useful for UI-side speech detection or as a gate signal.
     float getLastVadProb() const {
         return lastVadProb_.load(std::memory_order_acquire);
     }
-
-    /// Total number of 480-sample hops actually processed by RNNoise.
-    /// Increments once per `rnnoise_process_frame` call in `process()`.
-    /// Read by AudioEngine::getDnnProcessedFrames() to feed the UI card
-    /// "Limpiador de ruido (IA)" — the "Frames: X" line. Without dispatch
-    /// through the active engine, that line would stay at 0 even when
-    /// RNNoise is denoising (regression seen 2026-07-21).
     uint64_t getProcessedFrames() const {
         return processedFrames_.load(std::memory_order_acquire);
     }
-
-    /// RNNoise runs synchronously on the audio thread with a fixed cost,
-    /// so there is no drop queue. Kept for API parity with DnnDenoiser (GTCRN)
-    /// which has an async worker + SPSC ring buffer that can overflow.
-    uint64_t getDroppedFrames() const { return 0; }
-
-    /// Microseconds spent inside `rnnoise_process_frame` for the LAST hop.
-    /// On arm64 this is ~50-200 us. Reported in the UI as "Inferencia: X ms".
+    uint64_t getDroppedFrames() const { return 0; }  // synchronous engine
     uint32_t getLastInferenceUs() const {
         return lastInferenceUs_.load(std::memory_order_acquire);
     }
@@ -141,30 +88,35 @@ private:
     std::atomic<bool> enabled_{false};
     std::atomic<float> intensity_{0.6f};
     std::atomic<float> lastVadProb_{0.0f};
-
-    /// Total hops processed (for the UI diagnostics panel).
     std::atomic<uint64_t> processedFrames_{0};
-    /// Wall-clock us spent inside the last `rnnoise_process_frame`.
     std::atomic<uint32_t> lastInferenceUs_{0};
 
     /// Crossfade state (audio thread only).
     float crossfadeGain_ = 0.0f;
     float crossfadeTarget_ = 0.0f;
-
-    /// Effective intensity after crossfade (for diagnostics).
     float effectiveIntensity_ = 0.0f;
 
-    /// Residual input buffer for hop assembly across audio callback
-    /// boundaries. Filled up to kFrameSize before RNNoise is called.
-    /// Same pattern as Dfn3Denoiser (see dfn3_denoiser.cpp) so the two
-    /// engines have identical timing behaviour.
-    float residualIn_[kFrameSize];
-    int residualCount_ = 0;
-    /// Kept for ABI stability of a previous revision; unused by the
-    /// current DFN3-style algorithm (residual output is written directly
-    /// back to the audio buffer via the idx = pos - kFrameSize + i map).
-    float residualOut_[kFrameSize];
-    int residualOutRemaining_ = 0;
+    // ─── Ring-buffer state (audio thread only) ─────────────────────────
+    //
+    // inBuffer_ accumulates dry input samples until we have a full hop.
+    // outBuffer_ holds wet samples ready to be drained sample-by-sample
+    // into the audio callback's buffer.
+    //
+    // Invariants:
+    //   0 <= inCount_ < kFrameSize                     (partial hop being filled)
+    //   0 <= outStart_ <= outAvail_ + outStart_ <= kFrameSize
+    //   When inCount_ hits kFrameSize we run RNNoise and refill outBuffer_.
+    //
+    // Latency: at cold start we drain nothing until we've accumulated
+    // kFrameSize samples of input (i.e. up to 10 ms of dry passthrough).
+    // After that, every audio callback sample is denoised. The 10 ms delay
+    // between "sample enters" and "sample leaves as wet" is intrinsic to
+    // hop-based DNN denoising.
+    float inBuffer_[kFrameSize];
+    float outBuffer_[kFrameSize];
+    int inCount_ = 0;
+    int outStart_ = 0;
+    int outAvail_ = 0;
 };
 
 }  // namespace rnnoise_denoiser

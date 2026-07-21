@@ -1040,7 +1040,10 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     //   - Peak > umbral → attack rápido (~2 ms) hacia 0.5
     //   - Peak < umbral → hold N bloques, luego release lento (~20 ms) hacia 1.0
     //   - DNN deshabilitado → release inmediato (sin headroom necesario)
-    if (dnnDenoiser_.isEnabled()) {
+    // Dispatch al motor activo (useRnnoise_ / useDfn3_ / GTCRN) vía el
+    // getter unificado. Antes leía hardcoded de dnnDenoiser_ (GTCRN) y
+    // por eso el headroom no se aplicaba cuando RNNoise era el motor.
+    if (getDnnIsEnabled()) {
         float peakSample = 0.0f;
         for (int i = 0; i < numFrames; ++i) {
             float absVal = std::fabs(outPtr[i]);
@@ -1138,8 +1141,11 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         postDnnLevelDb = 20.0f * std::log10(rms) + config_.splOffset;
     }
     const float dnnAttenDb = lastPreDnnLevelDb_ - postDnnLevelDb;
+    // Dispatch al motor activo — antes leía dnnDenoiser_.isEnabled() (GTCRN)
+    // hardcoded, con lo cual el WDRC siempre usaba el nivel pre-DNN aunque
+    // RNNoise estuviera atenuando (WDRC sobre-comprimía la voz limpia).
     const float wdrcInputLevelDb =
-        (dnnDenoiser_.isEnabled() && dnnAttenDb > 3.0f)
+        (getDnnIsEnabled() && dnnAttenDb > 3.0f)
             ? postDnnLevelDb
             : lastPreDnnLevelDb_;
 
