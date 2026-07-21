@@ -570,6 +570,28 @@ bool extractDfn3Models(AAssetManager* mgr, const std::string& destDir) {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
+    // ─── Prioridad 1: RNNoise (xiph, static link) ──────────────────────
+    // Motor primario recomendado (2026): xiph/rnnoise v0.1.1 con el
+    // modelo tiny (~90 KB) usado en producción por OBS Studio, Mumble,
+    // ffmpeg (arnndn) y prototipos de audífonos publicados. Ventajas
+    // frente a las alternativas que crashearon en runtime en este repo:
+    //   - Static link: no dlopen, no libdfn3.so, no SIGABRT por
+    //     "index out of bounds 481" (tombstone del 2026-07-20).
+    //   - Modelo baked-in: no hay extracción desde assets, no hay
+    //     rutas a filesystem que puedan romperse tras --obfuscate.
+    //   - 48 kHz nativo, frame 480 samples: alineado con Oboe bursts.
+    //   - 0 alloc en el hot path, ~0.1 ms compute en arm64 single core.
+    //   - BSD-3-Clause: sin fricciones de licencia.
+    // Si initialize() fallara (por ej. OOM), caemos a DFN3/GTCRN abajo.
+    useRnnoise_ = rnnoiseDenoiser_.initialize();
+    if (useRnnoise_) {
+        LOGI("initDnnDenoiser: RNNoise activo (motor primario, static link)");
+        // Todavía inicializamos GTCRN dual abajo para el modo
+        // kDualChannelDnn (que no lo cubre RNNoise por ser mono).
+    } else {
+        LOGW("initDnnDenoiser: RNNoise no arrancó — probando DFN3/GTCRN");
+    }
+
     // ─── DeepFilterNet3 DESACTIVADO temporalmente ──────────────────────
     // libdfn3.so (Rust) crashea en runtime con `index out of bounds:
     // the len is 481 but the index is 481` en algunos dispositivos
@@ -579,11 +601,15 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     // Tombstone: data_app_native_crash 2026-07-20 en libdfn3.so + Abort
     // 'index out of bounds: the len is 481 but the index is 481'.
     useDfn3_ = false;
-    LOGI("initDnnDenoiser: DFN3 desactivado por bug runtime; usando GTCRN");
+    if (!useRnnoise_) {
+        LOGI("initDnnDenoiser: DFN3 desactivado por bug runtime; usando GTCRN");
+    }
 
-    // ─── Fallback: GTCRN mono legacy (ONNXRuntime) ──────────────────────
+    // ─── Fallback final: GTCRN mono legacy (ONNXRuntime) ────────────────
     // Stage `process()` del chain post-realce, controlado por setDnnEnabled().
-    useDfn3_ = false;
+    // Sigue inicializándose incluso con RNNoise activo, para que la instancia
+    // dual (dnnDenoiserDual_) — que usa el mismo AssetManager y modelo ONNX
+    // — no quede sin cargar (spec gtcrn-dual-channel).
     const bool okMono = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
     if (!okMono) {
         LOGW("initDnnDenoiser[mono]: model not loaded — mono DNN permanently bypassed");
@@ -605,20 +631,24 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {
-    if (useDfn3_) {
+    if (useRnnoise_) {
+        rnnoiseDenoiser_.setEnabled(enabled);
+    } else if (useDfn3_) {
         dfn3Denoiser_.setEnabled(enabled);
     } else {
         dnnDenoiser_.setEnabled(enabled);
     }
     pipeline_.setNrBypassed(enabled);
-    LOGI("setDnnEnabled: %d (useDfn3=%d) — NR Wiener bypassed: %d",
+    LOGI("setDnnEnabled: %d (engine: %s) — NR Wiener bypassed: %d",
          enabled ? 1 : 0,
-         useDfn3_ ? 1 : 0,
+         useRnnoise_ ? "RNNoise" : (useDfn3_ ? "DFN3" : "GTCRN"),
          enabled ? 1 : 0);
 }
 
 void AudioEngine::setDnnIntensity(float intensity) {
-    if (useDfn3_) {
+    if (useRnnoise_) {
+        rnnoiseDenoiser_.setIntensity(intensity);
+    } else if (useDfn3_) {
         dfn3Denoiser_.setIntensity(intensity);
     } else {
         dnnDenoiser_.setIntensity(intensity);
@@ -1058,7 +1088,11 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
-    if (useDfn3_) {
+    // Prioridad: RNNoise (primario, static link) > DFN3 (dlopen) > GTCRN (ONNX).
+    // La selección quedó fijada en initDnnDenoiser vía useRnnoise_/useDfn3_.
+    if (useRnnoise_) {
+        rnnoiseDenoiser_.process(outPtr, numFrames);
+    } else if (useDfn3_) {
         dfn3Denoiser_.process(outPtr, numFrames);
     } else {
         dnnDenoiser_.process(outPtr, numFrames);
