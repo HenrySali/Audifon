@@ -4578,6 +4578,37 @@ class AmplificationBloc
     final previousClass = _lastSceneClass;
     _lastSceneClass = result.sceneClass;
 
+    // ─── Personal-preset guard ──────────────────────────────────────────
+    // Si el usuario configuró manualmente el preset "Personal" (built-in
+    // con sus 3 sliders graves/medios/agudos persistidos en Hive) y la
+    // escena detectada es ruidosa, respetamos su elección y NO sobre-
+    // escribimos con el preset "Ruidoso" automático.
+    //
+    // Rationale UX: en ambientes muy ruidosos el usuario prefiere quedarse
+    // con su ajuste manual (que ya conoce y le funciona) antes que dejar
+    // que el clasificador decida por él. El polling sigue midiendo, sólo
+    // cambia el auto-apply.
+    //
+    // El cap del DNN (setDnnIntensity) sí se aplica siempre, porque solo
+    // limita la agresividad del denoiser, no cambia el preset del EQ/WDRC.
+    final currentActivePreset = _getCurrentActiveEqPreset();
+    final isNoisyScene =
+        result.sceneClass == SceneClass.noiseLowDominant ||
+        result.sceneClass == SceneClass.noiseHighDominant ||
+        result.sceneClass == SceneClass.voiceInNoiseMid;
+    if (currentActivePreset == 'Personal' && isNoisyScene) {
+      developer.log(
+        'Smart auto: escena ruidosa (${result.sceneClass.name}) detectada, '
+        'preset "Personal" activo — se respeta configuración manual, '
+        'no se aplica preset automático.',
+        name: 'SmartAutoV2',
+        level: 300,
+      );
+      // Backward-compat: actualizar _lastEnvClass para el chip indicador.
+      _lastEnvClass = _sceneClassToEnvClass(result.sceneClass);
+      return;
+    }
+
     // Aplicar preset completo automáticamente
     try {
       await _sceneEngine!.apply(result, bloc: this);
@@ -4603,6 +4634,20 @@ class AmplificationBloc
     // Backward-compat: actualizar también _lastEnvClass para el chip
     // indicador de escena en main_screen.dart (mapea SceneClass → int)
     _lastEnvClass = _sceneClassToEnvClass(result.sceneClass);
+  }
+
+  /// Helper: obtiene el nombre del preset del EQ actualmente activo
+  /// desde el estado del bloc. Usado por el guard del preset "Personal"
+  /// en `_onSmartPollV2` para no pisar la configuración manual del
+  /// usuario cuando el clasificador automático detecta escena ruidosa.
+  ///
+  /// Devuelve null si no hay estado activo (idle o pause).
+  String? _getCurrentActiveEqPreset() {
+    final st = state;
+    if (st is AmplificationActive) {
+      return st.activeEqPreset;
+    }
+    return null;
   }
 
   /// Helper: obtiene el EnvironmentProfile activo actual para pasarlo
