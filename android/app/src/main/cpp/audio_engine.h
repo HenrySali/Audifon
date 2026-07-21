@@ -16,6 +16,7 @@
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
 #include "dfn3_denoiser.h"
+#include "rnnoise_denoiser.h"
 #include "latency_loopback_tester.h"
 #include "mvdr_beamformer.h"
 
@@ -234,11 +235,13 @@ public:
     void setDnnIntensity(float intensity);
     /// @return true si el DNN denoiser está procesando audio (no en bypass por error).
     bool getDnnIsActive() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.isActive();
         if (useDfn3_) return dfn3Denoiser_.isActive();
         return dnnDenoiser_.isActive();
     }
     /// @return true si el flag de configuración enabled está en true.
     bool getDnnIsEnabled() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.isEnabled();
         if (useDfn3_) return dfn3Denoiser_.isEnabled();
         return dnnDenoiser_.isEnabled();
     }
@@ -422,6 +425,20 @@ private:
     dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
     /// true cuando DFN3 es el motor activo (en vez de GTCRN).
     bool useDfn3_ = false;
+
+    // ─── RNNoise (xiph, static link, motor primario recomendado) ─────────
+    /// Motor RNNoise (48 kHz nativo, C statically linked). Cuando está
+    /// activo, reemplaza completamente a GTCRN y DFN3. Se prioriza en
+    /// `initDnnDenoiser` porque:
+    ///   - no requiere .so externo (evita crashes tipo libdfn3 SIGABRT),
+    ///   - no requiere modelo por filesystem (todo en el binario),
+    ///   - modelo tiny (~90 KB) probado en producción (OBS, Mumble, ffmpeg),
+    ///   - misma frame size que DFN3 (480 @ 48 kHz), 0 alloc en el hot path.
+    /// Si `initialize()` falla, se cae a DFN3 (si libdfn3.so disponible) o a
+    /// GTCRN. Mutuamente exclusivo con useDfn3_.
+    rnnoise_denoiser::RnnoiseDenoiser rnnoiseDenoiser_;
+    /// true cuando RNNoise es el motor activo (en vez de GTCRN o DFN3).
+    bool useRnnoise_ = false;
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.
