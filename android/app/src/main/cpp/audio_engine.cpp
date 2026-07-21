@@ -570,25 +570,16 @@ bool extractDfn3Models(AAssetManager* mgr, const std::string& destDir) {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── DeepFilterNet3 (preferido si libdfn3.so está disponible) ────────
-    {
-        // Ruta interna correcta: el applicationId real es
-        // com.psk.hearing_aid_app (antes estaba hardcodeado sin "_app", por lo
-        // que la carpeta no existía y DFN3 siempre caía a GTCRN).
-        const std::string dfn3Dir =
-            "/data/data/com.psk.hearing_aid_app/files/dfn3";
-        // DFN3 carga los modelos por ruta de filesystem; hay que extraerlos
-        // desde assets/dfn3/ a la carpeta interna antes de inicializar.
-        const bool extracted = extractDfn3Models(mgr, dfn3Dir);
-        const bool okDfn3 = extracted && dfn3Denoiser_.initialize(dfn3Dir);
-        if (okDfn3) {
-            useDfn3_ = true;
-            LOGI("initDnnDenoiser: DeepFilterNet3 activo (48 kHz nativo)");
-            return true;
-        }
-        LOGI("initDnnDenoiser: DFN3 no disponible (extracted=%d), usando GTCRN como fallback",
-             extracted ? 1 : 0);
-    }
+    // ─── DeepFilterNet3 DESACTIVADO temporalmente ──────────────────────
+    // libdfn3.so (Rust) crashea en runtime con `index out of bounds:
+    // the len is 481 but the index is 481` en algunos dispositivos
+    // (confirmado en Motorola devon_g, panic durante process_hop).
+    // Es un bug adentro del engine Rust; hasta que se recompile el .so
+    // corregido, forzamos GTCRN que funciona estable.
+    // Tombstone: data_app_native_crash 2026-07-20 en libdfn3.so + Abort
+    // 'index out of bounds: the len is 481 but the index is 481'.
+    useDfn3_ = false;
+    LOGI("initDnnDenoiser: DFN3 desactivado por bug runtime; usando GTCRN");
 
     // ─── Fallback: GTCRN mono legacy (ONNXRuntime) ──────────────────────
     // Stage `process()` del chain post-realce, controlado por setDnnEnabled().
