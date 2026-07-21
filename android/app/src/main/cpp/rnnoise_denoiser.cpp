@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <android/log.h>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -144,7 +145,18 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
         for (int i = 0; i < kFrameSize; ++i) {
             scaled[i] = residualIn_[i] * kInt16Scale;
         }
+        // Time the inference so the UI diagnostics panel can report it
+        // ("Inferencia: X ms"). steady_clock is monotonic and safe on
+        // the audio thread on Android (no syscall beyond vDSO on arm64).
+        const auto t0 = std::chrono::steady_clock::now();
         const float vad = rnnoise_process_frame(state_, scaled, scaled);
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            t1 - t0)
+                            .count();
+        lastInferenceUs_.store(static_cast<uint32_t>(us),
+                               std::memory_order_release);
+        processedFrames_.fetch_add(1, std::memory_order_relaxed);
         lastVadProb_.store(vad, std::memory_order_release);
 
         // Wet output samples, dry/wet mixed per-sample with rolling crossfade.

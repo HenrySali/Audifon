@@ -112,6 +112,27 @@ public:
         return lastVadProb_.load(std::memory_order_acquire);
     }
 
+    /// Total number of 480-sample hops actually processed by RNNoise.
+    /// Increments once per `rnnoise_process_frame` call in `process()`.
+    /// Read by AudioEngine::getDnnProcessedFrames() to feed the UI card
+    /// "Limpiador de ruido (IA)" — the "Frames: X" line. Without dispatch
+    /// through the active engine, that line would stay at 0 even when
+    /// RNNoise is denoising (regression seen 2026-07-21).
+    uint64_t getProcessedFrames() const {
+        return processedFrames_.load(std::memory_order_acquire);
+    }
+
+    /// RNNoise runs synchronously on the audio thread with a fixed cost,
+    /// so there is no drop queue. Kept for API parity with DnnDenoiser (GTCRN)
+    /// which has an async worker + SPSC ring buffer that can overflow.
+    uint64_t getDroppedFrames() const { return 0; }
+
+    /// Microseconds spent inside `rnnoise_process_frame` for the LAST hop.
+    /// On arm64 this is ~50-200 us. Reported in the UI as "Inferencia: X ms".
+    uint32_t getLastInferenceUs() const {
+        return lastInferenceUs_.load(std::memory_order_acquire);
+    }
+
 private:
     /// Opaque state from rnnoise/include/rnnoise.h.
     DenoiseState* state_ = nullptr;
@@ -120,6 +141,11 @@ private:
     std::atomic<bool> enabled_{false};
     std::atomic<float> intensity_{0.6f};
     std::atomic<float> lastVadProb_{0.0f};
+
+    /// Total hops processed (for the UI diagnostics panel).
+    std::atomic<uint64_t> processedFrames_{0};
+    /// Wall-clock us spent inside the last `rnnoise_process_frame`.
+    std::atomic<uint32_t> lastInferenceUs_{0};
 
     /// Crossfade state (audio thread only).
     float crossfadeGain_ = 0.0f;

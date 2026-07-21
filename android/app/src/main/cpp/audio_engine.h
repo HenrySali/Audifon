@@ -245,16 +245,37 @@ public:
         if (useDfn3_) return dfn3Denoiser_.isEnabled();
         return dnnDenoiser_.isEnabled();
     }
-    /// @return total de hops procesados por el worker del DNN.
-    uint64_t getDnnProcessedFrames() const { return dnnDenoiser_.getProcessedFrames(); }
-    /// @return total de frames descartados por congestión del worker.
-    uint64_t getDnnDroppedFrames() const { return dnnDenoiser_.getDroppedFrames(); }
-    /// @return microsegundos de la última inferencia ONNX.
-    uint32_t getDnnLastInferenceUs() const { return dnnDenoiser_.getLastInferenceUs(); }
+    /// @return total de hops procesados por el motor DNN activo.
+    /// Dispatch a RNNoise / DFN3 / GTCRN según cuál esté activo. Sin este
+    /// switch la UI reportaba siempre 0 cuando RNNoise/DFN3 corría
+    /// (bug observado 2026-07-21: card "Limpiador de ruido (IA)" mostraba
+    /// Frames: 0 e Inferencia: 0.0 ms aunque RNNoise sí estuviera
+    /// procesando — screenshot del usuario).
+    uint64_t getDnnProcessedFrames() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.getProcessedFrames();
+        return dnnDenoiser_.getProcessedFrames();
+    }
+    /// @return total de frames descartados. RNNoise es síncrono → siempre 0.
+    uint64_t getDnnDroppedFrames() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.getDroppedFrames();
+        return dnnDenoiser_.getDroppedFrames();
+    }
+    /// @return microsegundos de la última inferencia del motor activo.
+    uint32_t getDnnLastInferenceUs() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.getLastInferenceUs();
+        return dnnDenoiser_.getLastInferenceUs();
+    }
     /// @return intensidad efectiva post-VAD-cap (valor aplicado en mezcla).
-    float getDnnEffectiveIntensity() const { return dnnDenoiser_.getEffectiveIntensity(); }
-    /// @return intensidad del usuario (slider).
-    float getDnnUserIntensity() const { return dnnDenoiser_.getIntensity(); }
+    /// Dispatch al motor activo (mismo motivo que getDnnProcessedFrames).
+    float getDnnEffectiveIntensity() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.getEffectiveIntensity();
+        return dnnDenoiser_.getEffectiveIntensity();
+    }
+    /// @return intensidad del usuario (slider). Dispatch al motor activo.
+    float getDnnUserIntensity() const {
+        if (useRnnoise_) return rnnoiseDenoiser_.getIntensity();
+        return dnnDenoiser_.getIntensity();
+    }
     /// @return canales de entrada del modelo (1=mono, 2=dual).
     int getDnnInputChannels() const { return dnnDenoiser_.inputChannels(); }
 
