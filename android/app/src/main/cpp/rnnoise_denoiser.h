@@ -154,12 +154,16 @@ private:
     /// Effective intensity after crossfade (for diagnostics).
     float effectiveIntensity_ = 0.0f;
 
-    /// Residual buffer for non-hop-aligned block sizes.
+    /// Residual input buffer for hop assembly across audio callback
+    /// boundaries. Filled up to kFrameSize before RNNoise is called.
+    /// Same pattern as Dfn3Denoiser (see dfn3_denoiser.cpp) so the two
+    /// engines have identical timing behaviour.
     float residualIn_[kFrameSize];
-    float residualOut_[kFrameSize];
     int residualCount_ = 0;
-    /// Number of residualOut_ samples still to drain into the next call's
-    /// output before we process the next hop. Kept in [0, kFrameSize].
+    /// Kept for ABI stability of a previous revision; unused by the
+    /// current DFN3-style algorithm (residual output is written directly
+    /// back to the audio buffer via the idx = pos - kFrameSize + i map).
+    float residualOut_[kFrameSize];
     int residualOutRemaining_ = 0;
 };
 
