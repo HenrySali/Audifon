@@ -2,6 +2,11 @@ name: Build APK
 
 on:
   push:
+    # Además de main, disparamos el build en branches feat/* y fix/*
+    # para poder probar APKs de PRs antes de mergear (evita el ciclo
+    # "PR abierto → sin APK → merge a ciegas").
+    branches: [main, 'feat/**', 'fix/**']
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
