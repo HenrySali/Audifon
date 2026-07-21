@@ -154,9 +154,7 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
                     const float wet = scaled[i] * kInt16InvScale;
                     const float mix = crossfadeGain_ * userIntensity;
                     const float out = dry[i] * (1.0f - mix) + wet * mix;
-                    // DEBUG PROBE — ver comentario en Step 2.
-                    const float probed = out * (1.0f - 0.9f * crossfadeGain_);
-                    buffer[idx] = std::clamp(probed, -1.0f, 1.0f);
+                    buffer[idx] = std::clamp(out, -1.0f, 1.0f);
                 }
             }
             residualCount_ = 0;
@@ -182,6 +180,16 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
         processedFrames_.fetch_add(1, std::memory_order_relaxed);
         lastVadProb_.store(vad, std::memory_order_release);
 
+        // Diagnostic: energy of dry vs wet, to confirm from logcat that
+        // RNNoise is actually attenuating the buffer. Emitted every 200
+        // hops (~2 s at 48 kHz).
+        double dryE = 0.0, wetE = 0.0;
+        for (int i = 0; i < kFrameSize; ++i) {
+            const float w = scaled[i] * kInt16InvScale;
+            dryE += static_cast<double>(dry[i]) * dry[i];
+            wetE += static_cast<double>(w) * w;
+        }
+
         for (int i = 0; i < kFrameSize; ++i) {
             if (crossfadeGain_ < crossfadeTarget_) {
                 crossfadeGain_ = std::min(crossfadeTarget_,
@@ -193,17 +201,29 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
             const float wet = scaled[i] * kInt16InvScale;
             const float mix = crossfadeGain_ * userIntensity;
             const float out = dry[i] * (1.0f - mix) + wet * mix;
-            // DEBUG PROBE (temporal, se remueve tras diagnóstico):
-            // Cuando enabled==true y crossfade rampeó, atenuamos -20 dB
-            // (multiplicar por 0.1). Si el usuario escucha la caída de
-            // volumen al togglear, este código SÍ está en el path del
-            // audio y el "no se nota diferencia" es del modelo tiny sutil.
-            // Si NO escucha caída → el bug es de routing (algo pisa outPtr
-            // después de mi wrapper). Ver PR de rollback una vez confirmado.
-            const float probed = out * (1.0f - 0.9f * crossfadeGain_);
-            buffer[pos + i] = std::clamp(probed, -1.0f, 1.0f);
+            buffer[pos + i] = std::clamp(out, -1.0f, 1.0f);
         }
         pos += kFrameSize;
+
+        // Every 200 hops, log dry/wet RMS in dBFS so we can confirm from
+        // logcat that RNNoise is genuinely attenuating (not just running).
+        const uint64_t hops =
+            processedFrames_.load(std::memory_order_relaxed);
+        if ((hops % 200) == 0 && hops > 0) {
+            const double dryRms =
+                std::sqrt(dryE / kFrameSize) + 1e-12;
+            const double wetRms =
+                std::sqrt(wetE / kFrameSize) + 1e-12;
+            const double dryDb = 20.0 * std::log10(dryRms);
+            const double wetDb = 20.0 * std::log10(wetRms);
+            RNN_LOGI("hop=%llu dryRms=%.4f (%.1f dBFS) wetRms=%.4f (%.1f dBFS) "
+                     "delta=%.1f dB vad=%.2f mix=%.2f inferUs=%u",
+                     (unsigned long long)hops,
+                     dryRms, dryDb, wetRms, wetDb, wetDb - dryDb,
+                     lastVadProb_.load(std::memory_order_relaxed),
+                     crossfadeGain_ * userIntensity,
+                     lastInferenceUs_.load(std::memory_order_relaxed));
+        }
     }
 
     // ─── Step 3: stash any tail (< kFrameSize) for the next call. ─────────
