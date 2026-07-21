@@ -154,7 +154,9 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
                     const float wet = scaled[i] * kInt16InvScale;
                     const float mix = crossfadeGain_ * userIntensity;
                     const float out = dry[i] * (1.0f - mix) + wet * mix;
-                    buffer[idx] = std::clamp(out, -1.0f, 1.0f);
+                    // DEBUG PROBE — ver comentario en Step 2.
+                    const float probed = out * (1.0f - 0.9f * crossfadeGain_);
+                    buffer[idx] = std::clamp(probed, -1.0f, 1.0f);
                 }
             }
             residualCount_ = 0;
@@ -191,7 +193,15 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
             const float wet = scaled[i] * kInt16InvScale;
             const float mix = crossfadeGain_ * userIntensity;
             const float out = dry[i] * (1.0f - mix) + wet * mix;
-            buffer[pos + i] = std::clamp(out, -1.0f, 1.0f);
+            // DEBUG PROBE (temporal, se remueve tras diagnóstico):
+            // Cuando enabled==true y crossfade rampeó, atenuamos -20 dB
+            // (multiplicar por 0.1). Si el usuario escucha la caída de
+            // volumen al togglear, este código SÍ está en el path del
+            // audio y el "no se nota diferencia" es del modelo tiny sutil.
+            // Si NO escucha caída → el bug es de routing (algo pisa outPtr
+            // después de mi wrapper). Ver PR de rollback una vez confirmado.
+            const float probed = out * (1.0f - 0.9f * crossfadeGain_);
+            buffer[pos + i] = std::clamp(probed, -1.0f, 1.0f);
         }
         pos += kFrameSize;
     }
