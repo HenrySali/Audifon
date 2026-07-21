@@ -89,9 +89,6 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
      * @returns {boolean} - true to keep processor alive
      */
     process(inputs, outputs, parameters) {
-        // FIX MATRACA: Current NR level (0-3) used by WDRC to disable
-        // transient fast-track when NR is active (prevents gain pumping).
-        const currentNrLevel = this._nrLevel || 0;
         // If stopped, signal removal
         if (!this._alive) {
             return false;
@@ -259,8 +256,7 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
         this._processEqualizer(buffer);
         
         // 3. Apply WDRC as gain modulator based on INPUT level
-        // FIX MATRACA: Pass NR level so WDRC can disable transient fast-track
-        this._processWdrc(buffer, inputLevel, this._nrLevel || 0);
+        this._processWdrc(buffer, inputLevel);
         
         // 4. Master volume (BEFORE MPO — so MPO catches volume-boosted peaks)
         this._applyMasterVolume(buffer);
@@ -366,11 +362,6 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
                     if (data.config.master_volume_db !== undefined) {
                         this._config.master_volume_db = data.config.master_volume_db;
                         this._masterGainLinear = Math.pow(10.0, data.config.master_volume_db / 20.0);
-                    }
-
-                    // FIX MATRACA: Update NR level so WDRC/MPO can adapt
-                    if (data.config.nr_level !== undefined) {
-                        this._nrLevel = data.config.nr_level;
                     }
                 }
                 break;
@@ -524,27 +515,17 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
         const mpoReleaseMs = 10.0;
         let mpoThreshLinear = Math.pow(10.0, (mpoThresholdDb - this._WDRC_DBFS_TO_SPL_OFFSET) / 20.0);
         if (mpoThreshLinear > 0.99) mpoThreshLinear = 0.99;
-        // FIX MATRACA: Hold time of 1ms before release to prevent oscillation
-        const mpoHoldMs = 1.0;
-        const mpoHoldSamples = Math.round(mpoHoldMs * sRate / 1000.0);
         this._mpoState = {
             thresholdDb: mpoThresholdDb,
             thresholdLinear: mpoThreshLinear,
             attackCoeff: this._calcTimeCoeff(mpoAttackMs, sRate),
             releaseCoeff: this._calcTimeCoeff(mpoReleaseMs, sRate),
-            gain: 1.0,
-            holdSamples: 0,
-            holdTotal: mpoHoldSamples
+            gain: 1.0
         };
         this._mpoThresholdSpl = mpoThresholdDb;
 
         // --- Master Volume ---
         this._masterGainLinear = Math.pow(10.0, (config.master_volume_db || 0.0) / 20.0);
-
-        // --- NR Level state (FIX MATRACA) ---
-        // Tracks the current noise reduction level (0-3) so the WDRC and MPO
-        // can adapt their behavior when NR is active.
-        this._nrLevel = config.nr_level || 0;
 
         this._pipelineReady = true;
     }
@@ -694,15 +675,10 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
      * reduced (but still positive) amplification. The output is ALWAYS
      * louder than the input at frequencies with hearing loss.
      *
-     * FIX MATRACA: Added nrLevel parameter. When NR >= 1, the transient
-     * fast-track is disabled to prevent gain pumping from NR residuals
-     * being misinterpreted as real transients.
-     *
      * @param {Float32Array} buffer - Audio buffer post-EQ (modified in-place)
      * @param {number} inputLevelDb - Input level in dB SPL (measured before EQ)
-     * @param {number} nrLevel - Current noise reduction level (0-3)
      */
-    _processWdrc(buffer, inputLevelDb, nrLevel) {
+    _processWdrc(buffer, inputLevelDb) {
         const state = this._wdrcState;
         const blockSize = buffer.length;
         
@@ -735,14 +711,7 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
         }
         
         // Transient fast-track
-        // FIX MATRACA: Only use fast-track when NR is off (nrLevel == 0).
-        // When NR is active, the DNN denoiser leaves short residual peaks
-        // that the fast-track misinterprets as real transients, causing
-        // gain pumping (the "matraca" artifact). With NR active, we rely
-        // solely on the block-rate envelope follower which is smooth enough
-        // to avoid oscillation.
-        if (nrLevel === undefined || nrLevel === null) nrLevel = 0;
-        if (nrLevel === 0 && peakPostEqDb > state.envelope) {
+        if (peakPostEqDb > state.envelope) {
             state.envelope += state.attackCoeff * (peakPostEqDb - state.envelope);
         }
         
@@ -792,12 +761,6 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
      * Process audio through Maximum Power Output limiter.
      * Ported from dsp-engine-browser.js createMpoLimiter().processBlock().
      * Peak limiter with fast attack and slow release.
-     *
-     * FIX MATRACA: Softened adaptive attack from overshootRatio² cap 16 to
-     * overshootRatio^1.5 cap 4. Added 1ms hold time before release to
-     * prevent oscillation when NR residuals cause rapid above/below
-     * threshold alternation.
-     *
      * @param {Float32Array} buffer - Audio buffer (modified in-place)
      */
     _processMpo(buffer) {
@@ -807,23 +770,12 @@ class DspWorkletProcessor extends AudioWorkletProcessor {
             const absSample = Math.abs(buffer[i]);
             if (absSample > state.thresholdLinear) {
                 const targetGain = state.thresholdLinear / Math.max(absSample, 1e-10);
-                // FIX MATRACA: Softer adaptive attack — overshootRatio^1.5 cap 4
-                // (was overshootRatio² cap 16). Reduces the abrupt gain steps that
-                // were audible as clicks/rattle in noisy environments.
+                // Adaptive attack: continuous coefficient based on overshoot ratio²
                 const overshootRatio = absSample / state.thresholdLinear;
-                const adaptiveCoeff = Math.min(state.attackCoeff * Math.min(Math.pow(overshootRatio, 1.5), 4.0), 1.0);
+                const adaptiveCoeff = Math.min(state.attackCoeff * Math.min(overshootRatio * overshootRatio, 16.0), 1.0);
                 state.gain += adaptiveCoeff * (targetGain - state.gain);
-                // FIX MATRACA: Reset hold counter — MPO is actively limiting
-                state.holdSamples = state.holdTotal;
             } else {
-                // FIX MATRACA: Hold time before release — prevents oscillation
-                // when signal rapidly alternates above/below threshold (NR residuals).
-                // Only release gain after hold period expires.
-                if (state.holdSamples > 0) {
-                    state.holdSamples--;
-                } else {
-                    state.gain += state.releaseCoeff * (1.0 - state.gain);
-                }
+                state.gain += state.releaseCoeff * (1.0 - state.gain);
             }
             let output = buffer[i] * state.gain;
             // Hard ceiling: absolute safety net — no sample ever exceeds ±0.99

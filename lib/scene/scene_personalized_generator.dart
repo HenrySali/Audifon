@@ -109,31 +109,16 @@ class ScenePersonalizedPresetGenerator {
     // Requisito: Smart con detección automática de nivel de ruido (2026-06-27)
     final nrLevel = NoiseLevelCalculator.calculateNrLevel(snapshot);
 
-    // FIX MATRACA: Regla de exclusión mutua NR↔WDRC.
-    // Si el NR calculado es ≥ 2, la señal ya llega limpia al WDRC.
-    // Comprimir fuerte sobre señal procesada por DNN causa gain pumping.
-    // Relajar WDRC y desactivar TNR (el DNN lo cubre mejor).
-    double effectiveCompressionRatio = tuning.compressionRatio;
-    double effectiveCompressionKnee = tuning.compressionKnee;
-    bool effectiveTnrEnabled = tuning.tnrEnabled;
-
-    if (nrLevel >= 2) {
-      effectiveCompressionRatio =
-          (tuning.compressionRatio - 0.3).clamp(1.2, 3.0);
-      effectiveCompressionKnee = tuning.compressionKnee + 5.0;
-      effectiveTnrEnabled = false;
-    }
-
     return SmartPreset(
       name: 'SmartScenePerso_${sceneClass.name}_$timestamp',
       isPersonalized: true,
       sceneClass: sceneClass,
       gains: List<double>.unmodifiable(gains),
-      compressionRatio: effectiveCompressionRatio,
-      compressionKnee: effectiveCompressionKnee,
+      compressionRatio: tuning.compressionRatio,
+      compressionKnee: tuning.compressionKnee,
       expansionKnee: tuning.expansionKnee,
       nrLevel: nrLevel, // Usar NR calculado automáticamente, no el del tuning
-      tnrEnabled: effectiveTnrEnabled,
+      tnrEnabled: tuning.tnrEnabled,
       volumeDeltaDb: tuning.volumeDeltaDb,
       confidence: confidence,
       clampedBands: List<int>.unmodifiable(clamped),

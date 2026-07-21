@@ -502,10 +502,17 @@ private:
     /// el WDRC use el nivel real de entrada en lugar del nivel post-DNN.
     /// Expuesto al DiagnosticRecorder para verificación del compression ratio.
     float lastPreDnnLevelDb_ = 0.0f;
-    /// Flag por-bloque: indica si el Headroom_Stage atenuó el bloque actual
-    /// antes de la DNN. Si true, post-DNN se restaura el nivel multiplicando
-    /// por kHeadroomRestoreLinear. NO es estado persistente entre bloques.
-    bool  headroomApplied_ = false;
+    /// Ganancia actual del headroom stage [kHeadroomAttenLinear..1.0].
+    /// FIX tktktk (Causa 3): reemplaza el flag binario headroomApplied_ con
+    /// una rampa suave que evita escalones de 6 dB entre bloques. Persiste
+    /// entre bloques para mantener continuidad.
+    float headroomGain_ = 1.0f;
+
+    /// Contador de hold: cuántos bloques mantener la atenuación después de
+    /// que el peak baje del umbral. Evita que un solo bloque sin pico cause
+    /// una restauración inmediata (que sería un click si el próximo bloque
+    /// vuelve a tener pico).
+    int   headroomHoldBlocks_ = 0;
 
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;
@@ -534,11 +541,25 @@ private:
 
     // Headroom Stage thresholds (DSP chain optimization, Requirement 2)
     /// Peak threshold lineal equivalente a -3 dBFS: pow(10, -3/20) ≈ 0.7079.
+    /// Si el peak |sample| del bloque supera este valor, se atenúa pre-DNN.
     static constexpr float kHeadroomThresholdLinear = 0.7079f;
     /// Atenuación pre-DNN: multiplicador lineal para -6 dB.
     static constexpr float kHeadroomAttenLinear     = 0.5f;
     /// Restauración post-DNN: multiplicador lineal para +6 dB.
+    /// kHeadroomAttenLinear * kHeadroomRestoreLinear == 1.0 (round-trip 0 dB).
     static constexpr float kHeadroomRestoreLinear   = 2.0f;
+
+    // FIX tktktk (Causa 3): parámetros de la rampa suave del headroom.
+    /// Bloques de hold tras detectar pico: mantiene la atenuación N bloques
+    /// después de que el peak baje del umbral. A ~48 kHz con burst de 64-192,
+    /// 1 bloque ≈ 1-4 ms. 8 bloques ≈ 10-30 ms de hold.
+    static constexpr int   kHeadroomHoldBlocks      = 8;
+    /// Step de attack (hacia 0.5): rápido, ~2 ms. El ataque es por-sample.
+    /// A 48 kHz, 2 ms = 96 samples → step = 0.5/96 ≈ 0.0052.
+    static constexpr float kHeadroomAttackStep      = 0.005f;
+    /// Step de release (hacia 1.0): lento, ~20 ms. Por-sample.
+    /// A 48 kHz, 20 ms = 960 samples → step = 0.5/960 ≈ 0.00052.
+    static constexpr float kHeadroomReleaseStep     = 0.0005f;
 
     // ─── Latency Monitor — campos privados (spec monitor-latencia-audio) ──
     /// Tamaño del ring buffer de medidas DSP timing (50 callbacks ≈ 50 ms

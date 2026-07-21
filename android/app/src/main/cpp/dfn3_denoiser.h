@@ -104,4 +104,3 @@ private:
 }  // namespace dfn3_denoiser
 
 #endif  // HEARING_AID_DFN3_DENOISER_H
-// trigger

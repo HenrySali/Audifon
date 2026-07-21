@@ -111,12 +111,6 @@ class SceneGenericPresetGenerator {
   /// audiograma-derivado como base, clampándolas al headroom MPO por
   /// banda (Req 10.3) y aplicando el tuning de la escena (NR / TNR /
   /// volumen / WDRC override).
-  ///
-  /// FIX MATRACA: Aplica regla de exclusión mutua NR↔WDRC. Cuando el NR
-  /// calculado es ≥ 2, el WDRC se relaja automáticamente (ratio -0.3,
-  /// knee +5 dB) porque la señal que llega al WDRC ya está limpia por el
-  /// NR, y no necesita compresión agresiva. También desactiva TNR cuando
-  /// NR ≥ 2, ya que el DNN denoiser cubre esa función de forma superior.
   SmartPreset generate({
     required AudiogramDrivenBundle bundle,
     required SceneClass sceneClass,
@@ -130,27 +124,6 @@ class SceneGenericPresetGenerator {
     // de ruido del snapshot en vez de usar el valor fijo del tuning.
     // Requisito: Smart con detección automática de nivel de ruido (2026-06-27)
     final nrLevel = NoiseLevelCalculator.calculateNrLevel(snapshot);
-
-    // FIX MATRACA: Regla de exclusión mutua NR↔WDRC.
-    // Si el NR ya está limpiando agresivamente (nivel ≥ 2), la señal que
-    // llega al WDRC es más limpia y estable. Comprimir fuerte sobre una
-    // señal que ya fue procesada por el DNN genera gain pumping (la
-    // "matraca"). Solución: relajar el WDRC proporcionalmente al NR.
-    double effectiveCompressionRatio = tuning.compressionRatioOverride;
-    double effectiveCompressionKnee = tuning.compressionKneeOverride;
-    bool effectiveTnrEnabled = tuning.tnrEnabled;
-
-    if (nrLevel >= 2) {
-      // Relajar ratio: restar 0.3 pero nunca bajar de 1.2 (compresión mínima)
-      effectiveCompressionRatio =
-          (tuning.compressionRatioOverride - 0.3).clamp(1.2, 3.0);
-      // Subir knee: +5 dB para dar más headroom antes de que comprima
-      effectiveCompressionKnee = tuning.compressionKneeOverride + 5.0;
-      // Desactivar TNR: el DNN denoiser ya cubre la reducción de transients
-      // de forma superior. TNR + DNN sobre la misma señal produce artefactos
-      // por doble procesamiento de los mismos eventos transitorios.
-      effectiveTnrEnabled = false;
-    }
 
     final gains = List<double>.filled(
       AudiogramDrivenBundle.bandCount,
@@ -185,11 +158,11 @@ class SceneGenericPresetGenerator {
       isPersonalized: false,
       sceneClass: sceneClass,
       gains: List<double>.unmodifiable(gains),
-      compressionRatio: effectiveCompressionRatio,
-      compressionKnee: effectiveCompressionKnee,
+      compressionRatio: tuning.compressionRatioOverride,
+      compressionKnee: tuning.compressionKneeOverride,
       expansionKnee: bundle.expansionKneeDbSpl,
       nrLevel: nrLevel, // Usar NR calculado automáticamente, no el del tuning
-      tnrEnabled: effectiveTnrEnabled,
+      tnrEnabled: tuning.tnrEnabled,
       volumeDeltaDb: tuning.volumeDeltaDb,
       confidence: confidence,
       clampedBands: List<int>.unmodifiable(clamped),
