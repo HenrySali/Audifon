@@ -112,6 +112,27 @@ public:
         return lastVadProb_.load(std::memory_order_acquire);
     }
 
+    /// Total number of 480-sample hops actually processed by RNNoise.
+    /// Increments once per `rnnoise_process_frame` call in `process()`.
+    /// Read by AudioEngine::getDnnProcessedFrames() to feed the UI card
+    /// "Limpiador de ruido (IA)" — the "Frames: X" line. Without dispatch
+    /// through the active engine, that line would stay at 0 even when
+    /// RNNoise is denoising (regression seen 2026-07-21).
+    uint64_t getProcessedFrames() const {
+        return processedFrames_.load(std::memory_order_acquire);
+    }
+
+    /// RNNoise runs synchronously on the audio thread with a fixed cost,
+    /// so there is no drop queue. Kept for API parity with DnnDenoiser (GTCRN)
+    /// which has an async worker + SPSC ring buffer that can overflow.
+    uint64_t getDroppedFrames() const { return 0; }
+
+    /// Microseconds spent inside `rnnoise_process_frame` for the LAST hop.
+    /// On arm64 this is ~50-200 us. Reported in the UI as "Inferencia: X ms".
+    uint32_t getLastInferenceUs() const {
+        return lastInferenceUs_.load(std::memory_order_acquire);
+    }
+
 private:
     /// Opaque state from rnnoise/include/rnnoise.h.
     DenoiseState* state_ = nullptr;
@@ -121,6 +142,11 @@ private:
     std::atomic<float> intensity_{0.6f};
     std::atomic<float> lastVadProb_{0.0f};
 
+    /// Total hops processed (for the UI diagnostics panel).
+    std::atomic<uint64_t> processedFrames_{0};
+    /// Wall-clock us spent inside the last `rnnoise_process_frame`.
+    std::atomic<uint32_t> lastInferenceUs_{0};
+
     /// Crossfade state (audio thread only).
     float crossfadeGain_ = 0.0f;
     float crossfadeTarget_ = 0.0f;
@@ -128,12 +154,16 @@ private:
     /// Effective intensity after crossfade (for diagnostics).
     float effectiveIntensity_ = 0.0f;
 
-    /// Residual buffer for non-hop-aligned block sizes.
+    /// Residual input buffer for hop assembly across audio callback
+    /// boundaries. Filled up to kFrameSize before RNNoise is called.
+    /// Same pattern as Dfn3Denoiser (see dfn3_denoiser.cpp) so the two
+    /// engines have identical timing behaviour.
     float residualIn_[kFrameSize];
-    float residualOut_[kFrameSize];
     int residualCount_ = 0;
-    /// Number of residualOut_ samples still to drain into the next call's
-    /// output before we process the next hop. Kept in [0, kFrameSize].
+    /// Kept for ABI stability of a previous revision; unused by the
+    /// current DFN3-style algorithm (residual output is written directly
+    /// back to the audio buffer via the idx = pos - kFrameSize + i map).
+    float residualOut_[kFrameSize];
     int residualOutRemaining_ = 0;
 };
 
