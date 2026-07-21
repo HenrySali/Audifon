@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstring>
 
-// RNNoise C API — statically compiled into this .so via CMakeLists.txt.
 extern "C" {
 #include "rnnoise/include/rnnoise.h"
 }
@@ -33,10 +32,6 @@ RnnoiseDenoiser::~RnnoiseDenoiser() {
 bool RnnoiseDenoiser::initialize() {
     if (initialized_) return true;
 
-    // Sanity check: build-time FRAME_SIZE must match ours. RNNoise's
-    // rnnoise_get_frame_size() reads the compiled-in value; if the vendored
-    // sources ever get bumped to a different frame length, refuse to run
-    // instead of silently corrupting the audio.
     const int libFrame = rnnoise_get_frame_size();
     if (libFrame != kFrameSize) {
         RNN_LOGW("rnnoise_get_frame_size()=%d != kFrameSize=%d — refusing init",
@@ -44,21 +39,22 @@ bool RnnoiseDenoiser::initialize() {
         return false;
     }
 
-    // NULL model → use the default (baked-in) tiny model.
     state_ = rnnoise_create(nullptr);
     if (!state_) {
         RNN_LOGW("rnnoise_create returned NULL");
         return false;
     }
 
-    residualCount_ = 0;
-    residualOutRemaining_ = 0;
+    inCount_ = 0;
+    outStart_ = 0;
+    outAvail_ = 0;
     crossfadeGain_ = 0.0f;
     crossfadeTarget_ = 0.0f;
     effectiveIntensity_ = 0.0f;
     initialized_ = true;
 
-    RNN_LOGI("RNNoise initialized (frame=%d @ 48 kHz, tiny model)", kFrameSize);
+    RNN_LOGI("RNNoise initialized (frame=%d @ 48 kHz, tiny model, ring-buffer)",
+             kFrameSize);
     return true;
 }
 
@@ -75,60 +71,62 @@ void RnnoiseDenoiser::setIntensity(float intensity) {
 
 // ─── Audio processing ─────────────────────────────────────────────────────
 //
-// Design (mirrors Dfn3Denoiser::process for behavioural parity):
+// Per-sample ring-buffer algorithm. Every input sample is:
+//   1) pushed into inBuffer_ (dry, waiting to be denoised)
+//   2) once inBuffer_ is full (kFrameSize samples), a hop runs and
+//      outBuffer_ is filled with the wet result
+//   3) if outBuffer_ has anything, one wet sample is drained per input
+//      sample and mixed with the current dry sample.
 //
-// The audio bus is float [-1,+1] at 48 kHz. RNNoise's canonical API operates
-// on float samples pre-scaled to the int16 range (see rnnoise_demo.c in the
-// upstream v0.1.1 examples) and processes exactly kFrameSize (480) samples
-// per call. Oboe delivers variable burst sizes to our callback, so we buffer.
+// At cold start the first kFrameSize samples pass through dry because
+// outBuffer_ is empty. After that, every sample is wet (delayed by 10 ms).
 //
-// Per call:
-//   1. If we already had a partial hop stashed in residual_ from the previous
-//      call, complete it by taking (kFrameSize - residualCount_) samples from
-//      the front of buffer[]. Run RNNoise on the completed hop, then write
-//      the wet result back to the buffer positions that were "consumed" to
-//      finish the hop. The wet corresponding to the samples that came from
-//      the *previous* call is discarded (they've already been output raw one
-//      hop earlier — this is the classic hop-aligned discard).
-//   2. Consume full aligned hops from the middle of buffer[]. dry/wet mix
-//      goes back in-place.
-//   3. Any tail smaller than kFrameSize is stashed for the next call.
-//
-// This yields exactly ONE hop (10 ms) of denoising latency — the same as
-// DFN3 — and never corrupts the phase alignment of the mono channel.
+// Why this algorithm and not the "in-place hop within the block" approach
+// used by dfn3_denoiser.cpp: when Oboe delivers 256-sample bursts and the
+// hop is 480, the in-place approach ends up leaving ~50 % of callbacks
+// entirely dry (no full hop fits, and no residual output is drained).
+// The user perceives that as "toggle makes no difference" because half the
+// audio is untouched. The ring-buffer approach guarantees a continuous
+// wet output stream at the cost of one hop of latency (~10 ms), which is
+// well within the acceptable range for real-time hearing aid processing.
 
 void RnnoiseDenoiser::process(float* buffer, int blockSize) {
     if (!buffer || blockSize <= 0 || !initialized_ || !state_) return;
 
     const bool en = enabled_.load(std::memory_order_acquire);
 
-    // Fast path: fully disabled AND crossfade already at 0 → pure bypass.
-    // Note: we lose one hop of RNNoise state each time this branch is taken,
-    // but that's acceptable — the on-ramp when the user re-enables will
-    // simply warm the internal filters back up within a few hops.
+    // Full bypass fast-path: disabled AND fully crossfaded out.
     if (!en && crossfadeGain_ <= 0.0f) return;
 
     crossfadeTarget_ = en ? 1.0f : 0.0f;
     const float userIntensity = intensity_.load(std::memory_order_acquire);
-    int pos = 0;
 
-    // ─── Step 1: complete the residual from the previous call, if any. ────
-    if (residualCount_ > 0) {
-        const int take = std::min(kFrameSize - residualCount_, blockSize);
-        std::memcpy(residualIn_ + residualCount_, buffer, take * sizeof(float));
-        residualCount_ += take;
-        pos += take;
+    // Per-hop diagnostic: RMS of dry input and wet output on the hop we
+    // just ran, so adb logcat can confirm attenuation. Updated inside the
+    // hop-run branch below; logged once every 200 hops.
+    double lastDryE = -1.0, lastWetE = -1.0;
 
-        if (residualCount_ == kFrameSize) {
-            // Run RNNoise on the completed hop.
-            float dry[kFrameSize];
-            std::memcpy(dry, residualIn_, sizeof(dry));
-            float scaled[kFrameSize];
-            for (int i = 0; i < kFrameSize; ++i) {
-                scaled[i] = residualIn_[i] * kInt16Scale;
+    for (int i = 0; i < blockSize; ++i) {
+        const float dry = buffer[i];
+
+        // 1) Push dry into the input hop buffer.
+        inBuffer_[inCount_++] = dry;
+
+        // 2) If we filled a full hop, run RNNoise now.
+        if (inCount_ >= kFrameSize) {
+            // Snapshot dry energy for diagnostics.
+            double dryE = 0.0;
+            for (int k = 0; k < kFrameSize; ++k) {
+                dryE += static_cast<double>(inBuffer_[k]) * inBuffer_[k];
+            }
+
+            // Scale to int16 range, run RNNoise in-place, scale back.
+            for (int k = 0; k < kFrameSize; ++k) {
+                inBuffer_[k] *= kInt16Scale;
             }
             const auto t0 = std::chrono::steady_clock::now();
-            const float vad = rnnoise_process_frame(state_, scaled, scaled);
+            const float vad =
+                rnnoise_process_frame(state_, inBuffer_, inBuffer_);
             const auto t1 = std::chrono::steady_clock::now();
             const auto us = std::chrono::duration_cast<
                 std::chrono::microseconds>(t1 - t0).count();
@@ -137,60 +135,24 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
             processedFrames_.fetch_add(1, std::memory_order_relaxed);
             lastVadProb_.store(vad, std::memory_order_release);
 
-            // Write wet back to the buffer positions that were consumed to
-            // finish the hop. Samples that came from the *previous* call
-            // (idx < 0) are dropped — this is the classic hop-aligned
-            // discard, identical to DFN3.
-            for (int i = 0; i < kFrameSize; ++i) {
-                if (crossfadeGain_ < crossfadeTarget_) {
-                    crossfadeGain_ = std::min(crossfadeTarget_,
-                                              crossfadeGain_ + kCrossfadeStep);
-                } else if (crossfadeGain_ > crossfadeTarget_) {
-                    crossfadeGain_ = std::max(crossfadeTarget_,
-                                              crossfadeGain_ - kCrossfadeStep);
-                }
-                const int idx = pos - kFrameSize + i;
-                if (idx >= 0 && idx < blockSize) {
-                    const float wet = scaled[i] * kInt16InvScale;
-                    const float mix = crossfadeGain_ * userIntensity;
-                    const float out = dry[i] * (1.0f - mix) + wet * mix;
-                    buffer[idx] = std::clamp(out, -1.0f, 1.0f);
-                }
+            double wetE = 0.0;
+            for (int k = 0; k < kFrameSize; ++k) {
+                const float w = inBuffer_[k] * kInt16InvScale;
+                outBuffer_[k] = w;
+                wetE += static_cast<double>(w) * w;
             }
-            residualCount_ = 0;
-        }
-    }
+            outStart_ = 0;
+            outAvail_ = kFrameSize;
+            inCount_ = 0;
 
-    // ─── Step 2: consume full 480-sample hops from buffer[pos..]. ─────────
-    while (pos + kFrameSize <= blockSize) {
-        float dry[kFrameSize];
-        std::memcpy(dry, buffer + pos, sizeof(dry));
-
-        float scaled[kFrameSize];
-        for (int i = 0; i < kFrameSize; ++i) {
-            scaled[i] = dry[i] * kInt16Scale;
-        }
-        const auto t0 = std::chrono::steady_clock::now();
-        const float vad = rnnoise_process_frame(state_, scaled, scaled);
-        const auto t1 = std::chrono::steady_clock::now();
-        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-                            t1 - t0).count();
-        lastInferenceUs_.store(static_cast<uint32_t>(us),
-                               std::memory_order_release);
-        processedFrames_.fetch_add(1, std::memory_order_relaxed);
-        lastVadProb_.store(vad, std::memory_order_release);
-
-        // Diagnostic: energy of dry vs wet, to confirm from logcat that
-        // RNNoise is actually attenuating the buffer. Emitted every 200
-        // hops (~2 s at 48 kHz).
-        double dryE = 0.0, wetE = 0.0;
-        for (int i = 0; i < kFrameSize; ++i) {
-            const float w = scaled[i] * kInt16InvScale;
-            dryE += static_cast<double>(dry[i]) * dry[i];
-            wetE += static_cast<double>(w) * w;
+            lastDryE = dryE;
+            lastWetE = wetE;
         }
 
-        for (int i = 0; i < kFrameSize; ++i) {
+        // 3) Drain one wet sample and mix with the current dry sample.
+        //    During cold-start warm-up outAvail_ is 0 and we leave the
+        //    audio callback's buffer untouched (dry passthrough).
+        if (outAvail_ > 0) {
             if (crossfadeGain_ < crossfadeTarget_) {
                 crossfadeGain_ = std::min(crossfadeTarget_,
                                           crossfadeGain_ + kCrossfadeStep);
@@ -198,44 +160,33 @@ void RnnoiseDenoiser::process(float* buffer, int blockSize) {
                 crossfadeGain_ = std::max(crossfadeTarget_,
                                           crossfadeGain_ - kCrossfadeStep);
             }
-            const float wet = scaled[i] * kInt16InvScale;
+            const float wet = outBuffer_[outStart_++];
+            outAvail_--;
             const float mix = crossfadeGain_ * userIntensity;
-            const float out = dry[i] * (1.0f - mix) + wet * mix;
-            buffer[pos + i] = std::clamp(out, -1.0f, 1.0f);
+            const float out = dry * (1.0f - mix) + wet * mix;
+            buffer[i] = std::clamp(out, -1.0f, 1.0f);
         }
-        pos += kFrameSize;
-
-        // Every 200 hops, log dry/wet RMS in dBFS so we can confirm from
-        // logcat that RNNoise is genuinely attenuating (not just running).
-        const uint64_t hops =
-            processedFrames_.load(std::memory_order_relaxed);
-        if ((hops % 200) == 0 && hops > 0) {
-            const double dryRms =
-                std::sqrt(dryE / kFrameSize) + 1e-12;
-            const double wetRms =
-                std::sqrt(wetE / kFrameSize) + 1e-12;
-            const double dryDb = 20.0 * std::log10(dryRms);
-            const double wetDb = 20.0 * std::log10(wetRms);
-            RNN_LOGI("hop=%llu dryRms=%.4f (%.1f dBFS) wetRms=%.4f (%.1f dBFS) "
-                     "delta=%.1f dB vad=%.2f mix=%.2f inferUs=%u",
-                     (unsigned long long)hops,
-                     dryRms, dryDb, wetRms, wetDb, wetDb - dryDb,
-                     lastVadProb_.load(std::memory_order_relaxed),
-                     crossfadeGain_ * userIntensity,
-                     lastInferenceUs_.load(std::memory_order_relaxed));
-        }
-    }
-
-    // ─── Step 3: stash any tail (< kFrameSize) for the next call. ─────────
-    // Those samples pass through raw for now; they'll be denoised in Step 1
-    // of the next call (with the classic 1-hop delay for the discarded part).
-    if (pos < blockSize) {
-        const int leftover = blockSize - pos;
-        std::memcpy(residualIn_, buffer + pos, leftover * sizeof(float));
-        residualCount_ = leftover;
     }
 
     effectiveIntensity_ = crossfadeGain_ * userIntensity;
+
+    // Diagnostic log once every 200 hops (~2 s at 48 kHz).
+    if (lastDryE >= 0.0) {
+        const uint64_t hops =
+            processedFrames_.load(std::memory_order_relaxed);
+        if ((hops % 200) == 0 && hops > 0) {
+            const double dryRms = std::sqrt(lastDryE / kFrameSize) + 1e-12;
+            const double wetRms = std::sqrt(lastWetE / kFrameSize) + 1e-12;
+            const double dryDb = 20.0 * std::log10(dryRms);
+            const double wetDb = 20.0 * std::log10(wetRms);
+            RNN_LOGI("hop=%llu dry=%.1f dBFS wet=%.1f dBFS delta=%.1f dB "
+                     "vad=%.2f mix=%.2f inferUs=%u",
+                     (unsigned long long)hops, dryDb, wetDb, wetDb - dryDb,
+                     lastVadProb_.load(std::memory_order_relaxed),
+                     effectiveIntensity_,
+                     lastInferenceUs_.load(std::memory_order_relaxed));
+        }
+    }
 }
 
 }  // namespace rnnoise_denoiser
