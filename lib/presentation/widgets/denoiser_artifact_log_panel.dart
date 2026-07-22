@@ -120,7 +120,8 @@ class _DenoiserArtifactLogPanelState extends State<DenoiserArtifactLogPanel> {
               style: TextStyle(color: Colors.grey[400], fontSize: 10.5),
             )
           else ...[
-            _stageRow('Entrada (fuente)', 'input', highlight: false),
+            _stageRow('Mic crudo', 'raw', highlight: false),
+            _stageRow('Entrada (post-realce)', 'input', highlight: false),
             _stageRow('1· RNNoise', 'sys0', highlight: activeEngine == 0),
             _stageRow('2· DFN3', 'sys1', highlight: activeEngine == 1),
             _stageRow('3· GTCRN', 'sys2', highlight: activeEngine == 2),

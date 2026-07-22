@@ -937,6 +937,13 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
                 }
             }
 
+            // ─── Registro: tap de MICRÓFONO CRUDO (pre-realce) ──────────
+            // beamCh0_ contiene el canal de referencia del mic recién
+            // deinterleaveado, ANTES del realce (MVDR/DNN) y del headroom.
+            // Permite separar la matraca del micrófono/captura de la que
+            // introduce el realce o los sistemas de limpieza.
+            artifactLog_.feedRawInput(beamCh0_, chunkSize);
+
             // Motor entrante → outPtr + offset.
             renderEngineChunk(activeEngine_, beamCh0_, beamCh1_,
                               outPtr + offset, chunkSize, vadActive);
