@@ -193,6 +193,10 @@ private:
             "  Calidad: %.0f/100 (peor bloque: %.0f/100)\n",
             s.sessionQuality, s.worstQuality);
         r.append(line);
+        std::snprintf(line, sizeof(line),
+            "  Aspereza(ronco): %.2f dB modulacion | energia graves: %.0f%%\n",
+            s.envFlutterDb, s.lowBandRatio * 100.0f);
+        r.append(line);
     }
 
     /// Heurística de atribución del origen de la matraca.
@@ -273,6 +277,30 @@ private:
             }
         }
 
+        // Aspereza / ruido musical ("ronco") introducido por un sistema.
+        // Se compara contra la etapa previa real (mic crudo si está, si no
+        // la entrada a los sistemas).
+        const ArtifactSnapshot& base = raw.active ? raw : in;
+        for (int i = 0; i < kEngineCount; ++i) {
+            if (!eng[i].active) continue;
+            const float roughDelta = eng[i].envFlutterDb - base.envFlutterDb;
+            if (roughDelta >= kRoughnessDeltaDb) {
+                std::snprintf(line, sizeof(line),
+                    "  - El SISTEMA %d (%s) suena RONCO: agrega aspereza/ruido musical (+%.2f dB de modulacion sobre la entrada). Tipico de denoiser espectral; probar bajar intensidad (mezclar mas señal seca) o cambiar de motor.\n",
+                    i + 1, engineName(i), roughDelta);
+                r.append(line);
+                any = true;
+            }
+            const float tiltDelta = eng[i].lowBandRatio - base.lowBandRatio;
+            if (tiltDelta >= kTiltDelta) {
+                std::snprintf(line, sizeof(line),
+                    "  - El SISTEMA %d (%s) apaga los agudos (timbre mas grave/ronco): +%.0f%% de energia en graves vs la entrada.\n",
+                    i + 1, engineName(i), tiltDelta * 100.0f);
+                r.append(line);
+                any = true;
+            }
+        }
+
         // Etapa posterior (pipeline) agrega matraca.
         if (active >= 0 && active < kEngineCount && eng[active].active) {
             const double post = out.clicksPerSec - eng[active].clicksPerSec;
@@ -298,6 +326,10 @@ private:
     static constexpr double kNoticeableRate = 0.5;
     /// Delta de tasa (clicks/s) para atribuir "introduce matraca".
     static constexpr double kIntroRate = 0.5;
+    /// Delta de modulación (dB) para atribuir "aspereza/ronco" a un sistema.
+    static constexpr float kRoughnessDeltaDb = 1.5f;
+    /// Delta de ratio de graves para atribuir "apaga agudos / timbre ronco".
+    static constexpr float kTiltDelta = 0.12f;
 
     int sampleRate_ = 48000;
     ArtifactMonitor rawMic_;

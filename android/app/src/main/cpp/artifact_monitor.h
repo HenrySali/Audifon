@@ -46,6 +46,10 @@ struct ArtifactSnapshot {
     double   clicksPerSec = 0.0;     ///< Tasa de clicks (eventos/s).
     double   worstEventSec = 0.0;    ///< Instante del peor bloque (s).
     float    worstEventJump = 0.0f;  ///< Salto máx en el peor bloque.
+    float    envFlutterDb = 0.0f;    ///< Modulación media |ΔRMS| bloque-a-bloque
+                                     ///< (proxy de aspereza / ruido musical / "ronco").
+    float    lowBandRatio = 0.0f;    ///< Energía graves(<500 Hz)/total [0,1]
+                                     ///< (timbre: alto = apagado/grave/"ronco").
     bool     active       = false;   ///< true si se procesó al menos 1 bloque.
 };
 
@@ -75,10 +79,16 @@ public:
         worstQuality_.store(100.0f, std::memory_order_relaxed);
         worstEventSec_.store(0.0, std::memory_order_relaxed);
         worstEventJump_.store(0.0f, std::memory_order_relaxed);
+        sumFlutterDb_.store(0.0, std::memory_order_relaxed);
+        flutterCount_.store(0, std::memory_order_relaxed);
+        sumLowRatio_.store(0.0, std::memory_order_relaxed);
         prev1_ = 0.0f;
         prev2_ = 0.0f;
         hasPrev_ = false;
         rmsEnv_ = 1e-4f;
+        prevRmsDb_ = -120.0f;
+        hasPrevRms_ = false;
+        lpState_ = 0.0f;
     }
 
     /// Alimenta un bloque mono float32. SOLO desde el hilo de audio.
@@ -87,6 +97,7 @@ public:
         if (buf == nullptr || n <= 0) return;
 
         double sumSq = 0.0;
+        double lowSumSq = 0.0;  // energía de la banda grave (post-LPF)
         float  peak  = 0.0f;
         uint64_t clicks = 0, clips = 0, nans = 0;
         float  localMaxJump = 0.0f;
@@ -94,6 +105,11 @@ public:
         float p1 = prev1_, p2 = prev2_;
         bool  hp = hasPrev_;
         float env = rmsEnv_;
+        float lp = lpState_;
+
+        // Coeficiente del pasa-bajos de 1er orden para el ratio de graves.
+        const float twoPiFc = 2.0f * 3.14159265f * kLowBandFcHz;
+        const float lpAlpha = twoPiFc / (twoPiFc + static_cast<float>(sampleRate_));
 
         for (int i = 0; i < n; ++i) {
             float x = buf[i];
@@ -107,6 +123,10 @@ public:
             const float ax = std::fabs(x);
             if (ax > peak) peak = ax;
             sumSq += static_cast<double>(x) * static_cast<double>(x);
+
+            // Pasa-bajos 1er orden → energía de graves (timbre "ronco").
+            lp += lpAlpha * (x - lp);
+            lowSumSq += static_cast<double>(lp) * static_cast<double>(lp);
 
             // ─── Clipping ───────────────────────────────────────────────
             if (ax >= kClipThreshold) ++clips;
@@ -141,10 +161,31 @@ public:
         prev2_   = p2;
         hasPrev_ = hp;
         rmsEnv_  = env;
+        lpState_ = lp;
 
         const float rms  = std::sqrt(static_cast<float>(sumSq / static_cast<double>(n)));
         const float rmsDb  = 20.0f * std::log10(std::max(rms,  1e-10f));
         const float peakDb = 20.0f * std::log10(std::max(peak, 1e-10f));
+
+        // ─── Timbre: ratio de energía grave (<500 Hz) sobre total ───────
+        const float lowRmsBlk = std::sqrt(static_cast<float>(lowSumSq / static_cast<double>(n)));
+        float lowRatio = lowRmsBlk / std::max(rms, 1e-10f);
+        if (lowRatio > 1.0f) lowRatio = 1.0f;
+        sumLowRatio_.store(sumLowRatio_.load(std::memory_order_relaxed) + lowRatio,
+                           std::memory_order_relaxed);
+
+        // ─── Aspereza / ruido musical: modulación |ΔRMS| bloque-a-bloque ─
+        // Sólo cuenta con señal presente (por encima del gate) para no medir
+        // el ruido del piso. Un sistema que agrega "ronco" muestra mucha más
+        // modulación que su entrada aunque la señal de entrada sea estable.
+        if (hasPrevRms_ && rmsDb > kRoughGateDbfs && prevRmsDb_ > kRoughGateDbfs) {
+            const float dFlut = std::fabs(rmsDb - prevRmsDb_);
+            sumFlutterDb_.store(sumFlutterDb_.load(std::memory_order_relaxed) + dFlut,
+                                std::memory_order_relaxed);
+            flutterCount_.fetch_add(1, std::memory_order_relaxed);
+        }
+        prevRmsDb_ = rmsDb;
+        hasPrevRms_ = true;
 
         // ─── Actualizar acumuladores atómicos (único productor) ─────────
         const uint64_t totalSamples = samples_.load(std::memory_order_relaxed)
@@ -199,6 +240,16 @@ public:
         s.worstEventSec = worstEventSec_.load(std::memory_order_relaxed);
         s.worstEventJump= worstEventJump_.load(std::memory_order_relaxed);
 
+        const uint64_t fCount = flutterCount_.load(std::memory_order_relaxed);
+        s.envFlutterDb = (fCount > 0)
+            ? static_cast<float>(sumFlutterDb_.load(std::memory_order_relaxed)
+                                 / static_cast<double>(fCount))
+            : 0.0f;
+        s.lowBandRatio = (blocks_.load(std::memory_order_relaxed) > 0)
+            ? static_cast<float>(sumLowRatio_.load(std::memory_order_relaxed)
+                                 / static_cast<double>(blocks_.load(std::memory_order_relaxed)))
+            : 0.0f;
+
         const double sumRms = sumRmsLin_.load(std::memory_order_relaxed);
         s.meanRmsDbfs = (s.blocks > 0)
             ? 20.0f * std::log10(std::max(
@@ -250,6 +301,10 @@ private:
     static constexpr float kClickAbsFloor  = 0.05f;
     /// Salto mínimo |x[n]-x[n-1]| para considerar click (anti falsos +).
     static constexpr float kClickAbsMin    = 0.08f;
+    /// Frecuencia de corte del pasa-bajos para el ratio de graves (timbre).
+    static constexpr float kLowBandFcHz    = 500.0f;
+    /// Gate de nivel (dBFS): la aspereza sólo se mide con señal presente.
+    static constexpr float kRoughGateDbfs  = -60.0f;
 
     int sampleRate_ = 48000;
 
@@ -258,6 +313,9 @@ private:
     float prev2_ = 0.0f;   ///< x[n-2] entre bloques.
     bool  hasPrev_ = false;
     float rmsEnv_ = 1e-4f; ///< Envelope lento de |x|.
+    float prevRmsDb_ = -120.0f;  ///< RMS(dB) del bloque anterior (para flutter).
+    bool  hasPrevRms_ = false;
+    float lpState_ = 0.0f;       ///< Estado del pasa-bajos (ratio de graves).
 
     // ─── Acumuladores atómicos (1 productor / N consumidores) ───────────
     std::atomic<uint64_t> blocks_{0};
@@ -273,6 +331,9 @@ private:
     std::atomic<float>    worstQuality_{100.0f};
     std::atomic<double>   worstEventSec_{0.0};
     std::atomic<float>    worstEventJump_{0.0f};
+    std::atomic<double>   sumFlutterDb_{0.0};   ///< Σ |ΔRMS| (aspereza).
+    std::atomic<uint64_t> flutterCount_{0};     ///< N de deltas contados.
+    std::atomic<double>   sumLowRatio_{0.0};    ///< Σ ratio de graves por bloque.
 };
 
 #endif  // HEARING_AID_ARTIFACT_MONITOR_H

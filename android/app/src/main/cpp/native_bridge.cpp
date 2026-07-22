@@ -1475,6 +1475,8 @@ void putArtifactStage(JNIEnv* env, jobject map, jmethodID put,
     putKv(env, map, put, key("MeanRmsDbfs").c_str(),  boxDouble(env, static_cast<double>(s.meanRmsDbfs)));
     putKv(env, map, put, key("Quality").c_str(),      boxDouble(env, static_cast<double>(s.sessionQuality)));
     putKv(env, map, put, key("WorstQuality").c_str(), boxDouble(env, static_cast<double>(s.worstQuality)));
+    putKv(env, map, put, key("EnvFlutterDb").c_str(), boxDouble(env, static_cast<double>(s.envFlutterDb)));
+    putKv(env, map, put, key("LowBandRatio").c_str(), boxDouble(env, static_cast<double>(s.lowBandRatio)));
     putKv(env, map, put, key("WorstEventSec").c_str(),boxDouble(env, s.worstEventSec));
     putKv(env, map, put, key("ElapsedSec").c_str(),   boxDouble(env, s.elapsedSec));
 }

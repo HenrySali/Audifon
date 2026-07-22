@@ -151,6 +151,33 @@ TEST(DenoiserArtifactLog, DetectsSourceArtifactPassingThrough) {
     EXPECT_NE(report.find("trae matraca"), std::string::npos);
 }
 
+// Ruido musical / aspereza ("ronco"): entrada estable pero salida con
+// ganancia fluctuante bloque-a-bloque => envFlutterDb alto en la salida.
+TEST(DenoiserArtifactLog, DetectsRoughnessMusicalNoise) {
+    DenoiserArtifactLog log;
+    log.configure(kSR);
+    std::vector<float> steady(kN), rough(kN);
+    double phase = 0.0;
+    for (int b = 0; b < 200; ++b) {
+        fillTone(steady, phase, 0.3f);
+        // Ganancia que salta fuerte entre bloques (modulación ~ aspereza).
+        const float g = (b % 2 == 0) ? 1.0f : 0.35f;
+        for (int i = 0; i < kN; ++i) rough[i] = steady[i] * g;
+        log.feedDenoiserInput(steady.data(), kN);
+        log.feedEngineOutput(1, rough.data(), kN);  // sistema 1 = DFN3
+        log.feedOutput(rough.data(), kN);
+    }
+    const auto in = log.inputSnapshot();
+    const auto e1 = log.engineSnapshot(1);
+
+    // La entrada es estable (poca modulación); la salida modula fuerte.
+    EXPECT_LT(in.envFlutterDb, 1.0f);
+    EXPECT_GT(e1.envFlutterDb, in.envFlutterDb + 1.5f);
+
+    const std::string report = log.renderReport();
+    EXPECT_NE(report.find("suena RONCO"), std::string::npos);
+}
+
 // Con mic crudo limpio pero matraca en la entrada => atribuye al realce.
 TEST(DenoiserArtifactLog, AttributesArtifactToEnhancementStage) {
     DenoiserArtifactLog log;

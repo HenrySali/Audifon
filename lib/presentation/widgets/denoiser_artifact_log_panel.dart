@@ -153,6 +153,8 @@ class _DenoiserArtifactLogPanelState extends State<DenoiserArtifactLogPanel> {
         (_summary['${prefix}ClicksPerSec'] as num?)?.toDouble() ?? 0.0;
     final int clip = (_summary['${prefix}Clip'] as int?) ?? 0;
     final int nanInf = (_summary['${prefix}NanInf'] as int?) ?? 0;
+    final double envFlutter =
+        (_summary['${prefix}EnvFlutterDb'] as num?)?.toDouble() ?? 0.0;
 
     if (!active) {
       return Padding(
@@ -190,13 +192,14 @@ class _DenoiserArtifactLogPanelState extends State<DenoiserArtifactLogPanel> {
               ),
             ),
           ),
-          // Clicks/s de la etapa (indicador de matraca).
+          // Clicks/s + aspereza (indicadores de matraca y "ronco").
           Text(
             '${clicksPerSec.toStringAsFixed(1)}/s'
+            '${envFlutter >= 2.0 ? " ·ronco" : ""}'
             '${clip > 0 ? " ·clip" : ""}'
             '${nanInf > 0 ? " ·NaN" : ""}',
             style: TextStyle(
-              color: clicksPerSec >= 0.5 || clip > 0 || nanInf > 0
+              color: clicksPerSec >= 0.5 || envFlutter >= 2.0 || clip > 0 || nanInf > 0
                   ? Colors.orangeAccent
                   : Colors.grey[400],
               fontSize: 10.5,
