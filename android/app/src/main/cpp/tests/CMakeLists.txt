@@ -65,3 +65,22 @@ target_link_libraries(diagnostic_recorder_p3_test
 )
 
 gtest_discover_tests(diagnostic_recorder_p3_test)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ArtifactMonitor / DenoiserArtifactLog (registro de matraca + calidad)
+# Header-only bajo test → no requiere sources extra.
+# ─────────────────────────────────────────────────────────────────────────────
+add_executable(artifact_monitor_test
+    artifact_monitor_test.cpp
+)
+
+target_include_directories(artifact_monitor_test PRIVATE
+    ${SRC_DIR}
+)
+
+target_link_libraries(artifact_monitor_test
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(artifact_monitor_test)

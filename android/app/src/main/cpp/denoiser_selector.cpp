@@ -105,6 +105,11 @@ int DenoiserSelector::resolveFallback(int requested) const {
 void DenoiserSelector::process(float* buffer, int blockSize) {
     if (blockSize <= 0 || buffer == nullptr) return;
 
+    // ─── Tap de ENTRADA a los sistemas de limpieza (pre-denoise) ─────────
+    // Mide la señal ANTES de que el motor la procese, para el registro de
+    // matraca/calidad. Si la matraca ya aparece acá, la fuente es previa.
+    if (artifactLog_) artifactLog_->feedDenoiserInput(buffer, blockSize);
+
     // Leer la selección del usuario.
     const int target = selectedType_.load(std::memory_order_acquire);
     const int resolved = resolveFallback(target);
@@ -130,6 +135,8 @@ void DenoiserSelector::process(float* buffer, int blockSize) {
     if (xfadeRemaining_ <= 0 || prevType_ < 0 || !engines_[prevType_]) {
         engines_[activeType_]->process(buffer, blockSize);
         xfadeRemaining_ = 0;
+        // Tap de SALIDA del sistema activo (post-denoise) para el registro.
+        if (artifactLog_) artifactLog_->feedEngineOutput(activeType_, buffer, blockSize);
         return;
     }
 
@@ -177,6 +184,11 @@ void DenoiserSelector::process(float* buffer, int blockSize) {
         }
         prevType_ = -1;
     }
+
+    // Tap de SALIDA del sistema entrante (post-denoise) para el registro.
+    // Durante el crossfade el buffer ya contiene la mezcla dominada por el
+    // motor entrante, así que se atribuye al motor activo (activeType_).
+    if (artifactLog_) artifactLog_->feedEngineOutput(activeType_, buffer, blockSize);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

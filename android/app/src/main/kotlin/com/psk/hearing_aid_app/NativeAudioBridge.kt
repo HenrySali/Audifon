@@ -682,6 +682,29 @@ class NativeAudioBridge {
      */
     external fun nativeGetSelectedDenoiser(): Int
 
+    // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
+
+    /**
+     * Devuelve el registro completo de matraca/calidad como texto copiable
+     * (entrada a los sistemas + cada uno de los 3 sistemas + salida final,
+     * con diagnóstico del origen de la matraca). Cadena vacía si el motor
+     * no está corriendo.
+     */
+    external fun nativeGetDenoiserArtifactReport(): String
+
+    /** Reinicia el registro de matraca/calidad (nueva sesión de medición). */
+    external fun nativeResetDenoiserArtifactLog()
+
+    /**
+     * Resumen estructurado del registro de matraca/calidad como HashMap.
+     * Claves con prefijo por etapa: `input*`, `sys0*` (RNNoise), `sys1*`
+     * (DFN3), `sys2*` (GTCRN), `output*`; más `activeEngine` (int). Cada
+     * etapa expone *Active, *Blocks, *Clicks, *ClicksPerSec, *Clip, *NanInf,
+     * *MaxJump, *MeanRmsDbfs, *Quality, *WorstQuality, *WorstEventSec,
+     * *ElapsedSec. Null si el motor no está corriendo.
+     */
+    external fun nativeGetDenoiserArtifactSummary(): HashMap<String, Any>?
+
     // ─── MVDR Dual-Mic Beamforming ─────────────────────────────────────
 
     /**

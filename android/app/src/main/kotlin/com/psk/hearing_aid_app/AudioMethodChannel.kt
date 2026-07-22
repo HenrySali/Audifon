@@ -375,6 +375,28 @@ class AudioMethodChannel(
                 "getSelectedDenoiser" -> {
                     result.success(nativeBridge.nativeGetSelectedDenoiser())
                 }
+                // ─── Registro de matraca/calidad de los 3 sistemas ──────
+                "getDenoiserArtifactReport" -> {
+                    val report = try {
+                        nativeBridge.nativeGetDenoiserArtifactReport()
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "getDenoiserArtifactReport failed", t); ""
+                    }
+                    result.success(report)
+                }
+                "resetDenoiserArtifactLog" -> {
+                    try { nativeBridge.nativeResetDenoiserArtifactLog() }
+                    catch (t: Throwable) { Log.w(TAG, "resetDenoiserArtifactLog failed", t) }
+                    result.success(null)
+                }
+                "getDenoiserArtifactSummary" -> {
+                    val summary = try {
+                        nativeBridge.nativeGetDenoiserArtifactSummary()
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "getDenoiserArtifactSummary failed", t); null
+                    }
+                    result.success(summary)
+                }
                 // ─── MVDR Dual-Mic Beamforming ──────────────────────────
                 "setBeamformingEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false
