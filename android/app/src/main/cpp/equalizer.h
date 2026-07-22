@@ -220,6 +220,12 @@ private:
     float appliedGains_[kEqBandCount];    ///< Ganancias con las que se calcularon los coeficientes
     float rampGains_[kEqBandCount];       ///< Ganancia SUAVIZADA actual por banda (audio thread)
 
+    /// Escala anti-saturación aplicada a la ÚLTIMA muestra del bloque anterior.
+    /// Punto de partida de la rampa per-sample de processWithScale(): el factor
+    /// 'scale' se recomputa cada bloque desde el pico del bloque, así que sin
+    /// rampa caería como escalón en la frontera (= click). FIX matraca Causa B.
+    float scaleRampPrev_ = 1.0f;
+
     // --- Crossfade entre coeficientes ---
     EqCrossfader crossfader_;                        ///< Estado del crossfade activo por banda
     BiquadPrevState prevStates_[kEqBandCount];       ///< Coeficientes + estados "viejos" para crossfade

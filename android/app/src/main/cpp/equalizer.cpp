@@ -71,6 +71,10 @@ void Equalizer::init(int sampleRate) {
         rampGains_[i] = snapshots_[snapIdx].gains[i];
         coeffs_[i] = BiquadCoeffs{};
     }
+
+    // FIX matraca (Causa B): la rampa per-sample del factor anti-saturación
+    // arranca en ganancia unitaria (sin escalado) tras (re)inicializar.
+    scaleRampPrev_ = 1.0f;
 }
 
 // ============================================================================
@@ -130,9 +134,32 @@ void Equalizer::processWithScale(float* buffer, int blockSize, float scale) {
     process(buffer, blockSize);
 
     // Post-scale: reduce the amplified signal to fit in headroom.
-    for (int i = 0; i < blockSize; ++i) {
-        buffer[i] *= scale;
+    //
+    // FIX matraca (Causa B): antes el bloque se multiplicaba por 'scale'
+    // CONSTANTE. Como el pipeline recomputa 'scale' cada bloque a partir del
+    // PICO del bloque (anti-saturación pre-WDRC), el factor saltaba de un
+    // bloque al siguiente y ese escalón caía de golpe en la frontera de bloque
+    // → discontinuidad = click que el ArtifactMonitor detecta (era el +clicks/s
+    // de la etapa POSTERIOR al motor). Ahora interpolamos 'scale' PER-SAMPLE
+    // desde el valor aplicado a la última muestra del bloque anterior
+    // (scaleRampPrev_) hasta el target de este bloque, garantizando continuidad
+    // C0 entre bloques. La última muestra recibe 'scale', que pasa a ser el
+    // punto de partida del siguiente bloque.
+    const float gStart = scaleRampPrev_;
+    const float gEnd   = scale;
+    if (gStart != gEnd) {
+        const float invN = 1.0f / static_cast<float>(blockSize);
+        for (int i = 0; i < blockSize; ++i) {
+            const float t = static_cast<float>(i + 1) * invN;
+            buffer[i] *= gStart + (gEnd - gStart) * t;
+        }
+    } else if (gEnd != 1.0f) {
+        // Escala constante no unitaria: aplicar directo (sin rampa).
+        for (int i = 0; i < blockSize; ++i) {
+            buffer[i] *= gEnd;
+        }
     }
+    scaleRampPrev_ = gEnd;
 }
 
 // ============================================================================
