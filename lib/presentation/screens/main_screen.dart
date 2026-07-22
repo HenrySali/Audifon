@@ -45,6 +45,7 @@ import 'technical_service_screen.dart';
 import '../../feedback_checklist/screens/feedback_checklist_dialog.dart';
 import '../../services/denoiser_service.dart';
 import '../widgets/denoiser_toggle.dart';
+import '../widgets/denoiser_artifact_log_panel.dart';
 
 /// Pantalla principal de amplificación del PSK Mobile Hearing Aid.
 ///
@@ -4598,6 +4599,9 @@ class _DnnNoiseCleanerCardState extends State<_DnnNoiseCleanerCard> {
               DenoiserToggle(service: _denoiserService),
               const SizedBox(height: 8),
               _buildDiagnosticsPanel(),
+              const SizedBox(height: 8),
+              // ─── Registro de matraca / calidad de los 3 sistemas ─────
+              DenoiserArtifactLogPanel(service: _denoiserService),
             ],
           ],
         ),
