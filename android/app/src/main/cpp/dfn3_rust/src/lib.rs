@@ -123,22 +123,44 @@ pub unsafe extern "C" fn dfn3_init(model_dir: *const c_char) -> bool {
             .into_optimized()?
             .into_runnable()?;
 
-        let df_state = DFState::new(SR, FFT_SIZE, HOP_SIZE, NB_ERB, NB_DF);
+        // FIX (índice OOB 481): el 5to parámetro de DFState::new es
+        // `min_nb_freqs` — el mínimo de frequency bins que se fuerza por
+        // cada banda ERB (para evitar bandas demasiado angostas). NO es
+        // NB_DF. Con NB_DF=96 y solo 481 bins totales repartidos en 32
+        // bandas, el algoritmo interno intentaba forzar 32*96 = 3072 bins,
+        // hacía underflow de usize al ajustar la última banda, y produjía
+        // un `band_size` gigantesco (~usize::MAX) que causaba el OOB en
+        // `apply_interp_band_gain`.
+        //
+        // El valor 2 es el default de DFState::default() y coincide con
+        // el usado en los ejemplos oficiales del crate deep_filter.
+        // Ver referencia: DeepFilterNet/libDF/src/lib.rs @ d375b2d8
+        // (función erb_fb, rama when nb_freqs < min_nb_freqs).
+        let mut df_state = DFState::new(SR, FFT_SIZE, HOP_SIZE, NB_ERB, 2);
 
-        info!("dfn3_init: all models loaded");
+        // FIX: inicializar el estado de normalización ERB. Sin esto,
+        // `band_mean_norm_erb` (llamado desde `feat_erb`) itera sobre un
+        // Vec vacío (mean_norm_state.len() == 0) y no aplica la
+        // normalización esperada por el modelo → las features ERB entran
+        // al encoder sin normalizar y las predicciones salen distorsionadas.
+        df_state.init_mean_norm_state();
+
+        info!("dfn3_init: all models loaded (min_nb_freqs=2, mean_norm initialized)");
 
         Ok(Dfn3Engine {
             df_state,
             enc,
             erb_dec,
             df_dec,
-            // Allocate NB_FREQS + 1 to prevent off-by-one panic in df crate.
-            // The df crate's internal loops sometimes access index NB_FREQS
-            // (= FFT_SIZE/2 + 1 = 481) which is out of bounds for a Vec of
-            // length 481. Adding one extra element (zero-initialized) prevents
-            // the panic without affecting DSP correctness (the extra bin is
-            // never used in the output).
-            spec_buf: vec![Complex32::new(0.0, 0.0); NB_FREQS + 1],
+            // FIX: spec_buf debe tener EXACTAMENTE NB_FREQS elementos.
+            // El intento previo de `NB_FREQS + 1` para "prevenir OOB" era
+            // incorrecto: la crate `realfft` (usada por df::analysis y
+            // df::synthesis internamente) valida el tamaño del output
+            // buffer en runtime y retorna error, causando panic en el
+            // `.expect("FFT forward failed")`. El OOB real venía de un
+            // parámetro mal pasado a DFState::new (ver comentario arriba),
+            // no del tamaño del spec_buf.
+            spec_buf: vec![Complex32::new(0.0, 0.0); NB_FREQS],
             erb_buf: vec![0.0f32; NB_ERB],
             intensity: 0.6,
             active: AtomicBool::new(true),
@@ -221,8 +243,10 @@ fn process_frame(
 
     // 2. Extract ERB features from spectrum
     let alpha = 0.98f32; // smoothing factor
-    // The spec_buf is allocated with NB_FREQS + 1 elements to prevent
-    // off-by-one panic in the df crate. See Dfn3Engine construction above.
+    // spec_buf tiene NB_FREQS elementos (= FFT_SIZE/2 + 1 = 481).
+    // feat_erb requiere que sum(erb_fb) == spec_buf.len(), lo que se
+    // cumple porque el crate `df` normaliza la última banda al final
+    // de `erb_fb()` para que la suma sea exactamente NB_FREQS.
     engine.df_state.feat_erb(&engine.spec_buf, alpha, &mut engine.erb_buf);
 
     // 3. Prepare encoder input tensor [1, NB_ERB]
