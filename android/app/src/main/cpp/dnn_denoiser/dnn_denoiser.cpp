@@ -1415,61 +1415,24 @@ struct DnnDenoiser::Impl {
         std::fill(olaBuf.begin() + (kDnnFftSize - kDnnHopSize),
                   olaBuf.end(), 0.0f);
 
-        // ── 11b. Noise gate suave con hysteresis temporal ─────────────────
-        // FIX tktktk (Causa 2): el gate anterior tenía un knee de solo 2 dB
-        // (0.001→0.003) y sin hysteresis temporal. Señales borderline (ventilador,
-        // AC) conmutaban frame a frame entre gate-on y gate-off, generando
-        // clicks periódicos. Ahora:
-        //   - Knee ampliado a ~10 dB (0.001 → 0.01) para transición gradual.
-        //   - Hysteresis temporal: el gate necesita N frames consecutivos por
-        //     debajo del umbral para cerrar, y 1 frame por encima para abrir.
-        //   - Rampa de ganancia suave (attack/release) en vez de step.
-        {
-            float energy = 0.0f;
-            for (int i = 0; i < kDnnHopSize; ++i) {
-                energy += outputFrame[i] * outputFrame[i];
-            }
-            const float rms = std::sqrt(energy / static_cast<float>(kDnnHopSize));
-
-            // Umbrales ampliados: knee de ~10 dB.
-            constexpr float kGateClose  = 0.001f;   // -60 dBFS: umbral para cerrar
-            constexpr float kGateOpen   = 0.01f;    // -40 dBFS: umbral para abrir completamente
-            // Hysteresis: necesita 6 frames (~60 ms) debajo para cerrar.
-            constexpr int   kHystFrames = 6;
-
-            if (rms >= kGateOpen) {
-                // Claramente por encima: abrir inmediatamente.
-                gateHoldCounter_ = 0;
-                // Rampa de apertura: subir gateGain_ hacia 1.0 (release ~30 ms = 3 frames)
-                gateGain_ = std::min(1.0f, gateGain_ + 0.33f);
-            } else if (rms < kGateClose) {
-                // Debajo del umbral de cierre: incrementar contador de hysteresis.
-                gateHoldCounter_++;
-                if (gateHoldCounter_ >= kHystFrames) {
-                    // Confirmado silencio sostenido: bajar gateGain_ hacia 0.
-                    gateGain_ = std::max(0.0f, gateGain_ - 0.25f);
-                }
-                // Si aún no se alcanzó el hold, gateGain_ se mantiene (no cierra).
-            } else {
-                // En la zona de transición (knee): interpolar ganancia target.
-                gateHoldCounter_ = 0;
-                const float kneeTarget = (rms - kGateClose) / (kGateOpen - kGateClose);
-                // Rampa suave hacia el target: no saltar, acercarse gradualmente.
-                const float step = 0.2f; // ~50 ms para recorrer el rango completo
-                if (gateGain_ < kneeTarget) {
-                    gateGain_ = std::min(kneeTarget, gateGain_ + step);
-                } else {
-                    gateGain_ = std::max(kneeTarget, gateGain_ - step);
-                }
-            }
-
-            // Aplicar ganancia del gate al frame.
-            if (gateGain_ < 0.999f) {
-                for (int i = 0; i < kDnnHopSize; ++i) {
-                    outputFrame[i] *= gateGain_;
-                }
-            }
-        }
+        // ── 11b. Noise gate DESACTIVADO (era la causa de la matraca) ─────
+        //
+        // El gate previo modulaba la amplitud del frame en base al RMS con
+        // rampas de 0.33 por frame de 10 ms. En señales de nivel borderline
+        // (ventilador, aire acondicionado, tráfico lejano) esa modulación
+        // caía dentro del knee (0.001–0.01), exactamente en el rango del
+        // piso de ruido residual del GTCRN post-inferencia, produciendo
+        // oscilaciones periódicas de ganancia audibles como MATRACA a
+        // ~30 Hz (la velocidad de la rampa dividida por el hop).
+        //
+        // El GTCRN ya aprende ganancias por banda con suavizado interno;
+        // añadir un gate adicional en cascada es redundante y solo agrega
+        // artefactos. Si en el futuro se quiere un gate real, va al final
+        // del pipeline DSP (post-EQ / pre-MPO), no aquí dentro del wrapper
+        // del modelo.
+        //
+        // Los miembros gateGain_ (=1.0) y gateHoldCounter_ (=0) quedan en
+        // sus valores iniciales; no se tocan, no se aplican.
 
         // ── 12. Push outputFrame al outputRing ───────────────────────────
         if (outputRing.freeSpace() < kDnnHopSize) {
