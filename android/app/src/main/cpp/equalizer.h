@@ -220,11 +220,17 @@ private:
     float appliedGains_[kEqBandCount];    ///< Ganancias con las que se calcularon los coeficientes
     float rampGains_[kEqBandCount];       ///< Ganancia SUAVIZADA actual por banda (audio thread)
 
-    /// Escala anti-saturación aplicada a la ÚLTIMA muestra del bloque anterior.
-    /// Punto de partida de la rampa per-sample de processWithScale(): el factor
-    /// 'scale' se recomputa cada bloque desde el pico del bloque, así que sin
-    /// rampa caería como escalón en la frontera (= click). FIX matraca Causa B.
-    float scaleRampPrev_ = 1.0f;
+    /// Escala anti-saturación SUAVIZADA per-sample (envelope detector) usada
+    /// por processWithScale(). El factor 'scale' se recomputa cada bloque desde
+    /// el pico del bloque; sin suavizado caería como escalón en la frontera de
+    /// bloque (= click). FIX matraca Causa B. Attack rápido / release lento,
+    /// mismo patrón que WDRC/OC/MPO.
+    float scaleSmoothed_ = 1.0f;
+    float scaleAttackCoeff_ = 1.0f;   ///< 1-exp(-1/(attackMs·fs/1000)); set en init().
+    float scaleReleaseCoeff_ = 1.0f;  ///< 1-exp(-1/(releaseMs·fs/1000)); set en init().
+    /// Constantes de tiempo del suavizado del scale anti-saturación.
+    static constexpr float kScaleAttackMs  = 2.0f;   ///< protege transitorios rápido
+    static constexpr float kScaleReleaseMs = 50.0f;  ///< evita pumping al soltar
 
     // --- Crossfade entre coeficientes ---
     EqCrossfader crossfader_;                        ///< Estado del crossfade activo por banda

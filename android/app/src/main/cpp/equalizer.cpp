@@ -72,9 +72,15 @@ void Equalizer::init(int sampleRate) {
         coeffs_[i] = BiquadCoeffs{};
     }
 
-    // FIX matraca (Causa B): la rampa per-sample del factor anti-saturación
+    // FIX matraca (Causa B): el suavizado per-sample del factor anti-saturación
     // arranca en ganancia unitaria (sin escalado) tras (re)inicializar.
-    scaleRampPrev_ = 1.0f;
+    scaleSmoothed_ = 1.0f;
+    // Coeficientes del envelope detector (attack/release), derivados de la fs.
+    const float fs = (sampleRate_ > 0) ? static_cast<float>(sampleRate_) : 16000.0f;
+    const float attackSamples  = kScaleAttackMs  * fs / 1000.0f;
+    const float releaseSamples = kScaleReleaseMs * fs / 1000.0f;
+    scaleAttackCoeff_  = (attackSamples  > 0.0f) ? (1.0f - std::exp(-1.0f / attackSamples))  : 1.0f;
+    scaleReleaseCoeff_ = (releaseSamples > 0.0f) ? (1.0f - std::exp(-1.0f / releaseSamples)) : 1.0f;
 }
 
 // ============================================================================
@@ -140,26 +146,24 @@ void Equalizer::processWithScale(float* buffer, int blockSize, float scale) {
     // PICO del bloque (anti-saturación pre-WDRC), el factor saltaba de un
     // bloque al siguiente y ese escalón caía de golpe en la frontera de bloque
     // → discontinuidad = click que el ArtifactMonitor detecta (era el +clicks/s
-    // de la etapa POSTERIOR al motor). Ahora interpolamos 'scale' PER-SAMPLE
-    // desde el valor aplicado a la última muestra del bloque anterior
-    // (scaleRampPrev_) hasta el target de este bloque, garantizando continuidad
-    // C0 entre bloques. La última muestra recibe 'scale', que pasa a ser el
-    // punto de partida del siguiente bloque.
-    const float gStart = scaleRampPrev_;
-    const float gEnd   = scale;
-    if (gStart != gEnd) {
-        const float invN = 1.0f / static_cast<float>(blockSize);
-        for (int i = 0; i < blockSize; ++i) {
-            const float t = static_cast<float>(i + 1) * invN;
-            buffer[i] *= gStart + (gEnd - gStart) * t;
-        }
-    } else if (gEnd != 1.0f) {
-        // Escala constante no unitaria: aplicar directo (sin rampa).
-        for (int i = 0; i < blockSize; ++i) {
-            buffer[i] *= gEnd;
-        }
+    // de la etapa POSTERIOR al motor).
+    //
+    // Ahora suavizamos 'scale' PER-SAMPLE con un envelope detector asimétrico
+    // (attack rápido / release lento), EXACTAMENTE el mismo patrón que WDRC,
+    // OC y MPO ya usan en este pipeline. Ventajas frente a una rampa lineal
+    // prev→target por bloque:
+    //   - Continuidad C0 entre bloques (scaleSmoothed_ persiste) → sin click.
+    //   - Independiente del tamaño de bloque (constante de tiempo en ms).
+    //   - Attack rápido (~2 ms) → un transitorio a mitad de bloque SÍ recibe la
+    //     atenuación protectora (una rampa lineal hasta el final del bloque lo
+    //     dejaba pasar semi-amplificado).
+    //   - Release lento (~50 ms) → evita "pumping" al volver a ganancia plena.
+    for (int i = 0; i < blockSize; ++i) {
+        const float coeff = (scale < scaleSmoothed_) ? scaleAttackCoeff_
+                                                     : scaleReleaseCoeff_;
+        scaleSmoothed_ += coeff * (scale - scaleSmoothed_);
+        buffer[i] *= scaleSmoothed_;
     }
-    scaleRampPrev_ = gEnd;
 }
 
 // ============================================================================
