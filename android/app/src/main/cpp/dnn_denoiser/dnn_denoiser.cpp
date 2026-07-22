@@ -52,6 +52,16 @@
 #include <thread>
 #include <vector>
 
+// Thread priority (FIX 1: reduce worker preemption under CPU load).
+// pthread_setschedparam + setpriority elevan el worker por encima del scheduler
+// normal. En Android no siempre se concede SCHED_FIFO (requiere permisos), pero
+// setpriority(-16) suele funcionar y baja materialmente los frame drops.
+#include <cerrno>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
 #define DNN_LOG_TAG "DnnDenoiser"
 #define DNN_LOGI(...) __android_log_print(ANDROID_LOG_INFO,  DNN_LOG_TAG, __VA_ARGS__)
 #define DNN_LOGW(...) __android_log_print(ANDROID_LOG_WARN,  DNN_LOG_TAG, __VA_ARGS__)
@@ -321,6 +331,34 @@ public:
                 linearAccum_ = 0.0f;
                 linearLast_  = 0.0f;
                 groupDelaySamples_ = 0.0f;
+
+                // FIX 2: si es downsampling (ratio > 1.05), diseñamos un
+                // anti-alias FIR simétrico. Sin él, la interpolación lineal
+                // deja pasar contenido > nyquist_target → aliasing (silbido
+                // metálico). Cutoff = 0.9 * nyquist_target normalizado a la
+                // rate de entrada. 48 taps Kaiser β=6.5 = ~55 dB stopband,
+                // suficiente para denoising sin dominar la latencia total.
+                if (linearRatio > 1.05f) {
+                    constexpr int kAaTaps = 48;
+                    constexpr float kAaBeta = 6.5f;
+                    // Nyquist del *output* como fracción de la rate de *input*:
+                    //   nyq_out / fs_in = (fs_out/2) / fs_in = 0.5 / linearRatio
+                    // Cutoff con margen del 90% para no cortar señal útil:
+                    const float fcNorm = 0.9f * 0.5f / linearRatio;
+                    linearAaTaps_.assign(kAaTaps, 0.0f);
+                    designKaiserLpf(linearAaTaps_.data(), kAaTaps, fcNorm, kAaBeta);
+                    linearAaDelay_.assign(kAaTaps, 0.0f);
+                    linearAaWriteIdx_ = 0;
+                    // Grupo de retardo del AA: (N-1)/2 samples a rate de entrada.
+                    // No lo contamos en groupDelaySamples_ (que mide en output rate);
+                    // es una latencia adicional pequeña (~0.5 ms @ 44.1 kHz).
+                } else {
+                    // Upsampling o rate casi 1: no necesitamos AA (nyquist del
+                    // input ya cae dentro del output). Liberamos memoria.
+                    linearAaTaps_.clear();
+                    linearAaDelay_.clear();
+                    linearAaWriteIdx_ = 0;
+                }
                 break;
         }
         initialized_ = true;
@@ -333,6 +371,9 @@ public:
         writeIdx_ = 0;
         linearAccum_ = 0.0f;
         linearLast_  = 0.0f;
+        // FIX 2: también limpiar la delay-line del AA prefilter del modo lineal.
+        std::fill(linearAaDelay_.begin(), linearAaDelay_.end(), 0.0f);
+        linearAaWriteIdx_ = 0;
     }
 
     /// Procesa `n` samples de entrada. Escribe hasta `outMax` samples de
@@ -436,15 +477,49 @@ private:
         return written;
     }
 
+    /// Aplica el anti-alias FIR (simétrico, delay-line circular) sobre un
+    /// input sample. Devuelve el sample filtrado. Si el filtro está vacío
+    /// (upsampling o ratio≈1), retorna el sample sin tocar. Solo llamado
+    /// desde el audio thread (mismo hilo que consume el resampler).
+    inline float applyLinearAa(float x) {
+        if (linearAaTaps_.empty()) return x;
+        const int N = static_cast<int>(linearAaTaps_.size());
+        linearAaDelay_[linearAaWriteIdx_] = x;
+        linearAaWriteIdx_ = (linearAaWriteIdx_ + 1) % N;
+        // Convolución: y = sum_k h[k] * delay[writeIdx-1-k]
+        float acc = 0.0f;
+        int idx = linearAaWriteIdx_ - 1;
+        if (idx < 0) idx += N;
+        for (int k = 0; k < N; ++k) {
+            acc += linearAaTaps_[k] * linearAaDelay_[idx];
+            idx = (idx == 0) ? (N - 1) : (idx - 1);
+        }
+        return acc;
+    }
+
     int processLinear(const float* in, int n, float* out, int outMax) {
         // Interpolación lineal con fracción acumulada.
         // ratio = inputRate / outputRate (ej. 44100/16000 = 2.756).
         // Para cada output, posición de input = outIdx * ratio.
-        // Mantenemos linearAccum_ como índice fraccional (en samples de input)
-        // relativo al sample de input "next" que aún no consumimos.
+        //
+        // FIX 2: si el AA prefilter está activo (downsampling), pre-filtramos
+        // todo el bloque de input una vez en `aaScratch_` y luego corremos la
+        // interpolación lineal estándar sobre el buffer filtrado. Esto elimina
+        // el aliasing (silbido metálico) sin cambiar la estructura del algoritmo.
+        const float* src = in;
+        if (!linearAaTaps_.empty()) {
+            if (static_cast<int>(aaScratch_.size()) < n) {
+                aaScratch_.assign(n, 0.0f);
+            }
+            for (int i = 0; i < n; ++i) {
+                aaScratch_[i] = applyLinearAa(in[i]);
+            }
+            src = aaScratch_.data();
+        }
+
         int written = 0;
         int consumed = 0;  // samples del input ya pasados.
-        // linearAccum_ ∈ [0, 1) — fracción dentro del intervalo [last, in[0]].
+        // linearAccum_ ∈ [0, 1) — fracción dentro del intervalo [last, src[0]].
         while (written < outMax) {
             // Necesitamos avanzar input mientras linearAccum_ >= 1.0
             while (linearAccum_ >= 1.0f) {
@@ -452,11 +527,11 @@ private:
                     // Sin más entrada: terminamos este batch.
                     return written;
                 }
-                linearLast_ = in[consumed++];
+                linearLast_ = src[consumed++];
                 linearAccum_ -= 1.0f;
             }
-            // Output: linealmente entre linearLast_ y in[consumed] (next).
-            const float next = (consumed < n) ? in[consumed]
+            // Output: linealmente entre linearLast_ y src[consumed] (next).
+            const float next = (consumed < n) ? src[consumed]
                                               : linearLast_;  // hold tail
             const float frac = linearAccum_;
             out[written++] = linearLast_ * (1.0f - frac) + next * frac;
@@ -481,6 +556,18 @@ private:
     float linearRatio_ = 1.0f;   // inputRate / outputRate
     float linearAccum_ = 0.0f;
     float linearLast_  = 0.0f;
+
+    // FIX 2: Anti-alias LPF opcional para el modo lineal genérico.
+    // Cuando linearRatio_ > 1 (downsampling), aplicamos un FIR simétrico
+    // sobre cada input sample antes de la interpolación para eliminar el
+    // contenido > nyquist_target/1.05. Sin esto, rates como 44100→16000
+    // producen aliasing audible (silbido metálico). Empty ⇒ deshabilitado.
+    std::vector<float> linearAaTaps_;    // 48 taps Kaiser LPF simétrico, o vacío
+    std::vector<float> linearAaDelay_;   // delay line del FIR
+    int                linearAaWriteIdx_ = 0;
+    /// Scratch para pre-filtrar el input en `processLinear`. Reusado; se
+    /// redimensiona solo si crece por encima de la capacidad reservada.
+    std::vector<float> aaScratch_;
 
     // Indicators.
     float groupDelaySamples_ = 0.0f;
@@ -514,37 +601,44 @@ inline float besselI0Approx(float x) {
         + y * (0.02635537f + y * (-0.01647633f + y * 0.00392377f))))))));
 }
 
-inline void designResamplerProtoLpf(float* h, int N) {
-    // fc normalizado respecto a 48 kHz: 7500/48000 = 0.15625
-    // (cutoff en el midpoint de la banda de transición 7-8 kHz).
-    const float fc = 7500.0f / 48000.0f;
-    // MEJORA #3 (ruido-profundo.md): β=8.5 (antes 8.0) para mantener 80 dB stopband
-    // con N=72 taps en vez de 96. Ver constexpr kKaiserBeta arriba.
-    const float beta = kKaiserBeta;
+/// Diseño Kaiser LPF genérico. Extraído para reutilizar entre el prototipo
+/// polyphase (48↔16 kHz) y el anti-alias FIR del modo lineal (FIX 2).
+///   @param h        buffer de salida con `N` coeficientes.
+///   @param N        número de taps (típicamente 48-72).
+///   @param fcNorm   cutoff normalizado en [0, 0.5] (fs = 1.0).
+///   @param beta     β de Kaiser (típicamente 6..9). Más grande = más stopband.
+inline void designKaiserLpf(float* h, int N, float fcNorm, float beta) {
+    if (N <= 0) return;
+    if (fcNorm <= 0.0f) fcNorm = 0.001f;
+    if (fcNorm >= 0.5f) fcNorm = 0.499f;
     const float center = (N - 1) / 2.0f;
     const float i0Beta = besselI0Approx(beta);
     float sum = 0.0f;
     for (int n = 0; n < N; ++n) {
-        // Ideal LPF (sinc):  h_ideal[n] = 2*fc * sinc(2*fc*(n - center))
-        const float arg = 2.0f * fc * (static_cast<float>(n) - center);
+        const float arg = 2.0f * fcNorm * (static_cast<float>(n) - center);
         float ideal;
         if (std::fabs(arg) < 1e-9f) {
-            ideal = 2.0f * fc;
+            ideal = 2.0f * fcNorm;
         } else {
             const float px = kPi * arg;
-            ideal = 2.0f * fc * std::sin(px) / px;
+            ideal = 2.0f * fcNorm * std::sin(px) / px;
         }
-        // Kaiser window.
         const float ratio = (2.0f * static_cast<float>(n) / (N - 1)) - 1.0f;
         const float winArg = beta * std::sqrt(std::max(0.0f, 1.0f - ratio * ratio));
         const float win = besselI0Approx(winArg) / i0Beta;
         h[n] = ideal * win;
         sum += h[n];
     }
-    // Normalizar a unity DC gain.
     if (sum > 1e-12f) {
         for (int n = 0; n < N; ++n) h[n] /= sum;
     }
+}
+
+inline void designResamplerProtoLpf(float* h, int N) {
+    // Prototipo polyphase 48↔16. fc normalizado a 48 kHz = 7500/48000 = 0.15625.
+    // MEJORA #3 (ruido-profundo.md): β=8.5 para mantener ~80 dB stopband con
+    // N=72 taps en vez de 96. Ver constexpr kKaiserBeta arriba.
+    designKaiserLpf(h, N, 7500.0f / 48000.0f, kKaiserBeta);
 }
 
 }  // namespace
@@ -676,6 +770,34 @@ struct DnnDenoiser::Impl {
     std::atomic<uint64_t>   droppedFramesLocal{0};
     std::atomic<uint32_t>   lastInferenceUsLocal{0};
 
+    // ─── FIX 1: Scratch buffers para hot audio path (sin heap alloc) ────
+    /// Scratch para pop() del dryDelayRing. Antes se declaraba como
+    /// `std::vector<float> dry(blockSize, 0.0f)` dentro de process()/processStereo(),
+    /// haciendo un alloc + free por callback de audio. Bajo carga, ese jitter
+    /// era una causa real de underruns → frame drops.
+    /// Se redimensiona una sola vez (con margen) y se reutiliza.
+    std::vector<float> dryScratch;
+
+    /// Scratch para downmix ch0+ch1 → mono en el modo mono-fallback de
+    /// processStereo() (FIX 3). Reutilizado; nunca reasignado en hot path.
+    std::vector<float> stereoToMonoScratch;
+
+    // ─── FIX 2: SR configurado explícitamente ──────────────────────────
+    /// Sample rate confirmado por applyInputSampleRate(). Si es false, el
+    /// resampler está en su estado default (identity) y el audio real puede
+    /// NO ser 16 kHz → bypass bit-exact para evitar aliasing metálico.
+    /// Spec: ruidolimpio.md — Falla 2 de GTCRN.
+    bool srConfigured = false;
+    /// Log-once para no inundar logcat si el audio arranca antes que el config.
+    std::atomic<bool> loggedMissingSr{false};
+
+    // ─── FIX 3: Mono fallback cuando el modelo dual falla ───────────────
+    /// Verdadero si initializeDual() cargó `gtcrn.onnx` (mono) en lugar de
+    /// `gtcrn_dual_core.onnx`. processStereo() downmixea ch0+ch1 y corre por
+    /// el pipeline mono en vez de hacer passthrough ch0.
+    /// Spec: ruidolimpio.md — Falla 3 de GTCRN.
+    bool usingMonoFallback = false;
+
     // ─── Noise gate con hysteresis (FIX tktktk Causa 2) ──────────────────
     /// Ganancia actual del noise gate [0..1]. Rampea suavemente entre abierto
     /// (1.0) y cerrado (0.0) para evitar clicks por conmutación rápida.
@@ -761,6 +883,13 @@ struct DnnDenoiser::Impl {
         downStagingCh1.assign(1024, 0.0f);
         wet16k.assign(1024, 0.0f);
         wetNativeRate.assign(2048, 0.0f);
+
+        // FIX 1: Pre-dimensionar los scratch del hot path para evitar
+        // heap alloc por callback. 2048 samples cubre bursts típicos de
+        // Oboe (96-192 @ 48 kHz) con holgura; std::vector::resize()
+        // más adelante sólo re-alloca si crece por encima de este límite.
+        dryScratch.assign(2048, 0.0f);
+        stereoToMonoScratch.assign(2048, 0.0f);
 
         // Dual-channel: STFT buffers for ch1 and WPE beamformer reset.
         stftInBufCh1.assign(kDnnFftSize, 0.0f);
@@ -1571,7 +1700,39 @@ struct DnnDenoiser::Impl {
     void startWorker() {
         if (worker.joinable()) return;
         workerRun.store(true, std::memory_order_release);
-        worker = std::thread([this]{ workerLoop(); });
+        worker = std::thread([this]{
+            // FIX 1: Elevar la prioridad del worker de inferencia para reducir
+            // preempciones bajo carga (spec ruidolimpio.md § GTCRN falla 1).
+            //
+            // Estrategia en dos pasos, ambos non-fatal si el kernel niega:
+            //   1) pthread_setschedparam(SCHED_FIFO, prio=1..3): "audio-adjacent"
+            //      real-time. En Android suele fallar salvo con permisos.
+            //   2) setpriority(PRIO_PROCESS, tid, -16): nice de alta prioridad
+            //      (nivel similar a AudioTrack). Casi siempre concedido.
+            //
+            // Fallback silencioso: si ambos fallan, seguimos con prio normal.
+            {
+                sched_param sp{};
+                sp.sched_priority = 2;  // dentro del rango típico audio (1..4)
+                const int rcFifo = pthread_setschedparam(
+                    pthread_self(), SCHED_FIFO, &sp);
+                if (rcFifo == 0) {
+                    DNN_LOGI("Worker priority: SCHED_FIFO prio=%d", sp.sched_priority);
+                } else {
+                    // setpriority actúa sobre el tid, no el pid.
+                    const int tid = static_cast<int>(gettid());
+                    const int rcNice = setpriority(PRIO_PROCESS, tid, -16);
+                    if (rcNice == 0) {
+                        DNN_LOGI("Worker priority: nice=-16 (SCHED_FIFO denegado: %d)",
+                                 rcFifo);
+                    } else {
+                        DNN_LOGW("Worker priority: no elevada (FIFO rc=%d, nice rc=%d, errno=%d)",
+                                 rcFifo, rcNice, errno);
+                    }
+                }
+            }
+            workerLoop();
+        });
     }
 
     void stopWorker() {
@@ -1585,11 +1746,14 @@ struct DnnDenoiser::Impl {
     /// Idempotente: si la rate no cambió respecto a la anterior, es no-op.
     void applyInputSampleRate(int sr) {
         if (sr <= 0) sr = kDnnSampleRate;
-        if (sr == inputSr && down.groupDelaySamples() >= 0.0f) {
-            // Misma rate ya configurada: no-op.
+        // FIX 2: si ya está configurado a esta misma rate, no-op y no reset
+        // spurio. `srConfigured` se marca antes del `return` para que llamadas
+        // idempotentes (mismo sr) también dejen el flag en true.
+        if (sr == inputSr && srConfigured) {
             return;
         }
         inputSr = sr;
+        srConfigured = true;  // FIX 2: a partir de aquí `process()` puede correr
         if (sr == kDnnSampleRate) {
             // 16 kHz: bypass del resampler.
             down.configure(Resampler::Mode::kIdentity, nullptr, 0, 1.0f);
@@ -1624,9 +1788,14 @@ struct DnnDenoiser::Impl {
             down.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, downRatio);
             downCh1.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, downRatio);
             up.configure(Resampler::Mode::kLinearGeneric, nullptr, 0, upRatio);
+            // FIX 2: el modo lineal ahora incluye un anti-alias FIR (48 taps
+            // Kaiser β=6.5, ~55 dB stopband) cuando el ratio > 1.05. Elimina
+            // el silbido metálico previo en rates como 44100→16000.
+            const bool aaActive = downRatio > 1.05f;
             DNN_LOGW("Resampler: %d Hz → linear interpolation (downRatio=%.4f, "
-                     "upRatio=%.4f). Quality OK for denoiser, suboptimal for "
-                     "non-integer ratios.", sr, downRatio, upRatio);
+                     "upRatio=%.4f)%s.",
+                     sr, downRatio, upRatio,
+                     aaActive ? " + AA prefilter (48 taps Kaiser β=6.5)" : "");
         }
         // Limpiar rings: las dimensiones lógicas cambian al cambiar la rate.
         inputRing.clear();
@@ -1712,6 +1881,11 @@ int DnnDenoiser::inputChannels() const {
     return impl_->channels.load(std::memory_order_acquire);
 }
 
+bool DnnDenoiser::isUsingMonoFallback() const {
+    if (!impl_) return false;
+    return impl_->usingMonoFallback;
+}
+
 void DnnDenoiser::setInputSampleRate(int sampleRateHz) {
     if (!impl_) return;
     impl_->applyInputSampleRate(sampleRateHz);
@@ -1784,23 +1958,57 @@ bool DnnDenoiser::initializeDual(AAssetManager* assetMgr, const char* assetPath)
 
     // Load the ONNX model using the same OnnxRuntime infrastructure as mono.
     // The dual model has the same interface: [1,1,161,2] + caches.
-    if (!impl_->loadDualOnnxModel(assetMgr, assetPath)) {
-        DNN_LOGE("initializeDual: model load/validation failed -> bypass");
-        impl_->channels.store(1, std::memory_order_release);
-        active_.store(false, std::memory_order_release);
-        return false;
+    if (impl_->loadDualOnnxModel(assetMgr, assetPath)) {
+        impl_->channels.store(2, std::memory_order_release);
+        impl_->modelReady = true;
+        impl_->usingMonoFallback = false;
+        active_.store(true, std::memory_order_release);
+        impl_->startWorker();
+        DNN_LOGI("initializeDual: OK, worker thread running (dual-channel WPE+ONNX)");
+        return true;
     }
 
-    impl_->channels.store(2, std::memory_order_release);
-    impl_->modelReady = true;
-    active_.store(true, std::memory_order_release);
-    impl_->startWorker();
-    DNN_LOGI("initializeDual: OK, worker thread running (dual-channel WPE+ONNX)");
-    return true;
+    // ── FIX 3: Fallback a modelo mono cuando el dual no está disponible ──
+    // Antes: si `gtcrn_dual_core.onnx` faltaba, la instancia dual quedaba
+    // permanentemente inactiva y `processStereo()` hacía passthrough de ch0
+    // (usuario oye el ambiente crudo, sin denoise ni beamforming).
+    // Ahora: intentamos cargar `gtcrn.onnx` (mono) como fallback y, en
+    // `processStereo()`, downmixeamos ch0+ch1 → mono → GTCRN mono. El usuario
+    // pierde el beamforming espacial pero conserva la reducción de ruido.
+    DNN_LOGW("initializeDual: dual model unavailable — trying mono fallback (gtcrn.onnx)");
+    if (impl_->loadDualOnnxModel(assetMgr, "dnn_denoiser/gtcrn.onnx")) {
+        impl_->channels.store(1, std::memory_order_release);
+        impl_->modelReady = true;
+        impl_->usingMonoFallback = true;
+        active_.store(true, std::memory_order_release);
+        impl_->startWorker();
+        DNN_LOGW("initializeDual: MONO FALLBACK active — ch0+ch1 downmix → GTCRN mono. "
+                 "Beamforming espacial NO disponible; reducción de ruido SÍ.");
+        return true;  // Devolvemos true: la instancia está activa (degradada).
+    }
+
+    DNN_LOGE("initializeDual: dual y mono fallidos → bypass permanente (passthrough)");
+    impl_->channels.store(1, std::memory_order_release);
+    impl_->usingMonoFallback = false;
+    active_.store(false, std::memory_order_release);
+    return false;
 }
 
 void DnnDenoiser::process(float* buffer, int blockSize) {
     if (buffer == nullptr || blockSize <= 0) return;
+
+    // FIX 2: Guard estricto — si el sample rate del audio de entrada NO fue
+    // configurado explícitamente vía setInputSampleRate(), NO procesamos.
+    // El resampler estaría en modo identity (0 taps) y trataría 48 kHz
+    // como si fuera 16 kHz → aliasing 3× audible (silbido metálico).
+    // Bypass bit-exact es mejor que denoising con artefactos.
+    if (!impl_->srConfigured) {
+        if (!impl_->loggedMissingSr.exchange(true, std::memory_order_relaxed)) {
+            DNN_LOGW("process(): setInputSampleRate() no llamado — bypass bit-exact "
+                     "hasta que se configure el sample rate (evita aliasing).");
+        }
+        return;
+    }
 
     const bool en  = enabled_.load(std::memory_order_acquire);
     const bool act = active_.load(std::memory_order_acquire);
@@ -1889,8 +2097,17 @@ void DnnDenoiser::process(float* buffer, int blockSize) {
     // ── Etapa 4: pop dry @ rate nativa para mezclar 1:1 con wetNativeRate ──
     // Mantener alineamiento estricto: si hay underrun consumimos igualmente
     // del dryDelayRing para que la siguiente vuelta arranque sincronizada.
-    std::vector<float> dry(blockSize, 0.0f);
-    const int gotDry = impl_->dryDelayRing.pop(dry.data(), blockSize);
+    // FIX 1: usar scratch buffer preallocado (`dryScratch`) en vez de
+    // `std::vector<float>(blockSize)` local. Antes se allocaba+liberaba en
+    // cada callback → jitter en el audio thread bajo carga → drops.
+    if (static_cast<int>(impl_->dryScratch.size()) < blockSize) {
+        impl_->dryScratch.assign(blockSize, 0.0f);  // realloc raro; fuera del hot path típico
+    } else {
+        // Reset ligero solo del rango que vamos a leer.
+        std::fill_n(impl_->dryScratch.begin(), blockSize, 0.0f);
+    }
+    float* const dry = impl_->dryScratch.data();
+    const int gotDry = impl_->dryDelayRing.pop(dry, blockSize);
 
     if (underrun) {
         // ── FIX tktktk (Causa 1): crossfade suave hacia dry en underrun ──
@@ -2045,9 +2262,41 @@ void DnnDenoiser::processStereo(const float* ch0, const float* ch1,
         }
     };
 
+    // FIX 2: mismo guard que process() — sin SR configurado, bypass a ch0.
+    if (!impl_->srConfigured) {
+        if (!impl_->loggedMissingSr.exchange(true, std::memory_order_relaxed)) {
+            DNN_LOGW("processStereo(): setInputSampleRate() no llamado — "
+                     "bypass ch0 hasta que se configure el sample rate.");
+        }
+        passthroughCh0();
+        return;
+    }
+
     const bool en   = enabled_.load(std::memory_order_acquire);
     const bool act  = active_.load(std::memory_order_acquire);
     const bool dual = (impl_->channels.load(std::memory_order_acquire) == 2);
+
+    // ── FIX 3: Ruta de fallback mono ──────────────────────────────────
+    // Si el modelo dual no cargó pero sí se cargó gtcrn.onnx como fallback,
+    // downmixeamos ch0+ch1 → mono y corremos por el pipeline mono existente
+    // (process()) para que el usuario reciba reducción de ruido en vez de
+    // passthrough crudo. Sin este bloque, la falta de `gtcrn_dual_core.onnx`
+    // dejaba al usuario oyendo el ambiente sin denoising.
+    if (!dual && impl_->usingMonoFallback && act) {
+        if (static_cast<int>(impl_->stereoToMonoScratch.size()) < blockSize) {
+            impl_->stereoToMonoScratch.assign(blockSize, 0.0f);
+        }
+        float* const mono = impl_->stereoToMonoScratch.data();
+        // Downmix simétrico ch0+ch1 con -6 dB de headroom para evitar clipping
+        // cuando ambos canales tienen contenido correlacionado (voz cercana).
+        for (int i = 0; i < blockSize; ++i) {
+            mono[i] = 0.5f * (ch0[i] + ch1[i]);
+        }
+        // Corre el pipeline mono in-place (aplica crossfade, VAD cap, etc.).
+        process(mono, blockSize);
+        std::memcpy(output, mono, static_cast<size_t>(blockSize) * sizeof(float));
+        return;
+    }
 
     // Fast path bypass: sin enable (y crossfade ya en 0), o modelo no dual.
     // El modo mono no puede procesar estéreo → ch0 passthrough (R4.5).
@@ -2127,8 +2376,14 @@ void DnnDenoiser::processStereo(const float* ch0, const float* ch1,
     }
 
     // ── Etapa 4: pop dry (=ch0 realineado) @ rate nativa ────────────────
-    std::vector<float> dry(blockSize, 0.0f);
-    const int gotDry = impl_->dryDelayRing.pop(dry.data(), blockSize);
+    // FIX 1: scratch preallocado en Impl para evitar heap alloc por callback.
+    if (static_cast<int>(impl_->dryScratch.size()) < blockSize) {
+        impl_->dryScratch.assign(blockSize, 0.0f);
+    } else {
+        std::fill_n(impl_->dryScratch.begin(), blockSize, 0.0f);
+    }
+    float* const dry = impl_->dryScratch.data();
+    const int gotDry = impl_->dryDelayRing.pop(dry, blockSize);
 
     if (underrun) {
         // El worker no alcanzó la tasa: salida = ch0 (Bypass_Seguro), avanzar

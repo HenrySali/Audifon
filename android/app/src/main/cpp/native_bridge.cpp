@@ -1392,6 +1392,11 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDnnDiagnostics(
     putKv(env, map, put, "effectiveIntensity",  boxDouble(env, static_cast<double>(g_engine->getDnnEffectiveIntensity())));
     putKv(env, map, put, "userIntensity",       boxDouble(env, static_cast<double>(g_engine->getDnnUserIntensity())));
     putKv(env, map, put, "inputChannels",       boxInt(env, g_engine->getDnnInputChannels()));
+    // FIX 3 (ruidolimpio.md — GTCRN falla 3): flag para que la UI muestre
+    // "modo degradado" cuando gtcrn_dual_core.onnx no está y corremos
+    // GTCRN mono sobre downmix ch0+ch1.
+    putKv(env, map, put, "dualInputChannels",   boxInt(env, g_engine->getDnnDualInputChannels()));
+    putKv(env, map, put, "dualUsingMonoFallback", boxBool(env, g_engine->isDnnDualUsingMonoFallback()));
 
     env->DeleteLocalRef(hashMapCls);
     return map;

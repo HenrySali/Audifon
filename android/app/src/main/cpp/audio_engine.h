@@ -273,6 +273,18 @@ public:
     /// @return canales de entrada del modelo (1=mono, 2=dual).
     int getDnnInputChannels() const { return dnnDenoiser_.inputChannels(); }
 
+    /// @return canales de entrada de la instancia dual (2 si cargó
+    /// `gtcrn_dual_core.onnx`; 1 si cayó a fallback mono o no cargó).
+    int getDnnDualInputChannels() const { return dnnDenoiserDual_.inputChannels(); }
+
+    /// @return true si la instancia dual está corriendo en fallback mono
+    /// porque `gtcrn_dual_core.onnx` no estaba disponible en assets.
+    /// Útil para que la UI muestre un badge "modo degradado" en
+    /// `kDualChannelDnn` (ruidolimpio.md — Falla 3 de GTCRN).
+    bool isDnnDualUsingMonoFallback() const {
+        return dnnDenoiserDual_.isUsingMonoFallback();
+    }
+
     /// @return referencia al DenoiserSelector para acceso desde JNI.
     DenoiserSelector& getDenoiserSelector() { return denoiserSelector_; }
 
