@@ -1,0 +1,39 @@
+# ninja log v5
+3	24064	8063906918316310	CMakeFiles/hearing_aid_dsp.dir/dsp_pipeline.cpp.o	2ebf342843554cfe
+4268	28050	8063906922121440	CMakeFiles/hearing_aid_dsp.dir/noise_reduction.cpp.o	8521298ad81a37ca
+8101	32352	8063907023458591	CMakeFiles/hearing_aid_dsp.dir/audio_engine.cpp.o	590e36729fd8df8f
+12058	37177	8063906982533568	CMakeFiles/hearing_aid_dsp.dir/wdrc_processor.cpp.o	407a691ff6b9cf86
+15815	41011	8063907022630084	CMakeFiles/hearing_aid_dsp.dir/equalizer.cpp.o	def885706aa47b0c
+19605	44718	8063907068715906	CMakeFiles/hearing_aid_dsp.dir/transient_reducer.cpp.o	68cecb602cbf4492
+24203	49013	8063907112787558	CMakeFiles/hearing_aid_dsp.dir/environment_classifier.cpp.o	31f052acc6d7d2f2
+28053	53324	8063907152188122	CMakeFiles/hearing_aid_dsp.dir/spectrum_analyzer.cpp.o	7e67a2e6ad9a5c6c
+32354	57191	8063907194108655	CMakeFiles/hearing_aid_dsp.dir/mpo_limiter.cpp.o	da016e2345ac4767
+37178	61129	8063907249087792	CMakeFiles/hearing_aid_dsp.dir/smart_scene/spectral_features.cpp.o	68d2185ce49a119e
+41013	64833	8063907307743598	CMakeFiles/hearing_aid_dsp.dir/smart_scene/vad_detector.cpp.o	919aafaf8a30bc29
+44823	68653	8063907320838085	CMakeFiles/hearing_aid_dsp.dir/calibration_spectrum/peak_detector.cpp.o	4547104263e19a3b
+49016	72549	8063907366527216	CMakeFiles/hearing_aid_dsp.dir/smart_scene/scene_analyzer.cpp.o	f998c0cd63a9d809
+53324	76141	8063907403027766	CMakeFiles/hearing_aid_dsp.dir/smart_scene/noise_profile.cpp.o	728b4694fab94f61
+57192	80030	8063907436392492	CMakeFiles/hearing_aid_dsp.dir/calibration_spectrum/fft_engine.cpp.o	d178d0f4236148db
+61131	83785	8063907501953341	CMakeFiles/hearing_aid_dsp.dir/native_bridge.cpp.o	b0a83698793a40d3
+64835	83830	8063907521437153	CMakeFiles/hearing_aid_dsp.dir/calibration_spectrum/tone_analyzer.cpp.o	c4af771fa2f028f8
+68654	87511	8063907546872929	CMakeFiles/hearing_aid_dsp.dir/calibration_spectrum/thd_calculator.cpp.o	8cb61bac18278326
+72550	87646	8063907584655688	CMakeFiles/hearing_aid_dsp.dir/denoiser_selector.cpp.o	d748f2b24243af36
+76143	88023	8063907625061618	CMakeFiles/hearing_aid_dsp.dir/dfn3_denoiser.cpp.o	1c1e142a233322e6
+83788	88418	8063907652180704	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/denoise.c.o	5956fa3ffc7b6764
+83831	93139	8063907700385972	CMakeFiles/hearing_aid_dsp.dir/rnnoise_denoiser.cpp.o	526d7267045d96e3
+87647	93209	8063907688770654	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/kiss_fft.c.o	518b9e84c5fef83
+88024	93314	8063907690203275	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/celt_lpc.c.o	54668403519510a6
+93142	95252	8063907741196030	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/rnn_data.c.o	cab90d90e1db89f7
+93210	99529	8063907738309945	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/rnn_reader.c.o	8c47a577aca76c6a
+93314	99531	8063907757659096	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/pitch.c.o	d2137f04c65defbb
+88419	99534	8063907767324836	CMakeFiles/hearing_aid_dsp.dir/diagnostic_recorder.cpp.o	b99e9468302c4c47
+87520	99662	8063907796513058	CMakeFiles/hearing_aid_dsp.dir/rnnoise/src/rnn.c.o	c18b823a45f33146
+80032	99812	8063907797672923	CMakeFiles/hearing_aid_dsp.dir/dnn_denoiser/dnn_denoiser.cpp.o	44b50b132c65f717
+95253	102675	8063907826572103	CMakeFiles/hearing_aid_dsp.dir/latency_loopback_tester.cpp.o	88c864de478fd655
+102676	109897	8063907898702453	C:/Users/Elsa y Henry/Desktop/Amplificador/Audifon-main (4)/Audifon-main/build/app/intermediates/cxx/Debug/25174b1p/obj/arm64-v8a/libhearing_aid_dsp.so	9aa88125992d7fb
+109	14850	8063962935378364	CMakeFiles/hearing_aid_dsp.dir/audio_engine.cpp.o	590e36729fd8df8f
+4613	14962	8063962936978393	CMakeFiles/hearing_aid_dsp.dir/native_bridge.cpp.o	b0a83698793a40d3
+8487	20288	8063962989014745	CMakeFiles/hearing_aid_dsp.dir/dfn3_denoiser.cpp.o	1c1e142a233322e6
+20289	27444	8063963060003166	C:/Users/Elsa y Henry/Desktop/Amplificador/Audifon-main (4)/Audifon-main/build/app/intermediates/cxx/Debug/25174b1p/obj/arm64-v8a/libhearing_aid_dsp.so	9aa88125992d7fb
+41	10142	8064261182007433	CMakeFiles/hearing_aid_dsp.dir/dfn3_denoiser.cpp.o	1c1e142a233322e6
+10143	16801	8064261240221939	C:/Users/Elsa y Henry/Desktop/Amplificador/Audifon-main (4)/Audifon-main/build/app/intermediates/cxx/Debug/25174b1p/obj/arm64-v8a/libhearing_aid_dsp.so	9aa88125992d7fb

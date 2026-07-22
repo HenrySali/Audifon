@@ -1,0 +1,52 @@
+# Tarea 16.3 (`audiogram-driven-presets`): Dartdoc completeness check.
+#
+# Bloquea el merge si las funciones públicas de los 3 módulos clínicos
+# (BundleBuilder, UclEstimator, MpoDeriver) no documentan las 4
+# secciones obligatorias (Parameters, Returns, References, Example).
+#
+# Requirement: 12.2.
+
+name: Dartdoc completeness
+
+on:
+  pull_request:
+    paths:
+      - "hearing_aid_app/lib/domain/audiogram_driven_presets/bundle_builder.dart"
+      - "hearing_aid_app/lib/domain/audiogram_driven_presets/ucl_estimator.dart"
+      - "hearing_aid_app/lib/domain/audiogram_driven_presets/mpo_deriver.dart"
+      - "hearing_aid_app/tool/check_dartdoc.dart"
+      - "hearing_aid_app/.github/workflows/dartdoc-check.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "hearing_aid_app/lib/domain/audiogram_driven_presets/**"
+      - "hearing_aid_app/tool/check_dartdoc.dart"
+  workflow_dispatch: {}
+
+jobs:
+  dartdoc:
+    name: Verify required Dartdoc sections
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Get dependencies
+        working-directory: hearing_aid_app
+        run: flutter pub get
+
+      - name: Check Dartdoc completeness
+        working-directory: hearing_aid_app
+        run: dart run tool/check_dartdoc.dart
+
+      - name: Run Dartdoc test suite
+        working-directory: hearing_aid_app
+        run: flutter test test/tool/check_dartdoc_test.dart

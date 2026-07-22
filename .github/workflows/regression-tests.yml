@@ -1,0 +1,70 @@
+# Spec gate: audiogram-driven-presets / Task 16.2
+#
+# Blocks merge when the regression test (10 EqPresets × flat 30 dB HL
+# audiogram) produces deviations larger than the hard ceiling defined
+# in Requirements 11.9: > 5 dB per band on any (style, band) cell that
+# is not in the documented softened-tolerance map.
+#
+# The actual assertions live in
+#   test/domain/audiogram_driven_presets/regression_eq_presets_test.dart
+# and use the stricter ±3 dB default (Requirements 11.1) plus a
+# documented per-(style, band) softened map at ±5 dB. That keeps the
+# in-suite tolerance below the gate ceiling — any case that breaches
+# the softened ±5 dB cap fails the test, and that failure is what this
+# CI gate catches and reports as "deviation > 5 dB per band".
+
+name: Regression tests (audiogram-driven-presets)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "lib/domain/audiogram_driven_presets/**"
+      - "lib/domain/entities/eq_preset.dart"
+      - "test/domain/audiogram_driven_presets/regression_eq_presets_test.dart"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/regression-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "lib/domain/audiogram_driven_presets/**"
+      - "test/domain/audiogram_driven_presets/regression_eq_presets_test.dart"
+  workflow_dispatch: {}
+
+jobs:
+  regression:
+    name: 10 EqPresets × flat 30 dB HL audiogram
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run regression test (10 EqPresets × flat audiogram)
+        run: |
+          flutter test \
+            test/domain/audiogram_driven_presets/regression_eq_presets_test.dart \
+            --reporter expanded
+
+      - name: Block merge on deviation > 5 dB
+        if: failure()
+        run: |
+          echo "::error title=Regression deviation > 5 dB per band::The regression test detected a per-band deviation that exceeds the 5 dB ceiling defined in Requirement 11.9. Review the previous step's log: every failing assertion prints the (style, band, frequency) triple plus the exact diff. Per Req 11.9 this requires manual clinical review before merge."
+          exit 1

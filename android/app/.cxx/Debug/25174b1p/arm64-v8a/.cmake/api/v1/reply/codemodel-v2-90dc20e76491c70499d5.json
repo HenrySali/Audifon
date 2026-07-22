@@ -1,0 +1,60 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.6.0"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "hearing_aid_dsp",
+					"targetIndexes" : 
+					[
+						0
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "hearing_aid_dsp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-hearing_aid_dsp-Debug-3ae36c9aef46b911a872.json",
+					"name" : "hearing_aid_dsp",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/Elsa y Henry/Desktop/Amplificador/Audifon-main (4)/Audifon-main/android/app/.cxx/Debug/25174b1p/arm64-v8a",
+		"source" : "C:/Users/Elsa y Henry/Desktop/Amplificador/Audifon-main (4)/Audifon-main/android/app/src/main/cpp"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

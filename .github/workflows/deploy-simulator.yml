@@ -1,0 +1,42 @@
+name: Deploy Simulator to GitHub Pages
+
+# Desactivado en memomedix3-commits/Audifono — no tiene GitHub Pages
+# habilitado. Si algún día querés activar el simulador web, andá a
+# Settings → Pages → Source: GitHub Actions, y borrá el `if: false`
+# del job deploy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: false
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'assets/simulator'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

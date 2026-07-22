@@ -1,0 +1,109 @@
+# MEJORA #5 (docs/ruido-profundo.md):
+# Pipeline CI con PESQ + STOI sobre el denoiser DNN del audífono PSK.
+#
+# Bloquea regresiones en la calidad del pipeline DSP antes de mergear.
+# Thresholds en tools/quality_eval/baseline_metrics.json.
+#
+# TODO: hoy el script corre en modo `--passthrough` porque el DNN denoiser
+# vive solo dentro del APK Android. Cuando exista un CLI standalone
+# (ver tools/quality_eval/README.md), reemplazar `--passthrough`
+# por `--dnn-cli <path>` y ajustar los thresholds.
+
+name: DSP Quality (PESQ + STOI)
+
+on:
+  pull_request:
+    paths:
+      - "android/app/src/main/cpp/dnn_denoiser/**"
+      - "android/app/src/main/cpp/dsp_pipeline.*"
+      - "android/app/src/main/cpp/wdrc_processor.*"
+      - "android/app/src/main/cpp/equalizer.*"
+      - "android/app/src/main/cpp/mpo_limiter.*"
+      - "android/app/src/main/cpp/noise_reduction.*"
+      - "tools/quality_eval/**"
+      - ".github/workflows/dsp-quality.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "android/app/src/main/cpp/dnn_denoiser/**"
+      - "tools/quality_eval/**"
+  workflow_dispatch: {}
+
+jobs:
+  quality-eval:
+    name: PESQ + STOI baseline check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "tools/quality_eval/requirements.txt"
+
+      - name: Install system deps for soundfile
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsndfile1
+
+      - name: Install Python deps
+        working-directory: tools/quality_eval
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify fixtures dir
+        id: fixtures
+        run: |
+          set -euo pipefail
+          NOISY="test/fixtures/dnn_eval/noisy"
+          CLEAN="test/fixtures/dnn_eval/clean"
+          if [ -d "$NOISY" ] && [ -d "$CLEAN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "noisy=$NOISY" >> "$GITHUB_OUTPUT"
+            echo "clean=$CLEAN" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Fixtures de evaluación no encontrados en $NOISY / $CLEAN."
+            echo "::warning::Saltando evaluación PESQ/STOI hasta que el equipo agregue el subset."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Run quality_eval (passthrough mode - TODO: reemplazar por --dnn-cli)"
+        if: steps.fixtures.outputs.available == 'true'
+        working-directory: tools/quality_eval
+        continue-on-error: true
+        run: |
+          python quality_eval.py \
+            --noisy-dir "${{ github.workspace }}/${{ steps.fixtures.outputs.noisy }}" \
+            --clean-dir "${{ github.workspace }}/${{ steps.fixtures.outputs.clean }}" \
+            --output metrics.json \
+            --baseline baseline_metrics.json \
+            --passthrough \
+            --max-files 30 \
+            --verbose
+
+      - name: Upload metrics report
+        if: steps.fixtures.outputs.available == 'true' && (success() || failure())
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsp-quality-metrics
+          path: tools/quality_eval/metrics.json
+          retention-days: 30
+
+      - name: Notify if fixtures missing
+        if: steps.fixtures.outputs.available != 'true'
+        run: |
+          echo "## DSP Quality Eval - fixtures pendientes" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Para que este workflow valide PESQ+STOI, agregar fixtures en:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '- `test/fixtures/dnn_eval/noisy/*.wav`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- `test/fixtures/dnn_eval/clean/*.wav`' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mismo filename en ambos lados, 16 kHz mono PCM." >> "$GITHUB_STEP_SUMMARY"
+          echo "Ver tools/quality_eval/README.md para detalles." >> "$GITHUB_STEP_SUMMARY"

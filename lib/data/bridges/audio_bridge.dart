@@ -1,0 +1,511 @@
+import '../../domain/entities/audio_config.dart';
+import '../../domain/entities/calibration_data.dart';
+import '../../domain/entities/wdrc_params.dart';
+
+/// Estado del motor de audio nativo.
+enum AudioEngineState {
+  /// Motor inactivo, sin procesamiento.
+  idle,
+
+  /// Motor iniciándose (configurando AudioRecord/AudioTrack).
+  starting,
+
+  /// Motor activo, procesando audio en tiempo real.
+  active,
+
+  /// Motor pausado (BT desconectado, foco de audio perdido, etc.).
+  paused,
+
+  /// Motor en estado de error.
+  error,
+}
+
+/// Motor de realce de voz activo (spec `gtcrn-dual-channel`).
+///
+/// Reemplaza el toggle binario de beamforming por una selección de tres
+/// motores mutuamente excluyentes. El valor entero [nativeValue] es el
+/// contrato con el lado nativo: `setEnhancementEngineMode` espera
+/// `{"mode": Int}` donde 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup (experimental).
+enum EnhancementEngineMode {
+  /// Sin realce: passthrough del canal 0. Default de arranque seguro.
+  bypass(0),
+
+  /// Realce DNN dual-channel (GTCRN). Motor recomendado — funciona en
+  /// cualquier hardware sin depender de geometría de micrófonos.
+  dualChannelDnn(1),
+
+  /// Beamformer MVDR clásico. EXPERIMENTAL — no funciona correctamente
+  /// en dispositivos con mic spacing > 8 cm (aliasing espacial). Oculto
+  /// del selector principal. Solo accesible para investigación.
+  mvdrBackup(2);
+
+  const EnhancementEngineMode(this.nativeValue);
+
+  /// Valor entero enviado al motor nativo vía MethodChannel.
+  final int nativeValue;
+
+  /// Reconstruye el modo desde el entero nativo. Ante un valor
+  /// desconocido retorna [EnhancementEngineMode.bypass] (fail-safe).
+  static EnhancementEngineMode fromNative(int value) {
+    switch (value) {
+      case 1:
+        return EnhancementEngineMode.dualChannelDnn;
+      case 2:
+        return EnhancementEngineMode.mvdrBackup;
+      case 0:
+      default:
+        return EnhancementEngineMode.bypass;
+    }
+  }
+}
+
+/// Interfaz abstracta de comunicación Dart ↔ Android Native.
+///
+/// Define el contrato para controlar el pipeline de audio DSP nativo
+/// desde la capa Dart. La implementación usa MethodChannel para comandos
+/// y EventChannel para streams de datos del motor nativo.
+///
+/// El audio fluye enteramente en el lado nativo (AudioRecord → DSP → AudioTrack).
+/// Flutter solo envía comandos de control vía esta interfaz.
+///
+/// Requisitos: 2.1, 5.4
+abstract class AudioBridge {
+  /// Inicia el pipeline de audio con la configuración dada.
+  ///
+  /// Configura AudioRecord (entrada) y AudioTrack (salida) a 16 kHz mono,
+  /// inicializa el pipeline DSP con los parámetros proporcionados, y
+  /// comienza el procesamiento en tiempo real en un hilo dedicado.
+  ///
+  /// Lanza excepción si el micrófono no está disponible o los auriculares
+  /// no están conectados.
+  Future<void> startAudio(AudioConfig config);
+
+  /// Detiene el pipeline de audio y libera todos los recursos nativos.
+  ///
+  /// Debe completarse en menos de 100 ms (Req 1.3).
+  Future<void> stopAudio();
+
+  /// Actualiza las ganancias del EQ de 12 bandas en tiempo real.
+  ///
+  /// [gains] debe contener exactamente 12 valores en dB, rango [0, 50].
+  /// La actualización se aplica sin interrumpir el flujo de audio.
+  Future<void> updateEqGains(List<double> gains);
+
+  /// Actualiza el volumen maestro.
+  ///
+  /// [volumeDb] rango: -20 a +10 dB.
+  /// Se aplica en menos de 50 ms sin artefactos audibles (Req 8.5).
+  Future<void> updateVolume(double volumeDb);
+
+  /// Actualiza los parámetros del compresor WDRC.
+  ///
+  /// Incluye knees de expansión/compresión, ratios, y tiempos de
+  /// ataque/liberación. Se aplica con crossfade de 10 ms.
+  Future<void> updateWdrcParams(WdrcParams params);
+
+  /// Actualiza la intensidad de la reducción de ruido.
+  ///
+  /// [level] valores: 0=off, 1=bajo, 2=medio, 3=alto.
+  Future<void> updateNrLevel(int level);
+
+  /// Configura el Expansor de baja frecuencia ≤1000 Hz (R1, spec
+  /// mvdr-noise-clarity-tuning). Downward expansion band-limitada que
+  /// atenúa el hiss del mic en silencios sin tocar consonantes.
+  ///
+  /// Default OFF / [ratio] 1.0 → passthrough (comportamiento previo, R6.5).
+  /// Cualquier parámetro omitido usa su default seguro en el lado nativo.
+  Future<void> setExpander({
+    bool enabled = false,
+    double kneeDbSpl = 45.0,
+    double ratio = 1.0,
+    double cutoffHz = 1000.0,
+    double attackMs = 30.0,
+    double releaseMs = 400.0,
+  });
+
+  /// Configura el Supresor de reverberación tardía del MVDR (R5, spec
+  /// mvdr-noise-clarity-tuning). Efectivo solo en modo MVDR.
+  ///
+  /// Default = comportamiento previo (enabled=true, strength=1.6,
+  /// floor=0.30, decay=0.80) → R6.5.
+  Future<void> setDereverb({
+    bool enabled = true,
+    double strength = 1.6,
+    double floor = 0.30,
+    double decay = 0.80,
+  });
+
+  /// Configura los umbrales del clasificador de entorno (R4, spec
+  /// mvdr-noise-clarity-tuning).
+  ///
+  /// Default = valores previos si no se envían (R6.5).
+  Future<void> setClassifierThresholds({
+    double speechEnterDb = 6.0,
+    double speechExitDb = 4.0,
+    double noiseSnrDb = 1.5,
+    double quietEnterDbSpl = 44.0,
+    double quietExitDbSpl = 49.0,
+  });
+
+  /// Ajusta la intensidad del DNN (Deep Neural Network) denoiser en
+  /// runtime, en el rango `[0.0, 1.0]`.
+  ///
+  /// Valores fuera de rango se clampan en el lado nativo. La firma
+  /// replica `AudioBridge.setDnnIntensity` del paciente
+  /// (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`); el
+  /// canal y el handler Kotlin del técnico ya están cableados desde
+  /// la integración inicial del DNN denoiser
+  /// (`AudioMethodChannel.kt` → `setDnnIntensity` →
+  /// `nativeBridge.nativeSetDnnIntensity(intensity)`).
+  ///
+  /// El bloc usa este setter al desactivar Modo Música (Req 1.8) para
+  /// reaplicar el valor persistido en `SettingsRepository.dnnIntensity`.
+  ///
+  /// Requisitos: 1.8
+  Future<void> setDnnIntensity(double intensity);
+
+  /// Habilita/deshabilita el Transient Noise Reducer (TNR).
+  ///
+  /// Cuando está habilitado, atenúa automáticamente impulsos abruptos como
+  /// timbre del subte, puertas que se cierran, bocinas. No afecta la voz.
+  Future<void> updateTnrEnabled(bool enabled);
+
+  /// Habilita/deshabilita el Modelo Auditivo (simulación del sistema auditivo
+  /// humano — 6 etapas cocleares).
+  ///
+  /// Cuando está habilitado, simula la cadena auditiva humana completa:
+  /// canal auditivo (resonancia 2700 Hz), oído medio (bandpass 400-4000 Hz),
+  /// membrana basilar (12 filtros gammatone), OHC (compresión compensatoria
+  /// según audiograma), IHC (transducción), nervio auditivo (realce temporal).
+  ///
+  /// Se inserta después del EQ, antes del WDRC en el pipeline DSP.
+  /// Requiere audiograma del paciente para personalizar la compensación.
+  ///
+  /// Referencias: Moore 2003, Glasberg & Moore 1990, Zilany et al. 2014.
+  Future<void> setAuditoryModelEnabled(bool enabled);
+
+  /// Configura el audiograma del paciente para el Modelo Auditivo.
+  ///
+  /// [thresholds] debe contener exactamente 12 valores en dB HL,
+  /// correspondientes a las frecuencias: 250, 500, 750, 1000, 1500, 2000,
+  /// 2500, 3000, 3500, 4000, 6000, 8000 Hz.
+  /// Un valor de 0 indica audición normal en esa frecuencia.
+  ///
+  /// Los umbrales determinan la ganancia compensatoria de las células
+  /// ciliadas externas (OHC) por banda: mayor HL → más compensación.
+  Future<void> setAuditoryModelAudiogram(List<double> thresholds);
+
+  /// Activa/desactiva "MHL Prescripción": amplificación lineal mínima.
+  ///
+  /// Cuando se activa, el motor aplica gains flat 8 dB en las 12 bandas EQ
+  /// y `compressionRatio = 1.0` sin tocar `nrLevel`, `dnnIntensity` ni los
+  /// demás parámetros WDRC (knees, attack, release). Cuando se desactiva,
+  /// el handler nativo restaura el EQ guardado.
+  ///
+  /// La firma replica `AudioBridge.setMhlPrescriptionEnabled` del paciente
+  /// (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`).
+  ///
+  /// Requisitos: 1.1
+  Future<void> setMhlPrescriptionEnabled(bool enabled);
+
+  /// Activa/desactiva "Modo Música": preserva timbres y dinámicas musicales.
+  ///
+  /// Cuando se activa, el motor aplica `nrLevel = 0` y `dnnIntensity = 0.0`
+  /// sin modificar gains EQ, `compressionRatio`, knees, attack ni release
+  /// del bundle activo. Cuando se desactiva, el caller (bloc) reaplica los
+  /// valores persistidos en `SettingsRepository`.
+  ///
+  /// La firma replica `AudioBridge.setMusicModeEnabled` del paciente
+  /// (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`).
+  ///
+  /// Requisitos: 1.2
+  Future<void> setMusicModeEnabled(bool enabled);
+
+  /// Activa/desactiva "Modo Conversación": rutea audio por SCO Bluetooth
+  /// (o builtin si no hay BT) con `MODE_IN_COMMUNICATION`, y baja el
+  /// sample rate del pipeline a 16 kHz / 64 frames. Latencia BT cae
+  /// de ~200 ms a ~25 ms.
+  ///
+  /// Devuelve un string con el resultado de la activación SCO:
+  ///   - "connected"          → SCO BT activo, ruteado al auricular.
+  ///   - "fallback_builtin"   → no hay BT, queda en speaker/mic builtin
+  ///                            (igual con MODE_IN_COMMUNICATION → menor
+  ///                            latencia que A2DP).
+  ///   - "failed"             → no se pudo cambiar de modo.
+  ///   - "engine_idle"        → motor todavía no arrancó; el flag queda
+  ///                            registrado y se aplica en el próximo start.
+  ///   - "disabled"           → toggle OFF, vuelve a A2DP @ 48 kHz.
+  Future<String> setConversationMode(bool enabled);
+
+  /// Stream del nivel de entrada del micrófono en dB SPL.
+  ///
+  /// Emitido aproximadamente 10 veces por segundo (~10 Hz).
+  /// Usado para el indicador visual de nivel en la UI (Req 5.4).
+  Stream<double> get inputLevelStream;
+
+  /// Stream del estado del motor de audio.
+  ///
+  /// Emite cambios de estado: idle → starting → active → paused → idle.
+  /// Usado por el BLoC para actualizar la UI según el estado del engine.
+  Stream<AudioEngineState> get stateStream;
+
+  /// Inicia calibración del micrófono.
+  ///
+  /// Reproduce un tono de referencia y mide el nivel capturado para
+  /// calcular el offset dBFS → dB SPL del micrófono del dispositivo.
+  ///
+  /// [referenceSplLevel] es el nivel SPL conocido de la fuente de
+  /// referencia externa (típicamente 94 dB SPL para calibrador).
+  Future<MicCalibrationResult> calibrateMicrophone({
+    required double referenceSplLevel,
+  });
+
+  /// Inicia calibración del auricular.
+  ///
+  /// Reproduce un sweep de frecuencias (250-8000 Hz) por el auricular
+  /// y mide la respuesta en frecuencia relativa usando el micrófono
+  /// del teléfono como receptor (acoplador improvisado).
+  ///
+  /// [headphoneId] es la dirección MAC del auricular BT o "wired_default".
+  Future<HeadphoneCalibrationResult> calibrateHeadphones({
+    required String headphoneId,
+  });
+
+  /// Aplica datos de calibración al motor de audio.
+  ///
+  /// Actualiza el offset SPL del micrófono y la compensación EQ
+  /// del auricular en el pipeline DSP nativo.
+  Future<void> applyCalibration(CalibrationData calibration);
+
+  /// Actualiza el umbral MPO del limitador broadband en runtime.
+  ///
+  /// [thresholdDbSpl] rango cerrado: [80.0, 132.0] dB SPL.
+  /// Aplica el nuevo techo al limitador MPO del pipeline DSP nativo
+  /// sin reiniciar el motor de audio.
+  ///
+  /// Lanza [ArgumentError] si el valor es NaN, Infinity o fuera de rango.
+  /// Propagación al motor: ≤ 50 ms p95.
+  ///
+  /// Requisitos: audiogram-driven-presets Req 3.1
+  Future<void> setMpoThresholdDbSpl(double thresholdDbSpl);
+
+  /// Obtiene información de los dispositivos de audio activos.
+  ///
+  /// Retorna un mapa con:
+  /// - inputDeviceName: nombre del micrófono activo
+  /// - outputDeviceName: nombre del auricular/parlante activo
+  /// - bluetoothConnected: si hay auricular BT conectado
+  /// - bluetoothName: nombre del dispositivo BT
+  /// - bluetoothIsA2dp: si la conexión es A2DP (alta calidad)
+  /// - availableInputDevices: lista de micrófonos disponibles
+  /// - availableOutputDevices: lista de salidas disponibles
+  /// - hasExternalOutput: true si hay auricular/parlante externo conectado
+  Future<Map<String, dynamic>> getDeviceInfo();
+
+  /// Verifica si hay un auricular o parlante externo conectado.
+  ///
+  /// Retorna `true` si hay BT A2DP, BT SCO, cableado, o USB.
+  /// Retorna `false` si la única salida es el parlante builtin.
+  ///
+  /// Usado para bloquear `StartAmplification` cuando no hay auricular:
+  /// las ganancias EQ de 20-50 dB diseñadas para auricular saturan y
+  /// distorsionan en un parlante a 5 cm del oído.
+  Future<bool> hasExternalOutput();
+
+  /// Retorna la lista de micrófonos disponibles en el dispositivo.
+  ///
+  /// Cada entrada contiene:
+  /// - id: int (device ID del sistema)
+  /// - name: String (nombre comercial del dispositivo)
+  /// - type: int (AudioDeviceInfo.TYPE_*)
+  /// - typeName: String (nombre legible del tipo: "Builtin", "Bluetooth", "USB")
+  Future<List<Map<String, dynamic>>> getAvailableMicrophones();
+
+  /// Selecciona un micrófono específico por su device ID.
+  ///
+  /// [deviceId] es el ID obtenido de [getAvailableMicrophones].
+  /// Si [deviceId] es -1, se restaura el micrófono por defecto del sistema.
+  ///
+  /// El motor debe estar corriendo para que el cambio surta efecto.
+  /// Si no está corriendo, el device ID se aplica en el próximo `startAudio`.
+  Future<bool> setPreferredMicrophone(int deviceId);
+
+  // ─── Diagnostic Recording (DSP Verification) ────────────────────────────
+
+  /// Inicia una grabación de diagnóstico DSP de 15 segundos.
+  ///
+  /// [filePath] es el nombre del archivo WAV (se resuelve en el lado nativo).
+  /// El nombre debe seguir el formato `diag_YYYYMMDD_HHMMSS.wav`.
+  ///
+  /// Retorna `true` si la grabación inició correctamente, `false` si el
+  /// motor no está corriendo, ya hay otra grabación activa, o falló la
+  /// apertura del archivo.
+  ///
+  /// La firma replica `AudioBridge.startDiagnosticRecording` del paciente
+  /// (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`).
+  ///
+  /// Requisitos: 6.2
+  Future<bool> startDiagnosticRecording(String filePath);
+
+  /// Detiene la grabación de diagnóstico en curso.
+  ///
+  /// Retorna `0` si la grabación se completó correctamente (60 s), `1` si
+  /// fue descartada por una parada temprana del usuario, o `-1` si ocurrió
+  /// un error nativo durante la grabación o el cierre del archivo.
+  ///
+  /// La firma replica `AudioBridge.stopDiagnosticRecording` del paciente
+  /// (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`).
+  ///
+  /// Requisitos: 6.4
+  Future<int> stopDiagnosticRecording();
+
+  /// Obtiene el tiempo transcurrido de la grabación activa, en milisegundos.
+  ///
+  /// Retorna `-1` si no hay grabación activa o si el handler nativo no
+  /// está disponible. Pensado para polling cíclico (1 Hz) durante el
+  /// progreso de la grabación.
+  ///
+  /// La firma replica `AudioBridge.getDiagnosticRecordingProgress` del
+  /// paciente (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`).
+  ///
+  /// Requisitos: 6.3
+  Future<int> getDiagnosticRecordingProgress();
+
+  /// Aplica un preset completo del Smart Scene de forma atómica.
+  ///
+  /// Fase G — applyScenePreset único: reemplaza 4+ llamadas separadas
+  /// (updateEqGains + updateWdrcParams + updateNrLevel + updateTnrEnabled +
+  /// setMpoThresholdDbSpl + setSmartPresetPinned) por una sola llamada
+  /// MethodChannel. El motor C++ lo aplica en orden seguro (MPO → WDRC →
+  /// EQ → NR → TNR → pin) sin ventana de incoherencia entre llamadas.
+  ///
+  /// [gains] debe contener exactamente 12 valores en dB, rango [0, 50].
+  /// [wdrcParams] parámetros WDRC completos.
+  /// [nrLevel] nivel de NR [0, 3].
+  /// [tnrEnabled] true para activar TNR.
+  /// [mpoThresholdDbSpl] MPO broadband en dB SPL.
+  /// [pinPreset] true para fijar el pin del preset Smart.
+  Future<void> applyScenePreset({
+    required List<double> gains,
+    required WdrcParams wdrcParams,
+    required int nrLevel,
+    required bool tnrEnabled,
+    required double mpoThresholdDbSpl,
+    bool pinPreset = true,
+  });
+
+  /// Obtiene un snapshot de las métricas de latencia del motor de audio.
+  ///
+  /// Retorna un `Map<String, dynamic>` con las claves del struct C++
+  /// `LatencyMetrics` (expuestas por `nativeGetLatencyMetrics` vía JNI):
+  /// `schemaVersion`, `sampleRate`, `inputFramesPerBurst`, `outputFramesPerBurst`,
+  /// `outputBufferSizeFrames`, `inputAudioApi`, `outputAudioApi`,
+  /// `inputSharingMode`, `outputSharingMode`, `outputPerformanceMode`,
+  /// `inputLatencyMs`, `outputLatencyMs`, `dspBlockMs`, `dspProcessingMsAvg`,
+  /// `dspProcessingMsMax`, `dnnInferenceMs`, `dnnGroupDelayMs`, `tnrLookaheadMs`,
+  /// `callbackUnderruns`, `timestampsHealthy`.
+  ///
+  /// Retorna `null` cuando:
+  /// - el motor de audio no está corriendo,
+  /// - el handler nativo no está implementado (`MissingPluginException`),
+  /// - la invocación falla por cualquier otra razón.
+  ///
+  /// Requisitos: spec monitor-latencia-audio
+  Future<Map<String, dynamic>?> getLatencyMetrics();
+
+  /// Obtiene un snapshot de las métricas por etapa del pipeline DSP.
+  ///
+  /// Devuelve un `Map<String, dynamic>` con las claves expuestas por el
+  /// handler Kotlin `NativeAudioBridge.getDspStageMetrics()` (técnico):
+  /// `expansionGainDb`, `linearGainDb`, `compressionGainDb`,
+  /// `wdrcRegion`, `eqMaxGain`, `inputLevel`, `postNrLevel`,
+  /// `postEqLevel`, `postWdrcLevel`, `postVolumeLevel`, `outputLevel`,
+  /// `peakSample`, `clipCount`, `wdrcGainFactor`, `preDnnLevelDb`,
+  /// `wdrcLevelSource`, `mpoLimitingFraction`, `mpoLimitingSustained`
+  /// y — clave clave para Smart Scene polling —
+  /// **`environmentClass`** (int en `[0, 7]` correspondiente al enum C++
+  /// `smart_scene::SceneClass`; valores fuera de rango se tratan como 0).
+  ///
+  /// `mpoLimitingFraction` (double `[0,1]`) y `mpoLimitingSustained` (bool)
+  /// exponen el aviso de limitación sostenida del MPO clínico (spec
+  /// audifono-v3 task 10.2, decisión B): `mpoLimitingSustained == true`
+  /// indica que la salida está pegada al límite de seguridad de forma
+  /// sostenida (Requirement 9.2). Motores nativos viejos que no exponen
+  /// estos campos devuelven `0.0` / `false` por defecto.
+  ///
+  /// Retorna `null` cuando:
+  /// - el motor de audio no está corriendo (`getDspStageMetrics()`
+  ///   nativo retorna `null`),
+  /// - el handler nativo no está implementado
+  ///   (`MissingPluginException`),
+  /// - la invocación falla por cualquier otra razón
+  ///   (`PlatformException` u otra excepción).
+  ///
+  /// La firma replica exactamente `AudioBridge.getDspStageMetrics` del
+  /// paciente (`PACIENTE/oir_pro_patient_app/lib/core/audio_bridge.dart`):
+  /// el caller (bloc / `SmartSceneScreen` polling) recibe `null` y debe
+  /// tratarlo como tick fallido sin actualizar `_lastEnvClass` (Req 2.12).
+  ///
+  /// Requisitos: 2.1, 2.2, 2.10, 2.11, 2.12, 2.13, 6.13
+  Future<Map<String, dynamic>?> getDspStageMetrics();
+
+  /// Habilita/deshabilita el MVDR dual-mic beamformer.
+  ///
+  /// Cuando está habilitado, el motor captura audio en estéreo desde dos
+  /// micrófonos y aplica el algoritmo MVDR (Minimum Variance Distortionless
+  /// Response) para mejorar la relación señal-ruido en la dirección frontal.
+  /// Cuando está deshabilitado, el motor vuelve a captura mono (un solo mic).
+  ///
+  /// El beamformer se inserta ANTES del DNN en el pipeline DSP.
+  /// Default: false (retrocompatible).
+  Future<void> setBeamformingEnabled(bool enabled);
+
+  /// Consulta si el MVDR beamformer está activo.
+  ///
+  /// Retorna `true` si el beamformer está habilitado y procesando audio
+  /// en modo estéreo. Retorna `false` si está deshabilitado, si el motor
+  /// no está corriendo, o si el dispositivo no soporta captura estéreo.
+  Future<bool> getBeamformingActive();
+
+  // ─── Selector de motor de realce (spec gtcrn-dual-channel) ─────────────
+
+  /// Selecciona el motor de realce de voz activo.
+  ///
+  /// Envía `{"mode": Int}` al motor nativo (`setEnhancementEngineMode`),
+  /// donde el entero proviene de [EnhancementEngineMode.nativeValue]
+  /// (0=Bypass, 1=DualChannelDnn, 2=MvdrBackup). Reemplaza al toggle
+  /// binario [setBeamformingEnabled]. Si el motor está activo el cambio
+  /// tiene efecto inmediato (con crossfade anti-clic en nativo); si no,
+  /// se aplica en el próximo `startAudio`.
+  ///
+  /// Requisitos: 2.1, 2.2
+  Future<void> setEnhancementEngineMode(EnhancementEngineMode mode);
+
+  /// Consulta el motor de realce actualmente seleccionado.
+  ///
+  /// Retorna [EnhancementEngineMode.bypass] si el motor nativo está idle,
+  /// si el handler no está implementado, o ante cualquier fallo (fail-safe).
+  ///
+  /// Requisitos: 2.1
+  Future<EnhancementEngineMode> getEnhancementEngineMode();
+
+  /// Consulta si el DNN de realce está realmente activo y procesando.
+  ///
+  /// Retorna `true` solo si el modelo se cargó correctamente y el worker
+  /// está corriendo. Retorna `false` si el motor cayó a Bypass por fallo
+  /// de carga del `.pt`, si el motor no está corriendo, o si el handler
+  /// nativo no está implementado. Sirve para el indicador de estado real.
+  ///
+  /// Requisitos: 4.6, 5.2
+  Future<bool> getDnnIsActive();
+
+  /// Ajusta manualmente el tamaño de bloque / latencia del DNN.
+  ///
+  /// [blockSize] en muestras (por canal). El backend implementará el
+  /// setter nativo en la tarea 7; por ahora la llamada es tolerante a
+  /// `MissingPluginException` (no-op si el handler no existe).
+  ///
+  /// Requisitos: 5.3 (ajuste fino de latencia — próximamente en tarea 7)
+  Future<void> setDnnBlockSize(int blockSize);
+}
+

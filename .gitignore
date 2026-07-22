@@ -1,0 +1,36 @@
+# Build outputs
+build/
+.gradle/
+.dart_tool/
+.kiro_tmp/
+.kiro/
+
+# Large binaries (>100MB GitHub limit)
+*.7z
+*.exe
+*.apk
+*.aab
+*.mp4
+*.wav
+*.so
+
+# JNI prebuilt libs (tracked individually, not bulk)
+# Keep libonnxruntime.so via git add --force if needed
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Flutter
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Logs
+*.log
+hs_err_pid*.log

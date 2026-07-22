@@ -1,0 +1,76 @@
+{
+  "fecha": "2026-07-07T20:16:51.851531",
+  "herramienta": "Python 3.11 + NumPy 2.0.2 + SciPy 1.13.1 + pyroomacoustics 0.10.1",
+  "commit_base": "8028250",
+  "dispositivo": "Motorola Moto G32",
+  "sala": {
+    "dim_m": [
+      5.0,
+      4.0,
+      3.0
+    ],
+    "rt60_s": 0.4
+  },
+  "parametros_sistema": {
+    "audiograma_hl": {
+      "250": 25,
+      "500": 30,
+      "750": 35,
+      "1000": 40,
+      "1500": 40,
+      "2000": 45,
+      "2500": 45,
+      "3000": 50,
+      "3500": 50,
+      "4000": 55,
+      "6000": 55,
+      "8000": 60
+    },
+    "eq_gains_db": {
+      "250": 8.333333333333334,
+      "500": 10.0,
+      "750": 11.666666666666666,
+      "1000": 13.333333333333334,
+      "1500": 13.333333333333334,
+      "2000": 15.0,
+      "2500": 15.0,
+      "3000": 16.666666666666668,
+      "3500": 16.666666666666668,
+      "4000": 18.333333333333332,
+      "6000": 18.333333333333332,
+      "8000": 20.0
+    },
+    "spl_offset": 93.0,
+    "mpo_threshold_dbspl": 110.0,
+    "wdrc_knee": 52.0,
+    "wdrc_ratio": 2.0,
+    "dnn_intensity": 0.6,
+    "nr_level": 1,
+    "tnr_threshold": 3.0,
+    "tnr_attenuation_db": -18
+  },
+  "diagnostico_real": {
+    "input_dbspl": 89.8,
+    "post_wdrc_range": "80.5-102.4 dB",
+    "mpo_limitando": "28%",
+    "gain_factor_range": "0.11-0.60"
+  },
+  "simulacion": {
+    "input_dbspl_simulado": 89.8,
+    "post_eq_pico": 102.0,
+    "post_wdrc_pico": 77.0,
+    "mpo_fraccion_actual": 0.0,
+    "causa": "EQ +20dB sobre input 89.8dB supera MPO 110dB en picos de agudos"
+  },
+  "solucion": {
+    "metodo": "Gain scaling adaptativo: reducir EQ cuando input > 70 dB SPL",
+    "gain_scale_recomendado": 0.8,
+    "mpo_fraccion_con_fix": 0.0,
+    "formula": "scale = min(1.0, (MPO - 6dB - inputPeak) / maxEqGain)"
+  },
+  "wavs_generados": [
+    "pipeline_input_89dB.wav",
+    "pipeline_output_current.wav (sin fix — MPO aplasta)",
+    "pipeline_output_scaled.wav (con fix — sin aplastamiento)"
+  ]
+}

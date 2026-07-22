@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PSK Hearing Aid - Test de Frecuencias e Intensidades</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #0a1628; color: #fff; padding: 20px; }
+h1 { color: #00bcd4; margin-bottom: 10px; font-size: 1.4em; }
+h2 { color: #4dd0e1; margin: 20px 0 10px; font-size: 1.1em; }
+.info { color: #aaa; font-size: 0.85em; margin-bottom: 20px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; margin-bottom: 20px; }
+button { background: #16213e; border: 1px solid #2a3a5a; color: #fff; padding: 12px 8px; border-radius: 8px; cursor: pointer; font-size: 0.8em; transition: all 0.2s; }
+button:hover { background: #1a3050; border-color: #00bcd4; }
+button.active { background: #00bcd4; color: #000; font-weight: bold; }
+button.stop { background: #c62828; border-color: #e53935; }
+.controls { display: flex; gap: 10px; align-items: center; margin: 15px 0; flex-wrap: wrap; }
+.slider-group { flex: 1; min-width: 200px; }
+.slider-group label { display: block; color: #aaa; font-size: 0.8em; margin-bottom: 4px; }
+input[type=range] { width: 100%; }
+.value { color: #00bcd4; font-weight: bold; font-size: 0.9em; }
+.status { background: #16213e; padding: 12px; border-radius: 8px; margin: 15px 0; border: 1px solid #2a3a5a; }
+.sweep-btn { background: #1b5e20; border-color: #4caf50; padding: 14px 20px; font-size: 1em; }
+.sweep-btn:hover { background: #2e7d32; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+th, td { padding: 8px; text-align: center; border: 1px solid #2a3a5a; font-size: 0.8em; }
+th { background: #16213e; color: #00bcd4; }
+.pass { color: #4caf50; } .fail { color: #f44336; }
+</style>
+</head>
+<body>
+<h1>🎧 PSK Hearing Aid - Test de Frecuencias</h1>
+<p class="info">Reproduce tonos puros a diferentes frecuencias e intensidades para verificar la respuesta del audífono. Usa auriculares BT conectados al celular con la app PSK activa.</p>
+
+<h2>1. Tonos Individuales por Frecuencia</h2>
+<p class="info">Toca una frecuencia para reproducir un tono puro de 2 segundos:</p>
+<div class="grid" id="freqGrid"></div>
+
+<h2>2. Control de Intensidad</h2>
+<div class="controls">
+  <div class="slider-group">
+    <label>Frecuencia: <span class="value" id="freqVal">1000</span> Hz</label>
+    <input type="range" id="freqSlider" min="250" max="8000" value="1000" step="50">
+  </div>
+  <div class="slider-group">
+    <label>Intensidad: <span class="value" id="volVal">-20</span> dBFS</label>
+    <input type="range" id="volSlider" min="-60" max="0" value="-20" step="1">
+  </div>
+  <button id="playBtn" onclick="playCustomTone()">▶ Reproducir</button>
+  <button class="stop" onclick="stopAll()">⏹ Parar</button>
+</div>
+
+<h2>3. Sweep Automático (todas las bandas)</h2>
+<p class="info">Reproduce cada frecuencia del EQ (250-8000 Hz) durante 1.5s a -20 dBFS:</p>
+<button class="sweep-btn" onclick="runSweep()">🔊 Iniciar Sweep Completo</button>
+<button class="stop" onclick="stopAll()">⏹ Detener</button>
+<div class="status" id="sweepStatus">Estado: Listo</div>
+
+<h2>4. Test de Intensidades (1 kHz)</h2>
+<p class="info">Reproduce 1 kHz a diferentes niveles para verificar la compresión WDRC:</p>
+<div class="grid" id="levelGrid"></div>
+
+<h2>5. Resultados del Test</h2>
+<table id="resultsTable">
+<thead><tr><th>Frecuencia</th><th>Nivel</th><th>Audible?</th><th>Distorsión?</th><th>Notas</th></tr></thead>
+<tbody id="resultsBody"></tbody>
+</table>
+
+<script>
+let audioCtx = null;
+let currentOsc = null;
+let currentGain = null;
+let sweepRunning = false;
+
+function getCtx() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function stopAll() {
+  sweepRunning = false;
+  if (currentOsc) { try { currentOsc.stop(); } catch(e){} currentOsc = null; }
+  document.querySelectorAll('button.active').forEach(b => b.classList.remove('active'));
+  document.getElementById('sweepStatus').textContent = 'Estado: Detenido';
+}
+
+function playTone(freq, dbfs, duration, btn) {
+  stopAll();
+  const ctx = getCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  const linear = Math.pow(10, dbfs / 20);
+  gain.gain.value = linear;
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  currentOsc = osc;
+  currentGain = gain;
+  if (btn) btn.classList.add('active');
+  if (duration > 0) {
+    osc.stop(ctx.currentTime + duration);
+    setTimeout(() => { if (btn) btn.classList.remove('active'); }, duration * 1000);
+  }
+}
+
+function playCustomTone() {
+  const freq = parseInt(document.getElementById('freqSlider').value);
+  const dbfs = parseInt(document.getElementById('volSlider').value);
+  playTone(freq, dbfs, 2, document.getElementById('playBtn'));
+}
+
+// Frecuencias del EQ de 12 bandas
+const eqFreqs = [250, 500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 6000, 8000];
+
+// Generar botones de frecuencia
+const freqGrid = document.getElementById('freqGrid');
+eqFreqs.forEach(f => {
+  const btn = document.createElement('button');
+  btn.textContent = f >= 1000 ? (f/1000) + 'k Hz' : f + ' Hz';
+  btn.onclick = () => playTone(f, -20, 2, btn);
+  freqGrid.appendChild(btn);
+});
+
+// Generar botones de intensidad
+const levelGrid = document.getElementById('levelGrid');
+[-50, -40, -30, -20, -10, -6, -3, 0].forEach(db => {
+  const btn = document.createElement('button');
+  btn.textContent = db + ' dBFS';
+  btn.onclick = () => playTone(1000, db, 2, btn);
+  levelGrid.appendChild(btn);
+});
+
+// Sliders
+document.getElementById('freqSlider').oninput = e => document.getElementById('freqVal').textContent = e.target.value;
+document.getElementById('volSlider').oninput = e => document.getElementById('volVal').textContent = e.target.value;
+
+// Sweep automático
+async function runSweep() {
+  stopAll();
+  sweepRunning = true;
+  const status = document.getElementById('sweepStatus');
+  for (let i = 0; i < eqFreqs.length; i++) {
+    if (!sweepRunning) break;
+    const f = eqFreqs[i];
+    status.textContent = `Reproduciendo: ${f} Hz (${i+1}/${eqFreqs.length})`;
+    playTone(f, -20, 1.5, null);
+    await new Promise(r => setTimeout(r, 1800));
+  }
+  if (sweepRunning) {
+    status.textContent = 'Estado: Sweep completado ✓';
+    sweepRunning = false;
+  }
+}
+</script>
+</body>
+</html>

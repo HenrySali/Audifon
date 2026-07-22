@@ -1,0 +1,62 @@
+name: Build libdfn3.so
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/app/src/main/cpp/dfn3_rust/**'
+  pull_request:
+    paths:
+      - 'android/app/src/main/cpp/dfn3_rust/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+        id: setup-ndk
+
+      - name: Set ANDROID_NDK_HOME
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+
+      - name: Build libdfn3.so (arm64-v8a)
+        working-directory: android/app/src/main/cpp/dfn3_rust
+        run: |
+          cargo ndk -t arm64-v8a -o ../jniLibs build --release
+
+      - name: Verify output
+        run: |
+          ls -lh android/app/src/main/cpp/jniLibs/arm64-v8a/libdfn3.so
+          file android/app/src/main/cpp/jniLibs/arm64-v8a/libdfn3.so
+
+      - name: Upload libdfn3.so artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libdfn3-arm64-v8a
+          path: android/app/src/main/cpp/jniLibs/arm64-v8a/libdfn3.so
+
+      - name: Commit jniLibs (on main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add android/app/src/main/cpp/jniLibs/arm64-v8a/libdfn3.so
+          git diff --cached --quiet || git commit -m "ci: build libdfn3.so arm64-v8a [skip ci]"
+          git push

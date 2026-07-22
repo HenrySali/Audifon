@@ -1,0 +1,20 @@
+# MEJORA #5 (ruido-profundo.md) — deps del evaluador PESQ + STOI.
+# Versiones pinneadas para reproducibilidad en CI.
+
+numpy==1.26.4
+scipy==1.13.0
+soundfile==0.12.1
+
+# PESQ (ITU-T P.862) — wrapper Python sobre la implementación C oficial.
+pesq==0.0.4
+
+# STOI / ESTOI (Taal et al. 2011).
+pystoi==0.4.1
+
+# ONNX Runtime para correr GTCRN offline cuando exista el CLI standalone.
+# (TODO — hoy se usa --passthrough, ver README.md.)
+onnxruntime==1.18.0
+
+# HASPI/HASQI quedan como TODO porque pyclarity arrastra PyTorch + librosa
+# (~2 GB de deps). Mencionado en README.md, no bloqueante.
+# pyclarity==0.6.1
