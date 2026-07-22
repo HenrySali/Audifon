@@ -1481,8 +1481,9 @@ void putArtifactStage(JNIEnv* env, jobject map, jmethodID put,
 }  // namespace
 
 /// @return resumen estructurado (HashMap) del registro de matraca/calidad.
-/// Claves con prefijo por etapa: `input*`, `sys0*`/`sys1*`/`sys2*` (RNNoise/
-/// DFN3/GTCRN), `output*`; más `activeEngine` (int). Cada etapa expone
+/// Claves con prefijo por etapa: `raw*` (mic crudo pre-realce), `input*`
+/// (post-realce), `sys0*`/`sys1*`/`sys2*` (RNNoise/DFN3/GTCRN), `output*`;
+/// más `activeEngine` (int). Cada etapa expone
 /// *Active, *Blocks, *Clicks, *ClicksPerSec, *Clip, *NanInf, *MaxJump,
 /// *MeanRmsDbfs, *Quality, *WorstQuality, *WorstEventSec, *ElapsedSec.
 extern "C" JNIEXPORT jobject JNICALL
@@ -1501,6 +1502,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDenoiserArtifactSummar
 
     const DenoiserArtifactLog& log = g_engine->getArtifactLog();
     putKv(env, map, put, "activeEngine", boxInt(env, log.activeEngineIndex()));
+    putArtifactStage(env, map, put, "raw",    log.rawMicSnapshot());
     putArtifactStage(env, map, put, "input",  log.inputSnapshot());
     putArtifactStage(env, map, put, "sys0",   log.engineSnapshot(0));
     putArtifactStage(env, map, put, "sys1",   log.engineSnapshot(1));

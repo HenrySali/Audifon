@@ -41,6 +41,7 @@ public:
     /// Configura la frecuencia de muestreo de todos los taps y resetea.
     void configure(int sampleRate) {
         sampleRate_ = (sampleRate > 0) ? sampleRate : 48000;
+        rawMic_.configure(sampleRate_);
         input_.configure(sampleRate_);
         for (int i = 0; i < kEngineCount; ++i) engines_[i].configure(sampleRate_);
         output_.configure(sampleRate_);
@@ -49,6 +50,7 @@ public:
 
     /// Resetea todos los contadores (inicia una nueva sesión de registro).
     void reset() {
+        rawMic_.reset();
         input_.reset();
         for (int i = 0; i < kEngineCount; ++i) engines_[i].reset();
         output_.reset();
@@ -57,7 +59,13 @@ public:
 
     // ─── Feeds (SOLO hilo de audio) ─────────────────────────────────────
 
-    /// Señal que ENTRA a los sistemas de limpieza (pre-denoise).
+    /// Señal del MICRÓFONO CRUDO, ANTES del realce (MVDR/beamformer) y del
+    /// headroom. Permite distinguir si la matraca la genera el micrófono/
+    /// fuente o una etapa de realce previa a los sistemas de limpieza.
+    void feedRawInput(const float* buf, int n) { rawMic_.feed(buf, n); }
+
+    /// Señal que ENTRA a los sistemas de limpieza (post-realce/headroom,
+    /// pre-denoise).
     void feedDenoiserInput(const float* buf, int n) { input_.feed(buf, n); }
 
     /// Señal a la SALIDA del sistema `engineIdx` (0=RNNoise,1=DFN3,2=GTCRN).
@@ -72,6 +80,7 @@ public:
 
     // ─── Lecturas (hilo de control) ─────────────────────────────────────
 
+    ArtifactSnapshot rawMicSnapshot() const { return rawMic_.snapshot(); }
     ArtifactSnapshot inputSnapshot()  const { return input_.snapshot(); }
     ArtifactSnapshot outputSnapshot() const { return output_.snapshot(); }
     ArtifactSnapshot engineSnapshot(int i) const {
@@ -94,6 +103,7 @@ public:
 
     /// Renderiza el registro completo como texto copiable (hilo de control).
     std::string renderReport() const {
+        const ArtifactSnapshot raw = rawMic_.snapshot();
         const ArtifactSnapshot in  = input_.snapshot();
         const ArtifactSnapshot out = output_.snapshot();
         ArtifactSnapshot eng[kEngineCount];
@@ -101,7 +111,7 @@ public:
         const int active = activeEngineIndex();
 
         std::string r;
-        r.reserve(2048);
+        r.reserve(2560);
         char line[320];
 
         append(r, "==== REGISTRO DE MATRACA / CALIDAD - Sistemas de limpieza de ruido ====\n");
@@ -111,8 +121,17 @@ public:
             sampleRate_, engineName(active));
         append(r, line);
 
-        // ─── ENTRADA a los sistemas ─────────────────────────────────────
-        append(r, "[FUENTE / ENTRADA a los sistemas]  (pre-limpieza)\n");
+        // ─── MICRÓFONO CRUDO (antes del realce) ─────────────────────────
+        append(r, "[MICROFONO CRUDO]  (antes del realce MVDR/headroom)\n");
+        if (raw.active) {
+            appendStage(r, raw);
+        } else {
+            append(r, "  (sin datos - tap no alimentado)\n");
+        }
+        append(r, "\n");
+
+        // ─── ENTRADA a los sistemas (post-realce) ───────────────────────
+        append(r, "[ENTRADA a los sistemas]  (post-realce MVDR/headroom, pre-limpieza)\n");
         appendStage(r, in);
         append(r, "\n");
 
@@ -148,7 +167,7 @@ public:
 
         // ─── Diagnóstico automático de origen ───────────────────────────
         append(r, "DIAGNOSTICO:\n");
-        appendDiagnosis(r, in, eng, out, active);
+        appendDiagnosis(r, raw, in, eng, out, active);
 
         return r;
     }
@@ -178,6 +197,7 @@ private:
 
     /// Heurística de atribución del origen de la matraca.
     static void appendDiagnosis(std::string& r,
+                                const ArtifactSnapshot& raw,
                                 const ArtifactSnapshot& in,
                                 const ArtifactSnapshot eng[kEngineCount],
                                 const ArtifactSnapshot& out,
@@ -186,8 +206,12 @@ private:
         bool any = false;
 
         // NaN/Inf en cualquier etapa = falla grave prioritaria.
-        if (in.nanInfCount > 0) {
-            append(r, "  - GRAVE: NaN/Inf en la ENTRADA. La fuente (mic/beamformer) genera fallas numericas.\n");
+        if (raw.active && raw.nanInfCount > 0) {
+            append(r, "  - GRAVE: NaN/Inf en el MICROFONO CRUDO. La fuente (mic/captura) genera fallas numericas.\n");
+            any = true;
+        }
+        if (in.nanInfCount > 0 && !(raw.active && raw.nanInfCount > 0)) {
+            append(r, "  - GRAVE: NaN/Inf aparece en la ENTRADA pero no en el mic crudo: lo genera el realce (MVDR/beamformer) o el headroom.\n");
             any = true;
         }
         for (int i = 0; i < kEngineCount; ++i) {
@@ -204,10 +228,27 @@ private:
             any = true;
         }
 
-        // Matraca en la fuente.
-        if (in.clicksPerSec >= kNoticeableRate) {
+        // Matraca en el micrófono crudo (fuente real).
+        if (raw.active && raw.clicksPerSec >= kNoticeableRate) {
             std::snprintf(line, sizeof(line),
-                "  - La ENTRADA ya trae matraca (%.2f clicks/s): el origen es PREVIO a los sistemas de limpieza y pasa a traves de ellos.\n",
+                "  - El MICROFONO/FUENTE ya trae matraca (%.2f clicks/s): el origen es el mic o la captura (revisar mic, BT/USB, underruns). Pasa a traves de todo.\n",
+                raw.clicksPerSec);
+            r.append(line);
+            any = true;
+        }
+
+        // Matraca introducida por el realce (MVDR/headroom): aparece en la
+        // entrada a los sistemas pero no (o mucho menos) en el mic crudo.
+        if (raw.active && in.clicksPerSec - raw.clicksPerSec >= kIntroRate) {
+            std::snprintf(line, sizeof(line),
+                "  - El REALCE PREVIO (MVDR/beamformer) o el HEADROOM introduce matraca (+%.2f clicks/s sobre el mic crudo) ANTES de los sistemas de limpieza.\n",
+                in.clicksPerSec - raw.clicksPerSec);
+            r.append(line);
+            any = true;
+        } else if (!raw.active && in.clicksPerSec >= kNoticeableRate) {
+            // Sin tap de mic crudo: no se puede separar mic vs realce.
+            std::snprintf(line, sizeof(line),
+                "  - La ENTRADA a los sistemas trae matraca (%.2f clicks/s) de una etapa previa (mic/realce/headroom) y pasa a traves.\n",
                 in.clicksPerSec);
             r.append(line);
             any = true;
@@ -259,6 +300,7 @@ private:
     static constexpr double kIntroRate = 0.5;
 
     int sampleRate_ = 48000;
+    ArtifactMonitor rawMic_;
     ArtifactMonitor input_;
     ArtifactMonitor engines_[kEngineCount];
     ArtifactMonitor output_;

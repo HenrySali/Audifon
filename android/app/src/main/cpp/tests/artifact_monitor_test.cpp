@@ -147,6 +147,32 @@ TEST(DenoiserArtifactLog, DetectsSourceArtifactPassingThrough) {
     EXPECT_GT(in.clickCount, 0u);
 
     const std::string report = log.renderReport();
-    // La entrada trae matraca => el diagnóstico apunta a origen previo.
-    EXPECT_NE(report.find("ENTRADA ya trae matraca"), std::string::npos);
+    // La entrada trae matraca => el diagnóstico apunta a etapa previa.
+    EXPECT_NE(report.find("trae matraca"), std::string::npos);
+}
+
+// Con mic crudo limpio pero matraca en la entrada => atribuye al realce.
+TEST(DenoiserArtifactLog, AttributesArtifactToEnhancementStage) {
+    DenoiserArtifactLog log;
+    log.configure(kSR);
+    std::vector<float> clean(kN), cracked(kN);
+    double phase = 0.0;
+    for (int b = 0; b < 100; ++b) {
+        fillTone(clean, phase);
+        cracked = clean;
+        cracked[100] += 0.8f;   // matraca introducida DESPUES del mic crudo
+        cracked[300] -= 0.9f;
+        log.feedRawInput(clean.data(), kN);          // mic crudo limpio
+        log.feedDenoiserInput(cracked.data(), kN);   // realce/headroom mete matraca
+        log.feedEngineOutput(0, cracked.data(), kN);
+        log.feedOutput(cracked.data(), kN);
+    }
+    const auto raw = log.rawMicSnapshot();
+    const auto in = log.inputSnapshot();
+    EXPECT_EQ(raw.clickCount, 0u);
+    EXPECT_GT(in.clickCount, 0u);
+
+    const std::string report = log.renderReport();
+    EXPECT_NE(report.find("REALCE PREVIO"), std::string::npos);
+    EXPECT_NE(report.find("MICROFONO CRUDO"), std::string::npos);
 }

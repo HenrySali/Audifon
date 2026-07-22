@@ -163,15 +163,23 @@ public:
         sumRmsLin_.store(sumRmsLin_.load(std::memory_order_relaxed) + rms,
                          std::memory_order_relaxed);
 
-        // ─── Calidad del bloque + registro del peor evento ──────────────
+        // ─── Calidad del bloque ─────────────────────────────────────────
         const float q = blockQuality(clicks, clips, nans, n);
         lastQuality_.store(q, std::memory_order_relaxed);
         if (q < worstQuality_.load(std::memory_order_relaxed)) {
             worstQuality_.store(q, std::memory_order_relaxed);
+        }
+
+        // ─── Peor EVENTO de matraca = el click más grande detectado ──────
+        // Sólo se considera si el bloque tuvo al menos un click (evita
+        // registrar transientes limpios como "peor evento"). Registra el
+        // salto más grande y su instante, más útil para localizar la matraca
+        // que el primer bloque con click.
+        if (clicks > 0 && localMaxJump > worstEventJump_.load(std::memory_order_relaxed)) {
+            worstEventJump_.store(localMaxJump, std::memory_order_relaxed);
             worstEventSec_.store(
                 static_cast<double>(totalSamples) / static_cast<double>(sampleRate_),
                 std::memory_order_relaxed);
-            worstEventJump_.store(localMaxJump, std::memory_order_relaxed);
         }
     }
 
