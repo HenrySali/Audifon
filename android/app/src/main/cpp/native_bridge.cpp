@@ -1433,6 +1433,85 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetSelectedDenoiser(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Registro de matraca/calidad de los 3 sistemas de limpieza (spec ruidolimpio)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// @return el registro completo (entrada + 3 sistemas + salida final) como
+/// texto copiable en español. Cadena vacía si el motor no está corriendo.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDenoiserArtifactReport(
+        JNIEnv* env,
+        jobject /* thiz */) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return env->NewStringUTF("");
+    }
+    const std::string report = g_engine->getDenoiserArtifactReport();
+    return env->NewStringUTF(report.c_str());
+}
+
+/// Reinicia el registro de matraca/calidad (inicia una nueva sesión).
+extern "C" JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeResetDenoiserArtifactLog(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) return;
+    g_engine->resetDenoiserArtifactLog();
+}
+
+namespace {
+/// Vuelca un ArtifactSnapshot al HashMap con un prefijo de clave por etapa.
+void putArtifactStage(JNIEnv* env, jobject map, jmethodID put,
+                      const char* prefix, const ArtifactSnapshot& s) {
+    auto key = [&](const char* suffix) {
+        return std::string(prefix) + suffix;
+    };
+    putKv(env, map, put, key("Active").c_str(),       boxBool(env, s.active));
+    putKv(env, map, put, key("Blocks").c_str(),       boxLong(env, static_cast<int64_t>(s.blocks)));
+    putKv(env, map, put, key("Clicks").c_str(),       boxLong(env, static_cast<int64_t>(s.clickCount)));
+    putKv(env, map, put, key("ClicksPerSec").c_str(), boxDouble(env, s.clicksPerSec));
+    putKv(env, map, put, key("Clip").c_str(),         boxLong(env, static_cast<int64_t>(s.clipCount)));
+    putKv(env, map, put, key("NanInf").c_str(),       boxLong(env, static_cast<int64_t>(s.nanInfCount)));
+    putKv(env, map, put, key("MaxJump").c_str(),      boxDouble(env, static_cast<double>(s.maxAbsJump)));
+    putKv(env, map, put, key("MeanRmsDbfs").c_str(),  boxDouble(env, static_cast<double>(s.meanRmsDbfs)));
+    putKv(env, map, put, key("Quality").c_str(),      boxDouble(env, static_cast<double>(s.sessionQuality)));
+    putKv(env, map, put, key("WorstQuality").c_str(), boxDouble(env, static_cast<double>(s.worstQuality)));
+    putKv(env, map, put, key("WorstEventSec").c_str(),boxDouble(env, s.worstEventSec));
+    putKv(env, map, put, key("ElapsedSec").c_str(),   boxDouble(env, s.elapsedSec));
+}
+}  // namespace
+
+/// @return resumen estructurado (HashMap) del registro de matraca/calidad.
+/// Claves con prefijo por etapa: `input*`, `sys0*`/`sys1*`/`sys2*` (RNNoise/
+/// DFN3/GTCRN), `output*`; más `activeEngine` (int). Cada etapa expone
+/// *Active, *Blocks, *Clicks, *ClicksPerSec, *Clip, *NanInf, *MaxJump,
+/// *MeanRmsDbfs, *Quality, *WorstQuality, *WorstEventSec, *ElapsedSec.
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDenoiserArtifactSummary(
+        JNIEnv* env,
+        jobject /* thiz */) {
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return nullptr;
+    }
+
+    jclass hashMapCls = env->FindClass("java/util/HashMap");
+    jmethodID ctor = env->GetMethodID(hashMapCls, "<init>", "()V");
+    jmethodID put  = env->GetMethodID(hashMapCls, "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    jobject map = env->NewObject(hashMapCls, ctor);
+
+    const DenoiserArtifactLog& log = g_engine->getArtifactLog();
+    putKv(env, map, put, "activeEngine", boxInt(env, log.activeEngineIndex()));
+    putArtifactStage(env, map, put, "input",  log.inputSnapshot());
+    putArtifactStage(env, map, put, "sys0",   log.engineSnapshot(0));
+    putArtifactStage(env, map, put, "sys1",   log.engineSnapshot(1));
+    putArtifactStage(env, map, put, "sys2",   log.engineSnapshot(2));
+    putArtifactStage(env, map, put, "output", log.outputSnapshot());
+
+    env->DeleteLocalRef(hashMapCls);
+    return map;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MVDR Dual-Mic Beamforming — Phase 3 (JNI bridge)
 // ─────────────────────────────────────────────────────────────────────────────
 

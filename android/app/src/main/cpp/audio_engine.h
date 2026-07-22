@@ -10,8 +10,10 @@
 #include <cstdint>
 
 #include <oboe/Oboe.h>
+#include <string>
 #include "dsp_pipeline.h"
 #include "diagnostic_recorder.h"
+#include "denoiser_artifact_log.h"
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
@@ -315,6 +317,18 @@ public:
     bool stopDiagnosticRecordingKeep();
     double getDiagnosticRecordingProgress() const;
 
+    // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
+    /// Renderiza el registro completo (entrada + 3 sistemas + salida final)
+    /// como texto copiable. Identifica en qué sistema aparece la matraca o
+    /// si viene de la fuente, y mide la calidad de cada etapa. Thread-safe.
+    std::string getDenoiserArtifactReport() const {
+        return artifactLog_.renderReport();
+    }
+    /// Reinicia el registro (nueva sesión de medición). Thread-safe.
+    void resetDenoiserArtifactLog() { artifactLog_.reset(); }
+    /// Acceso de solo lectura al registro (para el resumen estructurado JNI).
+    const DenoiserArtifactLog& getArtifactLog() const { return artifactLog_; }
+
     // ─── Callback de nivel para UI ──────────────────────────────────────
     using LevelCallback = std::function<void(float levelDbSpl)>;
     void setLevelCallback(LevelCallback cb);
@@ -420,6 +434,13 @@ private:
 
     // ─── Diagnostic Recorder ─────────────────────────────────────────────
     DiagnosticRecorder diagnosticRecorder_;
+
+    // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
+    /// Acumula clicks/crackle + calidad en taps de entrada, por-sistema y
+    /// salida final. El DenoiserSelector alimenta los taps de entrada y por
+    /// sistema (setArtifactLog en initDnnDenoiser); el callback alimenta la
+    /// salida final tras el DspPipeline. Lock-free, RT-safe.
+    DenoiserArtifactLog artifactLog_;
 
     // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
     smart_scene::SceneAnalyzer sceneAnalyzer_;

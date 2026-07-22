@@ -12,6 +12,7 @@
 #define HEARING_AID_DENOISER_SELECTOR_H
 
 #include "i_denoiser_engine.h"
+#include "denoiser_artifact_log.h"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -94,6 +95,13 @@ public:
     /// @return nombre legible del motor activo.
     const char* getActiveName() const;
 
+    /// Conecta el registro de matraca/calidad (opcional). Cuando está seteado,
+    /// process() alimenta el tap de ENTRADA (pre-denoise) y el tap de SALIDA
+    /// del motor activo, permitiendo atribuir la matraca a un sistema concreto
+    /// o determinar si viene de la fuente. Llamar desde el hilo de control
+    /// (antes de arrancar el audio). Puntero no-owning (vive en AudioEngine).
+    void setArtifactLog(DenoiserArtifactLog* log) { artifactLog_ = log; }
+
 private:
     /// Array de motores registrados (nullptr si no registrado).
     std::array<IDenoiserEngine*, static_cast<int>(DenoiserType::kCount)> engines_{};
@@ -125,6 +133,9 @@ private:
     /// Resuelve fallback si el motor seleccionado no está disponible.
     /// @return índice del motor a usar (fallback chain: RNNoise → GTCRN → -1).
     int resolveFallback(int requested) const;
+
+    /// Registro de matraca/calidad (no-owning, opcional). nullptr = deshabilitado.
+    DenoiserArtifactLog* artifactLog_ = nullptr;
 };
 
 #endif // HEARING_AID_DENOISER_SELECTOR_H

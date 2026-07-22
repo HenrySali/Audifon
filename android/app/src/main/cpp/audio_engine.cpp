@@ -575,6 +575,12 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3Adapter_);
     denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &gtcrnAdapter_);
 
+    // ─── Cablear el registro de matraca/calidad al selector ─────────────
+    // Configura los taps con la SR efectiva y conecta el log al selector para
+    // que mida entrada (pre-denoise) y salida de cada sistema de limpieza.
+    artifactLog_.configure(config_.sampleRate);
+    denoiserSelector_.setArtifactLog(&artifactLog_);
+
     // ─── Prioridad 1: RNNoise (xiph, static link) ──────────────────────
     // Motor primario recomendado: xiph/rnnoise v0.1.1 — static link, modelo
     // baked-in, 48 kHz nativo, 0 alloc en hot path. Se inicializa primero
@@ -1140,6 +1146,12 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     const bool vadFromLastBlock = sceneAnalyzer_.getVad().isVoiceActive();
     pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb,
                            vadFromLastBlock);
+
+    // ─── Registro de matraca/calidad: tap de SALIDA FINAL ───────────────
+    // `outPtr` es ahora la señal que escucha el usuario (post-pipeline
+    // completo: NR/EQ/WDRC/MPO/etc.). Mide la calidad final y permite
+    // detectar matraca introducida por etapas posteriores al denoiser.
+    artifactLog_.feedOutput(outPtr, numFrames);
 
     // ─── Smart Scene Engine analysis (Fase 1, read-only) ────────────────
     // Fix #5 (auditoría MVDR): alimentar el SceneAnalyzer con `outPtr`, que

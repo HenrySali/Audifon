@@ -54,4 +54,55 @@ class DenoiserService {
       }
     } catch (_) {}
   }
+
+  // ─── Registro de "matraca" (crackle) y calidad de los 3 sistemas ──────
+
+  /// Obtiene el registro completo de matraca/calidad como texto copiable.
+  ///
+  /// Incluye, por sesión: la matraca detectada en la ENTRADA a los sistemas
+  /// de limpieza, en cada uno de los 3 sistemas (RNNoise/DFN3/GTCRN) y en la
+  /// SALIDA FINAL que escucha el usuario, más un diagnóstico automático del
+  /// origen (fuente previa vs. introducida por un sistema vs. etapa DSP
+  /// posterior) y la calidad de cada etapa. Cadena vacía si el motor no
+  /// está corriendo.
+  Future<String> getArtifactReport() async {
+    try {
+      final String? report =
+          await _channel.invokeMethod<String>('getDenoiserArtifactReport');
+      return report ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Reinicia el registro (inicia una nueva sesión de medición).
+  Future<void> resetArtifactLog() async {
+    try {
+      await _channel.invokeMethod('resetDenoiserArtifactLog');
+    } catch (_) {}
+  }
+
+  /// Obtiene el resumen estructurado del registro (para UI en vivo).
+  /// Claves con prefijo por etapa: `input*`, `sys0*` (RNNoise), `sys1*`
+  /// (DFN3), `sys2*` (GTCRN), `output*`; más `activeEngine` (int).
+  Future<Map<String, dynamic>> getArtifactSummary() async {
+    try {
+      final Map<dynamic, dynamic>? raw =
+          await _channel.invokeMethod<Map<dynamic, dynamic>>(
+              'getDenoiserArtifactSummary');
+      if (raw == null) return <String, dynamic>{};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  /// Copia el registro de matraca/calidad al portapapeles.
+  /// @return true si había un registro para copiar.
+  Future<bool> copyArtifactReportToClipboard() async {
+    final report = await getArtifactReport();
+    if (report.isEmpty) return false;
+    await Clipboard.setData(ClipboardData(text: report));
+    return true;
+  }
 }
