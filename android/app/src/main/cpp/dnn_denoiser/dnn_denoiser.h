@@ -200,15 +200,6 @@ public:
     /// Antes de initialize/initializeDual devuelve 1 (mono) por defecto.
     int inputChannels() const;
 
-    /// @return true si esta instancia fue creada con `initializeDual()` pero
-    /// el modelo dual (`gtcrn_dual_core.onnx`) no estaba disponible y cargó
-    /// el modelo mono (`gtcrn.onnx`) como fallback. En ese caso
-    /// `processStereo()` downmixea ch0+ch1 y aplica GTCRN mono — el usuario
-    /// mantiene la reducción de ruido pero PIERDE el beamforming espacial.
-    /// Útil para mostrar un badge "modo degradado" en la UI.
-    /// Spec: ruidolimpio.md — Falla 3 de GTCRN.
-    bool isUsingMonoFallback() const;
-
     /// Configura el sample rate nativo del audio que va a entrar a process().
     /// El modelo GTCRN trabaja siempre a 16 kHz; este wrapper inserta un
     /// resampler interno (downsample antes del worker, upsample después)

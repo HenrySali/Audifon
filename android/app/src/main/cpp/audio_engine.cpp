@@ -614,22 +614,12 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     // El selector resuelve fallback internamente si ninguno está ready.
 
     // ─── Instancia dual-channel (GTCRN dual, ONNX + WPE beamformer) ────
-    // FIX 3 (ruidolimpio.md — GTCRN falla 3): initializeDual() ahora intenta
-    // cargar `gtcrn.onnx` como fallback si `gtcrn_dual_core.onnx` no está
-    // presente. Devuelve true en modo dual normal Y en modo fallback mono.
-    // `isUsingMonoFallback()` distingue ambos casos para la UI.
     const bool okDual =
         dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_core.onnx");
     if (!okDual) {
-        LOGE("initDnnDenoiser[dual]: dual y mono fallback fallaron — "
-             "kDualChannelDnn hará bypass a ch0 (sin denoising)");
-    } else if (dnnDenoiserDual_.isUsingMonoFallback()) {
-        LOGW("initDnnDenoiser[dual]: MODO DEGRADADO — dual no disponible, "
-             "corriendo GTCRN mono sobre downmix ch0+ch1 "
-             "(inputChannels=%d, hay denoising, NO hay beamforming)",
-             static_cast<int>(dnnDenoiserDual_.inputChannels()));
+        LOGW("initDnnDenoiser[dual]: .onnx not loaded — kDualChannelDnn will bypass to ch0");
     } else {
-        LOGI("initDnnDenoiser[dual]: model ready (inputChannels=%d, WPE+GTCRN)",
+        LOGI("initDnnDenoiser[dual]: model ready (inputChannels=%d)",
              static_cast<int>(dnnDenoiserDual_.inputChannels()));
     }
 
