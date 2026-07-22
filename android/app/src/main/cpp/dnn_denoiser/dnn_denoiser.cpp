@@ -267,6 +267,13 @@ int64_t shapeNumel(const std::vector<int64_t>& shape) {
 //   - Polyphase 72 taps: group delay = (72-1)/2 = 35.5 samples.
 //     A 48 kHz → ~0.74 ms. Round-trip (down + up) ≈ 1.48 ms (antes 1.98 ms).
 //   - Lineal: ~0 muestras (fase acumulada).
+
+// Forward declaration: Resampler::configure() (definida inline dentro de la
+// clase, más abajo) llama a designKaiserLpf() para construir el anti-alias
+// FIR del modo lineal (FIX 2). La definición completa vive después de
+// besselI0Approx() más abajo en este mismo TU.
+inline void designKaiserLpf(float* h, int N, float fcNorm, float beta);
+
 class Resampler {
 public:
     enum class Mode {
