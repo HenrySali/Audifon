@@ -685,8 +685,13 @@ struct DnnDenoiser::Impl {
 
     // ─── Noise gate con hysteresis (FIX tktktk Causa 2) ──────────────────
     /// Ganancia actual del noise gate [0..1]. Rampea suavemente entre abierto
-    /// (1.0) y cerrado (0.0) para evitar clicks por conmutación rápida.
+    /// (1.0) y cerrado (kGateFloor) para evitar clicks por conmutación rápida.
     float gateGain_ = 1.0f;
+    /// Ganancia efectivamente aplicada a la ÚLTIMA muestra del hop anterior.
+    /// Punto de partida de la rampa per-sample del gate (FIX matraca Causa A):
+    /// interpolamos de gateGainApplied_ → gateGain_ muestra a muestra para que
+    /// el cambio de ganancia no sea un escalón en la frontera de hop (= click).
+    float gateGainApplied_ = 1.0f;
     /// Contador de frames consecutivos por debajo del umbral de cierre.
     /// El gate solo cierra después de kHystFrames consecutivos (~60 ms).
     int   gateHoldCounter_ = 0;
@@ -1230,6 +1235,7 @@ struct DnnDenoiser::Impl {
         wpeBeamformer.reset();
         // Noise gate state.
         gateGain_ = 1.0f;
+        gateGainApplied_ = 1.0f;
         gateHoldCounter_ = 0;
     }
 
@@ -1443,6 +1449,12 @@ struct DnnDenoiser::Impl {
             constexpr float kGateOpen   = 0.01f;    // -40 dBFS: umbral para abrir completamente
             // Hysteresis: necesita 6 frames (~60 ms) debajo para cerrar.
             constexpr int   kHystFrames = 6;
+            // FIX matraca (Causa A): piso de ganancia del gate. El gate NUNCA
+            // cierra a 0.0 absoluto: eso producía silencio digital (pico
+            // -200 dBFS en el registro) y un salto audible al reabrir. Un piso
+            // de ~-26 dBFS sigue atenuando fuerte el silencio sin generar el
+            // click de gating (equivalente a "comfort floor").
+            constexpr float kGateFloor  = 0.05f;
 
             if (rms >= kGateOpen) {
                 // Claramente por encima: abrir inmediatamente.
@@ -1453,14 +1465,16 @@ struct DnnDenoiser::Impl {
                 // Debajo del umbral de cierre: incrementar contador de hysteresis.
                 gateHoldCounter_++;
                 if (gateHoldCounter_ >= kHystFrames) {
-                    // Confirmado silencio sostenido: bajar gateGain_ hacia 0.
-                    gateGain_ = std::max(0.0f, gateGain_ - 0.25f);
+                    // Confirmado silencio sostenido: bajar gateGain_ hacia el piso.
+                    gateGain_ = std::max(kGateFloor, gateGain_ - 0.25f);
                 }
                 // Si aún no se alcanzó el hold, gateGain_ se mantiene (no cierra).
             } else {
                 // En la zona de transición (knee): interpolar ganancia target.
                 gateHoldCounter_ = 0;
-                const float kneeTarget = (rms - kGateClose) / (kGateOpen - kGateClose);
+                const float kneeTarget =
+                    std::max(kGateFloor,
+                             (rms - kGateClose) / (kGateOpen - kGateClose));
                 // Rampa suave hacia el target: no saltar, acercarse gradualmente.
                 const float step = 0.2f; // ~50 ms para recorrer el rango completo
                 if (gateGain_ < kneeTarget) {
@@ -1470,12 +1484,25 @@ struct DnnDenoiser::Impl {
                 }
             }
 
-            // Aplicar ganancia del gate al frame.
-            if (gateGain_ < 0.999f) {
+            // Aplicar ganancia del gate al frame con RAMPA PER-SAMPLE.
+            // FIX matraca (Causa A): antes se multiplicaba por un gateGain_
+            // CONSTANTE en todo el hop; el cambio de ganancia entre hops (hasta
+            // 0.33) caía de golpe en la frontera → discontinuidad = click que el
+            // ArtifactMonitor detecta. Ahora interpolamos linealmente muestra a
+            // muestra desde la ganancia aplicada a la última muestra del hop
+            // anterior (gateGainApplied_) hasta el target de este hop (gateGain_),
+            // eliminando el escalón. La última muestra recibe gateGain_, que pasa
+            // a ser el punto de partida del siguiente hop (continuidad C0).
+            const float gStart = gateGainApplied_;
+            const float gEnd   = gateGain_;
+            if (gStart < 0.999f || gEnd < 0.999f) {
+                const float invN = 1.0f / static_cast<float>(kDnnHopSize);
                 for (int i = 0; i < kDnnHopSize; ++i) {
-                    outputFrame[i] *= gateGain_;
+                    const float t = static_cast<float>(i + 1) * invN;
+                    outputFrame[i] *= gStart + (gEnd - gStart) * t;
                 }
             }
+            gateGainApplied_ = gEnd;
         }
 
         // ── 12. Push outputFrame al outputRing ───────────────────────────
