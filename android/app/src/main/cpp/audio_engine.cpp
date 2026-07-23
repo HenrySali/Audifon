@@ -572,7 +572,9 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
 
     // ─── Registrar los 3 motores en el DenoiserSelector ─────────────────
     denoiserSelector_.registerEngine(DenoiserType::kRNNoise, &rnnoiseAdapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3Adapter_);
+    // Slot "Premium" (kDFN3): ahora el DFN3 ONNX autocontenido (OnnxRuntime
+    // estable) en lugar del viejo Dfn3Denoiser (enc/erb_dec manual / Rust).
+    denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3OnnxAdapter_);
     denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &gtcrnAdapter_);
 
     // ─── Cablear el registro de matraca/calidad al selector ─────────────
@@ -592,15 +594,19 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
         LOGW("initDnnDenoiser: RNNoise no arrancó — fallback a GTCRN");
     }
 
-    // ─── Prioridad 2: DeepFilterNet3 (OnnxRuntime directo, sin Rust) ────
-    // Reimplementación que carga enc.onnx + erb_dec.onnx desde assets
-    // directamente en OnnxRuntime (elimina dlopen de libdfn3.so que crasheaba
-    // con index out of bounds 481). El adapter se inicializa vía el selector.
-    const bool dfn3Ok = dfn3Denoiser_.initialize(mgr, "dfn3");
+    // ─── Prioridad 2: DeepFilterNet3 ONNX (export torchDF autocontenido) ─
+    // Un único modelo ONNX (denoiser_model.onnx) hace TODO el pipeline
+    // (STFT/ERB/deep-filtering/iSTFT) dentro del grafo: recibe/devuelve audio
+    // crudo a 48 kHz. Corre sobre el MISMO OnnxRuntime estable que GTCRN,
+    // eliminando el dlopen de libdfn3.so (Rust/tract) que crasheaba con
+    // index out of bounds 481. Ocupa el slot "Premium" (kDFN3) del selector.
+    const bool dfn3Ok =
+        dfn3OnnxDenoiser_.initialize(mgr, "dfn3_onnx/denoiser_model.onnx");
     if (dfn3Ok) {
-        LOGI("initDnnDenoiser: DFN3 activo (OnnxRuntime directo, premium)");
+        LOGI("initDnnDenoiser: DFN3 ONNX activo (OnnxRuntime, premium, 48 kHz)");
     } else {
-        LOGW("initDnnDenoiser: DFN3 no arrancó — disponible solo RNNoise/GTCRN");
+        LOGW("initDnnDenoiser: DFN3 ONNX no arrancó (falta asset?) — "
+             "disponible solo RNNoise/GTCRN");
     }
 
     // ─── Fallback final: GTCRN mono legacy (ONNXRuntime) ────────────────

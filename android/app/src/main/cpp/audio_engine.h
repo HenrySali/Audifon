@@ -22,6 +22,8 @@
 #include "denoiser_selector.h"
 #include "rnnoise_adapter.h"
 #include "dfn3_adapter.h"
+#include "dfn3_onnx_denoiser.h"
+#include "dfn3_onnx_adapter.h"
 #include "gtcrn_adapter.h"
 #include "latency_loopback_tester.h"
 #include "mvdr_beamformer.h"
@@ -463,6 +465,15 @@ private:
     /// cargan, se usa DFN3; si no, cae a GTCRN automáticamente.
     dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
 
+    // ─── DeepFilterNet3 ONNX (export torchDF autocontenido, 48 kHz) ──────
+    /// Motor DFN3 basado en un ÚNICO modelo ONNX autocontenido (STFT/ERB/DF
+    /// dentro del grafo, audio crudo in/out). Reemplaza al slot "Premium"
+    /// (kDFN3) del DenoiserSelector: corre sobre el MISMO OnnxRuntime estable
+    /// que GTCRN, eliminando el crash de Rust/tract (index out of bounds 481).
+    /// Requiere el asset dfn3_onnx/denoiser_model.onnx (~16 MB). Si no está
+    /// presente o falla, isActive()=false y el selector cae al fallback.
+    dfn3_onnx::Dfn3OnnxDenoiser dfn3OnnxDenoiser_;
+
     // ─── RNNoise (xiph, static link, motor primario recomendado) ─────────
     /// Motor RNNoise (48 kHz nativo, C statically linked). Cuando está
     /// activo, reemplaza completamente a GTCRN y DFN3. Se prioriza en
@@ -482,7 +493,8 @@ private:
     /// Adapters que wrappean las instancias existentes bajo IDenoiserEngine.
     /// Viven como miembros para garantizar lifetime >= selector.
     RnnoiseAdapter rnnoiseAdapter_{&rnnoiseDenoiser_};
-    Dfn3Adapter dfn3Adapter_{&dfn3Denoiser_};
+    Dfn3Adapter dfn3Adapter_{&dfn3Denoiser_};  // legacy (enc/erb_dec manual) — no registrado
+    Dfn3OnnxAdapter dfn3OnnxAdapter_{&dfn3OnnxDenoiser_};  // ocupa el slot kDFN3
     GtcrnAdapter gtcrnAdapter_{&dnnDenoiser_};
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
