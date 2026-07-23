@@ -308,10 +308,8 @@ bool Dfn3OnnxDenoiser::initialize(AAssetManager* mgr, const char* assetPath) {
         return false;
     }
 
-    // Inicializar buffers de mezcla/latencia.
-    hopBuf_count_ = 0;
-    std::fill(std::begin(hopBuf_), std::end(hopBuf_), 0.0f);
-    std::fill(std::begin(prevDry_), std::end(prevDry_), 0.0f);
+    // Inicializar buffers de mezcla/latencia y anillo de salida.
+    resetBuffers();
 
     impl_->ready = true;
     active_.store(true, std::memory_order_release);
@@ -366,6 +364,15 @@ bool Dfn3OnnxDenoiser::processHop(float* hop) {
     return true;
 }
 
+void Dfn3OnnxDenoiser::resetBuffers() {
+    hopBuf_count_ = 0;
+    outHead_ = 0;
+    outTail_ = 0;
+    primed_ = false;
+    std::fill(std::begin(hopBuf_), std::end(hopBuf_), 0.0f);
+    std::fill(std::begin(prevDry_), std::end(prevDry_), 0.0f);
+}
+
 void Dfn3OnnxDenoiser::process(float* buffer, int blockSize) {
     if (!buffer || blockSize <= 0) return;
 
@@ -374,50 +381,50 @@ void Dfn3OnnxDenoiser::process(float* buffer, int blockSize) {
 
     crossfadeTarget_ = en ? 1.0f : 0.0f;
 
-    // Bypass bit-exact: sin enable y crossfade ya en 0.
+    // Bypass bit-exact: sin enable y crossfade ya en 0. Limpia el estado para
+    // que un re-enable arranque fresco (re-prime del anillo).
     if (!en && crossfadeGain_ <= 0.0f) {
-        hopBuf_count_ = 0;
+        resetBuffers();
         return;
     }
-    // Sin modelo: bypass (respetando decaimiento del crossfade).
+    // Sin modelo (falla de carga/inferencia): bypass bit-exact.
     if (!act) {
-        if (crossfadeGain_ > 0.0f) {
-            for (int i = 0; i < blockSize; ++i)
-                crossfadeGain_ = std::max(0.0f, crossfadeGain_ - kCrossfadeStep);
-        }
-        hopBuf_count_ = 0;
+        crossfadeGain_ = 0.0f;
+        resetBuffers();
         return;
     }
 
-    // Acumular en hops de kHopSize; procesar cada hop completo in-place.
-    // El writeback es block-aligned: cuando un hop se completa, sus samples
-    // (que están dentro de este bloque o del anterior vía hopBuf_) se
-    // reescriben con la salida mezclada.
-    int pos = 0;
-    while (pos < blockSize) {
-        const int needed = kHopSize - hopBuf_count_;
-        const int avail  = blockSize - pos;
-        const int toCopy = std::min(needed, avail);
+    // Pre-rellenar el anillo con silencio en la primera pasada activa. Esto
+    // fija la latencia (~20 ms) y garantiza que SIEMPRE haya >= blockSize
+    // muestras para emitir, evitando underruns intermitentes que producirían
+    // empalmes crudo/procesado (la causa del sonido "ronco").
+    if (!primed_) {
+        const int prefill = std::min(kOutRingPrefill, kOutRingCap - 1);
+        for (int i = 0; i < prefill; ++i) outRing_[outHead_++ & kOutRingMask] = 0.0f;
+        primed_ = true;
+    }
 
-        std::memcpy(hopBuf_ + hopBuf_count_, buffer + pos, toCopy * sizeof(float));
-        hopBuf_count_ += toCopy;
-
+    // ── Etapa A: acumular la entrada en hops de kHopSize y procesar COMPLETO ──
+    // Cada hop procesado (mezcla dry/wet ya alineada) se empuja ENTERO al
+    // anillo de salida. Nunca se trocea ni se mezcla crudo con procesado.
+    for (int pos = 0; pos < blockSize; ++pos) {
+        hopBuf_[hopBuf_count_++] = buffer[pos];
         if (hopBuf_count_ == kHopSize) {
-            const bool processed = processHop(hopBuf_);
-            // Reescribir los `toCopy` samples que provienen de ESTE bloque con
-            // la cola del hop procesado (los primeros (kHopSize-toCopy) samples
-            // vinieron de un bloque anterior y ya fueron emitidos entonces...
-            // no: en este diseño el hop se completa dentro del bloque actual
-            // salvo su prefijo, que se emitió como dry en el bloque previo).
-            const int hopOffset = kHopSize - toCopy;
-            if (processed) {
-                std::memcpy(buffer + pos, hopBuf_ + hopOffset,
-                            toCopy * sizeof(float));
-            }
-            // Si !processed, buffer conserva el dry (bit-exact).
+            // processHop mezcla in-place; si la inferencia falla, se empuja el
+            // hop crudo (dry) para no dejar un hueco (evento raro y puntual).
+            processHop(hopBuf_);
+            for (int i = 0; i < kHopSize; ++i)
+                outRing_[outHead_++ & kOutRingMask] = hopBuf_[i];
             hopBuf_count_ = 0;
         }
-        pos += toCopy;
+    }
+
+    // ── Etapa B: emitir blockSize muestras desde el anillo de salida ──────
+    for (int pos = 0; pos < blockSize; ++pos) {
+        if (outHead_ - outTail_ > 0) {
+            buffer[pos] = outRing_[outTail_++ & kOutRingMask];
+        }
+        // Underrun (no debería ocurrir con el pre-relleno): deja el dry.
     }
 }
 
@@ -432,11 +439,9 @@ void Dfn3OnnxDenoiser::setIntensity(float intensity) {
 }
 
 void Dfn3OnnxDenoiser::reset() {
-    hopBuf_count_ = 0;
+    resetBuffers();
     crossfadeGain_ = 0.0f;
     crossfadeTarget_ = enabled_.load(std::memory_order_acquire) ? 1.0f : 0.0f;
-    std::fill(std::begin(hopBuf_), std::end(hopBuf_), 0.0f);
-    std::fill(std::begin(prevDry_), std::end(prevDry_), 0.0f);
     if (impl_) impl_->resetState();
     DFNX_LOGI("reset()");
 }
