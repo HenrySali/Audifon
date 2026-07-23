@@ -21,3 +21,5 @@ android/app/src/main/jniLibs/arm64-v8a/libsherpa-onnx-jni.so -filter -diff -merg
 android/app/src/main/assets/dnn_denoiser/gtcrn.onnx -filter -diff -merge -text
 android/app/src/main/assets/dnn_denoiser/gtcrn_dual_mobile.pt -filter -diff -merge -text
 android/app/src/main/assets/dnn_denoiser/gtcrn_dual_mobile.ptl -filter -diff -merge -text
+
+android/app/src/main/assets/dfn3_onnx/denoiser_model.onnx -filter -diff -merge -text

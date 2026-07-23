@@ -71,8 +71,12 @@ add_library(
     dnn_denoiser/dnn_denoiser.cpp
     # DenoiserSelector — toggle exclusivo entre RNNoise/DFN3/GTCRN con crossfade
     denoiser_selector.cpp
-    # DeepFilterNet3 wrapper (dlopen de libdfn3.so en runtime)
+    # DeepFilterNet3 wrapper legacy (enc/erb_dec manual vía OnnxRuntime)
     dfn3_denoiser.cpp
+    # DeepFilterNet3 ONNX autocontenido (export torchDF, audio crudo 48 kHz)
+    #   Ocupa el slot "Premium" (kDFN3) del DenoiserSelector. Reutiliza el
+    #   mismo OnnxRuntime que GTCRN. Requiere assets/dfn3_onnx/denoiser_model.onnx
+    dfn3_onnx_denoiser.cpp
     # RNNoise denoiser wrapper + vendored xiph/rnnoise v0.1.1 sources
     #   Statically linked. No dlopen, no asset extraction, no ONNX runtime.
     #   Frame size 480 @ 48 kHz. Model baked into the .so (~90 KB compressed).
