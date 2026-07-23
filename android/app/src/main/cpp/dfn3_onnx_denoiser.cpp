@@ -210,7 +210,14 @@ struct Dfn3OnnxDenoiser::Impl {
         std::memcpy(frameBuf.data(), inHop, kHopSize * sizeof(float));
 
         // Construir tensores. La memoria backing son los vectores miembro.
-        std::vector<Ort::Value> inputs(inputNames.size(), Ort::Value(nullptr));
+        // NOTA: Ort::Value solo es movible (copia borrada), así que NO se puede
+        // usar el constructor de relleno vector(n, val); se hace reserve +
+        // push_back (que mueve), igual que dnn_denoiser.cpp.
+        std::vector<Ort::Value> inputs;
+        inputs.reserve(inputNames.size());
+        for (size_t i = 0; i < inputNames.size(); ++i) {
+            inputs.push_back(Ort::Value(nullptr));
+        }
 
         inputs[idxInFrame] = Ort::Value::CreateTensor<float>(
             memInfo, frameBuf.data(), frameBuf.size(),
