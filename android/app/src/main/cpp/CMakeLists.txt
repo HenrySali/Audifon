@@ -92,6 +92,8 @@ add_library(
     diagnostic_recorder.cpp
     # Latency Loopback Tester (chirp + cross-correlation para medir latencia round-trip)
     latency_loopback_tester.cpp
+    # DTLN Denoiser (Dual-signal Transformation LSTM Network)
+    dtln_denoiser.cpp
 )
 
 # Enlazar con Oboe, librerías del sistema Android y OnnxRuntime
