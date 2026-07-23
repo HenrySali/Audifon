@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-003",
+  "type": "fix",
+  "description": "Address review issues: (1) Move Rnn diagonal loading from updateRnn() to computeMvdrWeights(), (2) Fix overlap-add startup silence by passthrough until first frame processed, (3) Fix frame truncation by looping over chunks, (4) Fix OLA gain with normalization factor, (5) Fix isBeamformingActive() to check stereoInputAvailable_.",
+  "status": "completed",
+  "steps": [
+    "1. In mvdr_beamformer.h: Remove kReg addition from updateRnn(), add it just before inversion in computeMvdrWeights().",
+    "2. In mvdr_beamformer.h: Add firstFrameProcessed_ boolean, passthrough ch0 until first STFT frame is synthesized.",
+    "3. In mvdr_beamformer.h: No changes needed (beamformer processes any numFrames already). Fix in audio_engine.cpp: loop over chunks of kMaxBeamBlockSize.",
+    "4. In mvdr_beamformer.h: Apply OLA normalization factor of 1.0f/0.75f after overlap-add accumulation in processFrame.",
+    "5. In audio_engine.cpp: Fix isBeamformingActive() to also check stereoInputAvailable_."
+  ],
+  "acceptance_criteria": [
+    "kReg is not added in updateRnn() but is applied to diagonal before inversion in computeMvdrWeights()",
+    "Output passes through ch0 until the first full STFT frame has been synthesized",
+    "Frames beyond kMaxBeamBlockSize are processed in chunks, not dropped",
+    "OLA output is normalized by 1.0f/0.75f to compensate Hann window pair",
+    "isBeamformingActive() returns mvdrBeamformer_.isEnabled() && stereoInputAvailable_",
+    "clang++ -std=c++17 -fsyntax-only passes on mvdr_beamformer.h"
+  ],
+  "verification": [
+    "clang++ -std=c++17 -fsyntax-only android/app/src/main/cpp/mvdr_beamformer.h"
+  ],
+  "blocked_reason": null,
+  "findings": "All 5 review issues addressed. clang++ -std=c++17 -fsyntax-only passes on mvdr_beamformer.h standalone (exit code 0, no errors). Issue #6 (no tests) skipped as no test framework is available for native C++ in this sandbox."
+}

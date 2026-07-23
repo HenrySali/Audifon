@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "UI toggle for enabling/disabling MVDR dual-mic beamformer in main_screen.dart. SwitchListTile with Icons.spatial_audio, persisted in Hive settings_box with key beamformingEnabled (default false). Calls AudioBridgeImpl().setBeamformingEnabled(enabled) on toggle change.",
+  "status": "completed",
+  "steps": [
+    "1. Add a _BeamformingToggleCard StatefulWidget to main_screen.dart following the pattern of existing toggles (DNN, Conversation Mode, Smart Scene).",
+    "2. In initState, read the beamformingEnabled value from Hive settings_box (default false) and set initial switch state.",
+    "3. On toggle change, call AudioBridgeImpl().setBeamformingEnabled(enabled) and persist to Hive.",
+    "4. Place the toggle in _ActiveView among other DSP toggles.",
+    "5. Use SwitchListTile with Icons.spatial_audio, title 'Beamforming 2-Mic', subtitle 'MVDR: prioriza voz frontal, atenúa ruido lateral'."
+  ],
+  "acceptance_criteria": [
+    "SwitchListTile with Icons.spatial_audio, title 'Beamforming 2-Mic', subtitle as specified",
+    "State persisted in Hive settings_box with key 'beamformingEnabled', default false",
+    "Calls AudioBridgeImpl().setBeamformingEnabled(enabled) on change",
+    "Reads initial value from Hive on screen init",
+    "Toggle placed in the active view among existing DSP toggles"
+  ],
+  "verification": [
+    "Visual inspection of Dart syntax correctness",
+    "Verify the toggle follows existing patterns in the file"
+  ],
+  "blocked_reason": null,
+  "findings": "Toggle implemented following the _DnnNoiseCleanerCard pattern. Uses Card + SwitchListTile for consistent Material look. Placed after DNN card in _ActiveView. No dart analyzer available in sandbox, but structural checks (brace/paren/bracket balance) all pass. AudioBridgeImpl import was already present in the file."
+}

@@ -1,0 +1,176 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+// Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3, R4.6).
+// Carga de credenciales de firma desde android/key.properties (gitignored).
+// Si el archivo no existe, signingConfigs.release queda sin valores y el
+// build de release falla — por diseño, para no firmar con la debug key
+// silenciosamente. En CI el workflow build-apk.yml valida los secrets,
+// decodifica la keystore y genera key.properties antes del build.
+//
+// Nota: este bloque DEBE ir DESPUES del plugins {} block. Gradle 8.7
+// exige que plugins {} sea lo primero del archivo (solo permitido
+// buildscript {} / pluginManagement {} antes).
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace = "com.psk.hearing_aid_app"
+    compileSdk = 34
+    ndkVersion = "25.2.9519653"
+
+    buildFeatures {
+        prefab true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    defaultConfig {
+        applicationId = "com.psk.hearing_aid_app"
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0.0"
+
+        // Configuración NDK para compilación C++ del DSP pipeline
+        // Solo arm64-v8a porque las librerias prebuilt de OnnxRuntime
+        // (jniLibs/arm64-v8a/libonnxruntime.so + libsherpa-onnx-jni.so)
+        // están solo para 64-bit. Cualquier dispositivo Android 8+
+        // (API 26+, ~98% del parque actual) es arm64-v8a.
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+
+        // CMake para compilar código C++ nativo (DSP pipeline)
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -O2 -ffast-math"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    // Configuración de CMake para el pipeline DSP nativo
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    // Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3).
+    // signingConfigs.release lee de key.properties (cargado arriba).
+    // Si el archivo no existe (storeFile == null), las propiedades quedan
+    // vacías y el build de release falla con error explícito al intentar
+    // firmar — eso es lo que queremos: nunca caer a debug key en silencio.
+    signingConfigs {
+        release {
+            if (keystoreProperties.getProperty('storeFile') != null) {
+                storeFile     file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias      keystoreProperties['keyAlias']
+                keyPassword   keystoreProperties['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Spec oir-pro-rebrand-harden-and-remote-config — Fase 4 (R4.3, R4.6).
+            // Si key.properties existe, firma con la keystore release.
+            // Si no, falla (build.gradle solo configura, el workflow CI
+            // valida que el archivo exista y aborta si no).
+            signingConfig = signingConfigs.release
+            // Fase 2 spec oir-pro-rebrand-harden-and-remote-config:
+            //   - minifyEnabled  → R8 renombra clases Java/Kotlin a a,b,c
+            //                       y elimina codigo no usado.
+            //   - shrinkResources → recorta recursos (drawables, strings)
+            //                       no referenciados.
+            // Reglas de preservacion criticas (JNI, Oboe, BLE, Hive, etc.)
+            // estan en proguard-rules.pro. Romper alguna regla rompe el
+            // DSP en runtime sin warning, asi que cualquier cambio en R8
+            // requiere smoke test exhaustivo.
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // Fuerza que liboboe.so (Oboe via Prefab) quede empaquetado dentro
+    // del APK en todos los build types. Sin esto, el build debug produce
+    // un APK que no incluye liboboe.so → UnsatisfiedLinkError al arrancar.
+    // El build release del CI también se beneficia de esta regla.
+    //
+    // pickFirsts: el AAR pytorch_android trae .so en jni/ y nosotros
+    // tambien las ponemos en jniLibs/ (para CMake IMPORTED). pickFirst
+    // evita el error "more than one file found" durante el merge.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+            pickFirsts += ['**/libpytorch_jni.so',
+                           '**/libc10.so',
+                           '**/libfbjni.so']
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
+    implementation "androidx.core:core-ktx:1.12.0"
+    implementation 'com.google.oboe:oboe:1.9.0'
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PyTorch Android (Full JIT Runtime) — modelo GTCRN dual-channel (.ptl)
+    // ─────────────────────────────────────────────────────────────────────
+    // El AAR empaqueta libpytorch_jni.so + libc10.so + libfbjni.so
+    // para arm64-v8a. El codigo C++ nativo (DnnDenoiser) linkea contra
+    // estas .so via IMPORTED targets en CMakeLists.txt.
+    // Version 2.1.0 compatible con el trace exportado por torch 2.x.
+    // Coexiste con ONNXRuntime (el GTCRN mono sigue usando ORT).
+    //
+    // NOTA: migracion de pytorch_android_lite a pytorch_android (full runtime)
+    // requerida porque el modelo fue trazado con torch.jit.trace(model,
+    // torch.randn(1,2,48000)) y el lite interpreter crashea con SIGSEGV
+    // al pasar T != 48000 (shapes estaticas baked en el trace). El full
+    // JIT interpreter maneja correctamente los shapes del modelo.
+    implementation 'org.pytorch:pytorch_android:2.1.0'
+}
+
+// Force androidx.core and androidx.core-ktx to a version compatible with
+// the current Android Gradle Plugin (8.3.2) and compileSdk 34.
+//
+// Reason: some transitive dependency (likely from a Flutter plugin) pulls in
+// androidx.core:1.17.0, which requires AGP 8.9.1+ and compileSdk 36. Until
+// the project upgrades AGP and compileSdk, we pin the versions explicitly
+// so Gradle resolves to a compatible release.
+//
+// 1.13.1 is the highest 1.13.x release compatible with compileSdk 34.
+// androidx.browser:1.8.0 is the last release compatible with compileSdk 34
+// (newer versions pull androidx.browser 1.9.0 which requires AGP 8.9.1+).
+configurations.all {
+    resolutionStrategy {
+        force 'androidx.core:core:1.13.1'
+        force 'androidx.core:core-ktx:1.13.1'
+        force 'androidx.browser:browser:1.8.0'
+    }
+}

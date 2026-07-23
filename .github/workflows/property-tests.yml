@@ -1,0 +1,106 @@
+# Spec gate: audiogram-driven-presets / Task 16.1
+#
+# Blocks merge on property-based test failure with shrunken counterexample
+# reported (Requirements 11.10, 15.10).
+#
+# The property tests live under
+#   test/domain/audiogram_driven_presets/property/
+# and are written with `glados` (already in pubspec.yaml as dev_dependency).
+#
+# Wave-8 PBT files (tasks 11.1 – 11.9) are marked `*` (optional), so they
+# may not exist yet on a given branch. The "Detect property test files"
+# step skips the run gracefully in that case so this workflow never
+# false-fails on a branch that has not landed wave-8 yet — but the moment
+# any PBT file is committed under that directory, the gate becomes
+# strict and any failure (including shrunken counterexamples emitted by
+# glados) blocks the merge.
+
+name: Property-based tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "lib/domain/audiogram_driven_presets/**"
+      - "test/domain/audiogram_driven_presets/property/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/property-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "lib/domain/audiogram_driven_presets/**"
+      - "test/domain/audiogram_driven_presets/property/**"
+  workflow_dispatch: {}
+
+jobs:
+  pbt:
+    name: glados property-based tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: "stable"
+
+      - name: Detect property test files
+        id: pbt_present
+        shell: bash
+        run: |
+          set -euo pipefail
+          PBT_DIR="test/domain/audiogram_driven_presets/property"
+          if [ -d "$PBT_DIR" ] && [ -n "$(find "$PBT_DIR" -maxdepth 2 -name '*_test.dart' -print -quit)" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Property-based tests detected in $PBT_DIR — gate is STRICT."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No PBT files in $PBT_DIR (wave-8 tasks 11.x not landed yet) — skipping."
+          fi
+
+      - name: Get dependencies
+        if: steps.pbt_present.outputs.available == 'true'
+        run: flutter pub get
+
+      - name: Run property-based tests (merge-blocking)
+        if: steps.pbt_present.outputs.available == 'true'
+        run: |
+          flutter test test/domain/audiogram_driven_presets/property/ \
+            --reporter expanded \
+            --concurrency=1
+        # `glados` prints the SHRUNKEN counterexample to stdout on failure.
+        # `--reporter expanded` keeps every assertion line in the log so
+        # the counterexample is visible to reviewers without re-running.
+
+      - name: Block merge on PBT failure
+        if: steps.pbt_present.outputs.available == 'true' && failure()
+        run: |
+          echo "::error::Property-based test failure. The shrunken counterexample is in the previous step's log. Per Requirements 11.10 / 15.10 this blocks merge."
+          exit 1
+
+      - name: Notify when PBT files are absent
+        if: steps.pbt_present.outputs.available != 'true'
+        run: |
+          {
+            echo "## Property-based tests — gate skipped"
+            echo
+            echo "No \`*_test.dart\` files were found under"
+            echo "\`test/domain/audiogram_driven_presets/property/\`."
+            echo
+            echo "Tasks 11.1 – 11.9 (wave-8) are flagged \`*\` in"
+            echo "\`.kiro/specs/audiogram-driven-presets/tasks.md\` so they"
+            echo "are optional. As soon as any property test lands in"
+            echo "that directory, this workflow becomes a strict merge gate"
+            echo "for Requirements 11.10 / 15.10."
+          } >> "$GITHUB_STEP_SUMMARY"

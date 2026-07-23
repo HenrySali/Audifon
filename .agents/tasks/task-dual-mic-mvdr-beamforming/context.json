@@ -1,0 +1,27 @@
+{
+  "project_type": "Flutter hearing aid app with native C++ DSP engine via Oboe on Android",
+  "language": "Dart (Flutter) + Kotlin (Android platform) + C++ (native DSP engine via NDK/Oboe)",
+  "build_system": "Flutter + Gradle (Android) + CMake (NDK). Header-only C++ modules do NOT require CMakeLists.txt changes.",
+  "test_framework": "clang++ -fsyntax-only for C++ syntax verification; no unit test runner available for native C++ in this sandbox",
+  "build_command": "clang++ -std=c++17 -fsyntax-only -I/projects/sandbox/Audifon/android/app/src/main/cpp",
+  "test_command": "clang++ -std=c++17 -fsyntax-only for each modified/created .h/.cpp file",
+  "verification_instructions": "1. Run clang++ -std=c++17 -fsyntax-only on mvdr_beamformer.h (standalone). 2. Run clang++ -std=c++17 -fsyntax-only on audio_engine.h (with include). 3. Verify Kotlin files have correct syntax. 4. Verify Dart files have correct syntax.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "clang++ is available at /usr/bin/clang++ (version 15.0.7). No Android NDK installed, so syntax checks use host clang with -fsyntax-only and stub headers where needed.",
+  "environment_constraints": "No Android NDK or Oboe headers available on the host. Syntax checks for C++ must use -fsyntax-only with appropriate -I paths. Kotlin and Dart files can only be syntax-checked visually (no kotlinc or dart analyzer available). The module is header-only so no link step is needed.",
+  "contribution_requirements": "Header-only modules (like feedback_suppressor.h, voice_activity_detector.h). Do NOT touch CMakeLists.txt. Default beamformingEnabled=false for retrocompatibility. The beamformer goes BEFORE the DNN in the pipeline.",
+  "key_patterns": "1. Header-only C++ modules: self-contained in a single .h with all implementation inline. 2. JNI bridge: native_bridge.cpp uses g_engine singleton, Java_com_psk_hearing_1aid_1app_NativeAudioBridge_ prefix. 3. Kotlin bridge: NativeAudioBridge.kt declares external fun, AudioMethodChannel.kt handles MethodChannel calls. 4. Dart bridge: audio_bridge.dart (abstract), audio_bridge_impl.dart (implementation via MethodChannel). 5. AudioEngineConfig struct holds config fields. 6. VAD accessed via sceneAnalyzer_.getVad().isVoiceActive().",
+  "relevant_files": [
+    "android/app/src/main/cpp/mvdr_beamformer.h (TO CREATE)",
+    "android/app/src/main/cpp/audio_engine.h",
+    "android/app/src/main/cpp/audio_engine.cpp",
+    "android/app/src/main/cpp/native_bridge.cpp",
+    "android/app/src/main/kotlin/com/psk/hearing_aid_app/NativeAudioBridge.kt",
+    "android/app/src/main/kotlin/com/psk/hearing_aid_app/AudioMethodChannel.kt",
+    "lib/data/bridges/audio_bridge.dart",
+    "lib/data/bridges/audio_bridge_impl.dart",
+    "android/app/src/main/cpp/voice_activity_detector.h (PATTERN REFERENCE)",
+    "android/app/src/main/cpp/feedback_suppressor.h (PATTERN REFERENCE)"
+  ],
+  "directory_structure": "android/app/src/main/cpp/ - C++ DSP engine. android/app/src/main/kotlin/com/psk/hearing_aid_app/ - Kotlin bridge. lib/data/bridges/ - Dart bridge layer. docs/specs/ - Feature specs."
+}
