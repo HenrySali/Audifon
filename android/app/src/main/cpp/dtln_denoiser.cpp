@@ -12,7 +12,7 @@
 
 #include <android/asset_manager.h>
 #include <android/log.h>
-#include <onnxruntime_cxx_api.h>
+#include "dnn_denoiser/onnxruntime/onnxruntime_cxx_api.h"
 
 #define LOG_TAG "DtlnDenoiser"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
