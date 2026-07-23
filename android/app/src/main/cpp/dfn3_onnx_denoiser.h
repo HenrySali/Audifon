@@ -152,6 +152,26 @@ private:
     /// dry/wet (el modelo tiene kModelLatency = 1 hop de latencia).
     float prevDry_[kHopSize] = {};
 
+    // ─── Anillo de salida (FIFO, audio-thread-only) ─────────────────────
+    /// Los hops se procesan COMPLETOS y se empujan aquí; la salida se emite
+    /// desde este anillo, desacoplando el blockSize de Oboe del hop de 480.
+    /// Se pre-rellena con silencio (kOutRingPrefill) al activarse para
+    /// establecer la latencia y evitar underruns intermitentes (que causarían
+    /// empalmes crudo/procesado = voz robótica). Capacidad potencia de 2.
+    static constexpr int kOutRingCap = 8192;
+    static constexpr int kOutRingMask = kOutRingCap - 1;
+    /// Pre-relleno de latencia (~20 ms @ 48 kHz). Cubre blockSize de Oboe
+    /// típicos (96-480) sin underrun. El modelo ya añade 1 hop; total ~30 ms.
+    static constexpr int kOutRingPrefill = 2 * kHopSize;
+    float outRing_[kOutRingCap] = {};
+    int   outHead_ = 0;   // escritura (push)
+    int   outTail_ = 0;   // lectura  (pop); count = outHead_ - outTail_
+    /// true tras pre-rellenar el anillo en la transición a activo.
+    bool  primed_ = false;
+
+    /// Limpia hop buffer, anillo de salida y prevDry_ (para bypass/re-enable).
+    void resetBuffers();
+
     /// Procesa un hop de kHopSize samples in-place (audio crudo → realzado,
     /// ya mezclado dry/wet con crossfade). Usa prevDry_ para alinear el dry.
     /// @return true si la inferencia ONNX corrió OK; false → hop sin tocar.
