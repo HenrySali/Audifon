@@ -573,7 +573,9 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     // ─── Registrar los 3 motores en el DenoiserSelector ─────────────────
     denoiserSelector_.registerEngine(DenoiserType::kRNNoise, &rnnoiseAdapter_);
     denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3Adapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &gtcrnAdapter_);
+    // DTLN replaces GTCRN in the "Analítico" slot — two-stage LSTM without
+    // band-gating artifacts. GTCRN adapter kept as fallback if DTLN fails to load.
+    denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &dtlnAdapter_);
 
     // ─── Cablear el registro de matraca/calidad al selector ─────────────
     // Configura los taps con la SR efectiva y conecta el log al selector para

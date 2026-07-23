@@ -23,6 +23,7 @@
 #include "rnnoise_adapter.h"
 #include "dfn3_adapter.h"
 #include "gtcrn_adapter.h"
+#include "dtln_denoiser.h"
 #include "latency_loopback_tester.h"
 #include "mvdr_beamformer.h"
 
@@ -484,6 +485,10 @@ private:
     RnnoiseAdapter rnnoiseAdapter_{&rnnoiseDenoiser_};
     Dfn3Adapter dfn3Adapter_{&dfn3Denoiser_};
     GtcrnAdapter gtcrnAdapter_{&dnnDenoiser_};
+    /// DTLN engine — replacement for GTCRN in the "Analítico" slot.
+    /// Two-stage LSTM (spectral + temporal), no band-gating artifacts.
+    dtln::DtlnDenoiser dtlnDenoiser_;
+    DtlnAdapter dtlnAdapter_{&dtlnDenoiser_};
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.

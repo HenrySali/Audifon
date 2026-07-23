@@ -88,6 +88,11 @@ add_library(
     diagnostic_recorder.cpp
     # Latency Loopback Tester (chirp + cross-correlation para medir latencia round-trip)
     latency_loopback_tester.cpp
+    # DTLN Denoiser (Dual-signal Transformation LSTM Network) — replaces GTCRN
+    #   Two-stage: spectral mask (LSTM) + time-domain refinement (LSTM).
+    #   No band-gating artifacts. Models: assets/dtln/model_1.onnx + model_2.onnx.
+    #   Frame 512 @ 16 kHz (32 ms). MIT license (breizhn/DTLN).
+    dtln_denoiser.cpp
 )
 
 # Enlazar con Oboe, librerías del sistema Android y OnnxRuntime
