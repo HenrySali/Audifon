@@ -57,6 +57,15 @@ public:
         activeEngineIdx_.store(-1, std::memory_order_relaxed);
     }
 
+    /// Resetea SOLO el monitor de un motor específico (al cambiar de motor
+    /// activo). Evita que datos stale de un uso previo se mezclen con los
+    /// del periodo en que realmente está activo. Llamar desde audio thread.
+    void resetEngine(int engineIdx) {
+        if (engineIdx >= 0 && engineIdx < kEngineCount) {
+            engines_[engineIdx].reset();
+        }
+    }
+
     // ─── Feeds (SOLO hilo de audio) ─────────────────────────────────────
 
     /// Señal del MICRÓFONO CRUDO, ANTES del realce (MVDR/beamformer) y del

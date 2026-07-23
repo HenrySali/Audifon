@@ -124,6 +124,16 @@ void DenoiserSelector::process(float* buffer, int blockSize) {
         if (engines_[activeType_]) {
             engines_[activeType_]->setEnabled(enabled_.load(std::memory_order_acquire));
         }
+
+        // FIX registro matraca: al cambiar de motor activo, resetear el
+        // ArtifactMonitor del motor ENTRANTE para que sus estadísticas sean
+        // solo del periodo en que realmente está procesando. Sin esto, los
+        // contadores de motores usados brevemente antes (o en una sesión
+        // anterior sin reinicio) quedan "stale" y aparecen en el reporte
+        // con datos que no corresponden al periodo actual.
+        if (artifactLog_) {
+            artifactLog_->resetEngine(activeType_);
+        }
     }
 
     // Si ningún motor disponible → bypass (buffer sin tocar).
