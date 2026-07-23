@@ -25,6 +25,7 @@
 #include "dfn3_onnx_denoiser.h"
 #include "dfn3_onnx_adapter.h"
 #include "gtcrn_adapter.h"
+#include "dtln_denoiser.h"
 #include "latency_loopback_tester.h"
 #include "mvdr_beamformer.h"
 
@@ -496,6 +497,8 @@ private:
     Dfn3Adapter dfn3Adapter_{&dfn3Denoiser_};  // legacy (enc/erb_dec manual) — no registrado
     Dfn3OnnxAdapter dfn3OnnxAdapter_{&dfn3OnnxDenoiser_};  // ocupa el slot kDFN3
     GtcrnAdapter gtcrnAdapter_{&dnnDenoiser_};
+    dtln::DtlnDenoiser dtlnDenoiser_;
+    DtlnAdapter dtlnAdapter_{&dtlnDenoiser_};
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.

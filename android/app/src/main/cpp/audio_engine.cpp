@@ -575,7 +575,7 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     // Slot "Premium" (kDFN3): ahora el DFN3 ONNX autocontenido (OnnxRuntime
     // estable) en lugar del viejo Dfn3Denoiser (enc/erb_dec manual / Rust).
     denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3OnnxAdapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &gtcrnAdapter_);
+    denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &dtlnAdapter_);
 
     // ─── Cablear el registro de matraca/calidad al selector ─────────────
     // Configura los taps con la SR efectiva y conecta el log al selector para
