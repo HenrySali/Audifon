@@ -17,11 +17,22 @@ class DenoiserService {
   static const _key = 'selectedDenoiserType';
 
   DenoiserType _selected = DenoiserType.rnnoise;
-  DenoiserType _active = DenoiserType.rnnoise;
+  DenoiserType? _active = DenoiserType.rnnoise;
+  bool _bypassed = false;
 
   DenoiserType get selected => _selected;
-  DenoiserType get active => _active;
-  bool get isFallback => _active != _selected;
+
+  /// Motor realmente activo, o `null` si el nativo reportó bypass
+  /// (ningún motor disponible → el audio pasa sin limpieza de ruido).
+  DenoiserType? get active => _active;
+
+  /// true cuando el nativo no pudo activar NINGÚN motor (bypass total).
+  bool get isBypassed => _bypassed;
+
+  /// true cuando hay un motor procesando pero distinto al seleccionado
+  /// (fallback real). El bypass total NO cuenta como fallback: se reporta
+  /// aparte vía [isBypassed] para no mentir mostrando un motor que no corre.
+  bool get isFallback => !_bypassed && _active != null && _active != _selected;
 
   /// Carga la selección persistida y la aplica al nativo.
   Future<void> initialize() async {
@@ -46,11 +57,16 @@ class DenoiserService {
     await refreshActive();
   }
 
-  /// Actualiza el estado del motor activo (puede diferir por fallback).
+  /// Actualiza el estado del motor activo (puede diferir por fallback, o ser
+  /// bypass si el nativo devuelve -1 porque ningún motor está disponible).
   Future<void> refreshActive() async {
     try {
       final int idx = await _channel.invokeMethod('getActiveDenoiser');
-      if (idx >= 0 && idx < DenoiserType.values.length) {
+      if (idx < 0) {
+        _bypassed = true;
+        _active = null;
+      } else if (idx < DenoiserType.values.length) {
+        _bypassed = false;
         _active = DenoiserType.values[idx];
       }
     } catch (_) {}

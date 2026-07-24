@@ -81,10 +81,17 @@ int DenoiserSelector::resolveFallback(int requested) const {
         return requested;
     }
 
-    // Fallback chain: RNNoise → GTCRN → bypass (-1)
+    // Fallback chain: intenta TODOS los motores por prioridad antes de
+    // caer a bypass. Antes solo incluía {RNNoise, GTCRN}, por lo que si el
+    // usuario elegía GTCRN/DPDFNet y ese motor no estaba disponible, el
+    // selector NUNCA podía caer en DFN3 (el motor premium que sí carga en
+    // muchos dispositivos) y terminaba en bypass silencioso.
+    // Orden: RNNoise (primario) → DFN3 (premium) → GTCRN → DPDFNet.
     const int fallbackOrder[] = {
         static_cast<int>(DenoiserType::kRNNoise),
-        static_cast<int>(DenoiserType::kGTCRN)
+        static_cast<int>(DenoiserType::kDFN3),
+        static_cast<int>(DenoiserType::kGTCRN),
+        static_cast<int>(DenoiserType::kDPDFNet)
     };
     for (int f : fallbackOrder) {
         if (f != requested && engines_[f] && engines_[f]->isActive()) {
@@ -114,20 +121,37 @@ void DenoiserSelector::process(float* buffer, int blockSize) {
     const int target = selectedType_.load(std::memory_order_acquire);
     const int resolved = resolveFallback(target);
 
-    // Detectar cambio de motor → arrancar crossfade.
-    if (resolved != activeType_ && resolved >= 0) {
-        prevType_ = activeType_;
-        activeType_ = resolved;
-        xfadeRemaining_ = kXfadeSamples;
+    // Detectar cambio de estado (motor entrante o bypass).
+    if (resolved != activeType_) {
+        if (resolved >= 0) {
+            // Cambio a un motor real → arrancar crossfade desde el saliente
+            // (solo si veníamos de otro motor real; desde bypass no hay
+            // señal previa que desvanecer).
+            prevType_ = (activeType_ >= 0) ? activeType_ : -1;
+            activeType_ = resolved;
+            xfadeRemaining_ = (prevType_ >= 0) ? kXfadeSamples : 0;
 
-        // Habilitar el motor entrante, deshabilitar el saliente (post-crossfade).
-        if (engines_[activeType_]) {
-            engines_[activeType_]->setEnabled(enabled_.load(std::memory_order_acquire));
+            // Habilitar el motor entrante en el estado enabled correcto.
+            if (engines_[activeType_]) {
+                engines_[activeType_]->setEnabled(
+                    enabled_.load(std::memory_order_acquire));
+            }
+        } else {
+            // Ningún motor disponible → bypass HONESTO. Antes activeType_
+            // quedaba congelado en el último motor real, así que getActive()
+            // mentía (reportaba DFN3 aunque el audio pasara sin limpiar).
+            // Ahora reportamos -1 (bypass) para que la UI lo muestre real.
+            if (activeType_ >= 0 && engines_[activeType_]) {
+                engines_[activeType_]->setEnabled(false);
+            }
+            activeType_ = -1;
+            prevType_ = -1;
+            xfadeRemaining_ = 0;
         }
     }
 
     // Si ningún motor disponible → bypass (buffer sin tocar).
-    if (resolved < 0 || !engines_[activeType_]) {
+    if (activeType_ < 0 || !engines_[activeType_]) {
         return;
     }
 

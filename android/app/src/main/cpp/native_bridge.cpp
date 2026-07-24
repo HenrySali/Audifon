@@ -1413,7 +1413,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSelectDenoiser(
 }
 
 /// @return tipo del motor de denoising actualmente activo (con fallback resuelto).
-/// 0=RNNoise, 1=DFN3, 2=GTCRN
+/// 0=RNNoise, 1=DFN3, 2=GTCRN, 3=DPDFNet, -1=bypass (ningún motor disponible).
 extern "C" JNIEXPORT jint JNICALL
 Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetActiveDenoiser(
         JNIEnv* /* env */,
