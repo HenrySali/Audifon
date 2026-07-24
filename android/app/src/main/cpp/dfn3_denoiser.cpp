@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #define DFN3_TAG "Dfn3Onnx"
@@ -232,6 +233,15 @@ private:
 
 }  // anonymous namespace
 
+/// Helper: convert a shape vector to a human-readable string for logging.
+static std::string shapeToString(const std::vector<int64_t>& shape) {
+    std::string s;
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i > 0) s += ", ";
+        s += std::to_string(shape[i]);
+    }
+    return s;
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PIMPL — Implementation struct
@@ -243,6 +253,8 @@ struct Dfn3Denoiser::Impl {
     Ort::SessionOptions sessionOpts;
     std::unique_ptr<Ort::Session> encSession;
     std::unique_ptr<Ort::Session> erbDecSession;
+    std::unique_ptr<Ort::Session> dfDecSession;
+    bool dfDecReady = false;
     Ort::MemoryInfo memInfo{Ort::MemoryInfo::CreateCpu(
         OrtArenaAllocator, OrtMemTypeDefault)};
 
@@ -280,7 +292,9 @@ struct Dfn3Denoiser::Impl {
         sessionOpts.SetGraphOptimizationLevel(
             GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-        // Initialize Hann window (periodic, sqrt for WOLA reconstruction)
+        // Ventana hann_sqrt (sqrt de periodic Hann)
+        // Esto es lo que DeepFilterNet3 usa para su STFT.
+        // NOTA: Vorbis es para DPDFNet, NO para DFN3.
         for (int i = 0; i < kFftSize; ++i) {
             float w = 0.5f * (1.0f - std::cos(2.0f * kPi * i / kFftSize));
             hannWin[i] = std::sqrt(w);
@@ -691,6 +705,33 @@ bool Dfn3Denoiser::initialize(AAssetManager* mgr, const char* assetDir) {
             DFN3_LOGI("  *** STATEFUL decoder detected (%zu hidden state outputs)",
                       nDecOut - 1);
         }
+    }
+
+    // ── Attempt to load df_dec.onnx (deep filtering stage) ──────────
+    impl_->dfDecSession = impl_->loadModel(mgr, dir + "/df_dec.onnx");
+    if (impl_->dfDecSession) {
+        DFN3_LOGI("DFN3 df_dec loaded — deep filtering enabled");
+        impl_->dfDecReady = true;
+        // Introspect: log inputs/outputs for debugging
+        Ort::AllocatorWithDefaultOptions alloc;
+        size_t numIn = impl_->dfDecSession->GetInputCount();
+        size_t numOut = impl_->dfDecSession->GetOutputCount();
+        DFN3_LOGI("  df_dec inputs: %zu, outputs: %zu", numIn, numOut);
+        for (size_t i = 0; i < numIn; ++i) {
+            auto name = impl_->dfDecSession->GetInputNameAllocated(i, alloc);
+            auto info = impl_->dfDecSession->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo();
+            auto shape = info.GetShape();
+            DFN3_LOGI("    input[%zu] '%s': [%s]", i, name.get(), shapeToString(shape).c_str());
+        }
+        for (size_t i = 0; i < numOut; ++i) {
+            auto name = impl_->dfDecSession->GetOutputNameAllocated(i, alloc);
+            auto info = impl_->dfDecSession->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo();
+            auto shape = info.GetShape();
+            DFN3_LOGI("    output[%zu] '%s': [%s]", i, name.get(), shapeToString(shape).c_str());
+        }
+    } else {
+        DFN3_LOGW("df_dec.onnx not found — running ERB-only mode (degraded quality)");
+        impl_->dfDecReady = false;
     }
 
     impl_->ready = true;

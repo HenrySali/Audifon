@@ -67,8 +67,10 @@ add_library(
     calibration_spectrum/peak_detector.cpp
     calibration_spectrum/thd_calculator.cpp
     calibration_spectrum/tone_analyzer.cpp
-    # DNN Denoiser (GTCRN vía OnnxRuntime) — reemplazo del NR Wiener cuando enabled
-    dnn_denoiser/dnn_denoiser.cpp
+    # DNN Denoiser (GTCRN) — Implementación sherpa-onnx style (funcional)
+    # Replica EXACTA del pipeline de k2-fsa/sherpa-onnx que funciona.
+    # Sin worker thread, sin noise gate, sin VAD cap. Solo STFT→ONNX→iSTFT.
+    dnn_denoiser/dnn_denoiser_sherpa.cpp
     # DenoiserSelector — toggle exclusivo entre RNNoise/DFN3/GTCRN con crossfade
     denoiser_selector.cpp
     # DeepFilterNet3 wrapper (dlopen de libdfn3.so en runtime)
