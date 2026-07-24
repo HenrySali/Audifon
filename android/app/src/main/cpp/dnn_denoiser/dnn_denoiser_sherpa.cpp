@@ -133,6 +133,8 @@ struct DnnDenoiser::Impl {
     // States (3 cache tensors)
     std::vector<Ort::Value> states;
     std::vector<std::vector<int64_t>> cacheShapes;
+    // Persistent storage for cache data (must outlive Ort::Value tensors)
+    std::vector<std::vector<float>> cacheData;
     bool modelReady = false;
     
     // STFT window (hann_sqrt)
@@ -216,14 +218,16 @@ struct DnnDenoiser::Impl {
     
     void initStates() {
         states.clear();
-        for (auto& shape : cacheShapes) {
+        cacheData.clear();
+        cacheData.resize(cacheShapes.size());
+        for (size_t i = 0; i < cacheShapes.size(); ++i) {
             int64_t numel = 1;
-            for (auto d:shape) numel*=d;
-            std::vector<float> zeros(numel, 0.0f);
+            for (auto d : cacheShapes[i]) numel *= d;
+            cacheData[i].assign(numel, 0.0f);
             states.push_back(Ort::Value::CreateTensor<float>(
-                memInfo, zeros.data(), zeros.size(), shape.data(), shape.size()));
+                memInfo, cacheData[i].data(), cacheData[i].size(),
+                cacheShapes[i].data(), cacheShapes[i].size()));
         }
-        // We need to keep the data alive — store in persistent vectors
     }
     
     void initWindow() {
@@ -279,9 +283,12 @@ struct DnnDenoiser::Impl {
         inputs.push_back(Ort::Value::CreateTensor<float>(
             memInfo, mixData.data(), mixData.size(), mixShape.data(), mixShape.size()));
         
-        // Move states into inputs (sherpa-onnx pattern)
-        for (auto& s : states) inputs.push_back(std::move(s));
-        states.clear();
+        // Pass states (they reference persistent cacheData)
+        for (size_t i = 0; i < states.size(); ++i) {
+            inputs.push_back(Ort::Value::CreateTensor<float>(
+                memInfo, cacheData[i].data(), cacheData[i].size(),
+                cacheShapes[i].data(), cacheShapes[i].size()));
+        }
         
         // 6. Run
         auto t0 = std::chrono::steady_clock::now();
@@ -303,8 +310,16 @@ struct DnnDenoiser::Impl {
         for (int i=0;i<nBins;++i) { re[i]=enh[i*2]; im[i]=enh[i*2+1]; }
         
         // 8. Save new states (output[1..3])
-        for (size_t i=1; i<outputs.size(); ++i)
-            states.push_back(std::move(outputs[i]));
+        // OnnxRuntime owns the memory of output tensors, so we copy data
+        // back to our persistent cacheData buffers and recreate tensors.
+        states.clear();
+        for (size_t i = 1; i < outputs.size() && (i-1) < cacheData.size(); ++i) {
+            const float* p = outputs[i].GetTensorData<float>();
+            std::memcpy(cacheData[i-1].data(), p, cacheData[i-1].size()*sizeof(float));
+            states.push_back(Ort::Value::CreateTensor<float>(
+                memInfo, cacheData[i-1].data(), cacheData[i-1].size(),
+                cacheShapes[i-1].data(), cacheShapes[i-1].size()));
+        }
         
         // 9. IFFT
         std::vector<float> timeBuf(nFft, 0.0f);
