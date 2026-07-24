@@ -75,6 +75,16 @@ class AudioMethodChannel(
     private val scoController = BluetoothScoController(context)
     @Volatile private var conversationMode: Boolean = false
 
+    /** Monitor de llamadas telefónicas para pausar el motor DSP durante llamadas. */
+    private val callStateMonitor = CallStateMonitor(context).apply {
+        onCallStateChanged = { inCall ->
+            handlePhoneCallStateChange(inCall)
+        }
+    }
+
+    /** Flag: true si el motor fue pausado por una llamada telefónica. */
+    @Volatile private var pausedForCall: Boolean = false
+
     /** NoiseSuppressor del sistema Android (Fase 1 noise gate HW). */
     private var noiseSuppressor: NoiseSuppressor? = null
 
@@ -172,6 +182,9 @@ class AudioMethodChannel(
             }
         })
 
+        // Iniciar monitor de llamadas telefónicas
+        callStateMonitor.start()
+
         Log.i(TAG, "Platform channels registered successfully")
     }
 
@@ -182,6 +195,7 @@ class AudioMethodChannel(
     fun unregister() {
         Log.i(TAG, "Unregistering platform channels")
         stopLevelUpdates()
+        callStateMonitor.stop()
         methodChannel.setMethodCallHandler(null)
         levelEventChannel.setStreamHandler(null)
         stateEventChannel.setStreamHandler(null)
@@ -1472,5 +1486,95 @@ class AudioMethodChannel(
             nativeBridge.setAutoClassifyEnabled(false)
         }
         // OFF: el lado Dart reaplica nrLevel + dnnIntensity desde Settings.
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phone Call State Handler (Fix: micrófono no funciona en llamadas)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Maneja cambios en el estado de llamadas telefónicas.
+     *
+     * Durante una llamada (RINGING o OFFHOOK), **detiene el motor DSP**
+     * para liberar el micrófono (AudioRecord) que el sistema telefónico
+     * necesita. El SCO permanece activo para rutear la llamada por BT.
+     *
+     * Cuando la llamada termina (IDLE), **reinicia el motor DSP** con la
+     * última configuración guardada.
+     *
+     * Solución al bug crítico: "micrófono no funciona en llamadas con Modo
+     * Conversación" — el problema era conflicto de recursos entre el motor
+     * DSP (Oboe) y el sistema telefónico de Android compitiendo por el mismo
+     * AudioRecord.
+     *
+     * @param inCall true si hay una llamada activa o entrante, false si
+     *               terminó (IDLE).
+     */
+    private fun handlePhoneCallStateChange(inCall: Boolean) {
+        if (!conversationMode) {
+            // Si el modo conversación no está activo, no hacer nada.
+            // El motor puede seguir corriendo normal (A2DP @ 48 kHz).
+            return
+        }
+
+        val engineRunning = nativeBridge.getOutputDeviceId() >= 0
+
+        if (inCall && engineRunning && !pausedForCall) {
+            // Llamada entrante/activa + motor corriendo → PAUSAR motor DSP
+            Log.i(TAG, "Phone call detected — PAUSING DSP engine to free mic")
+            pausedForCall = true
+
+            // Liberar NoiseSuppressor
+            noiseSuppressor?.release()
+            noiseSuppressor = null
+
+            // Detener el motor para liberar el micrófono
+            nativeBridge.stop()
+
+            // El SCO permanece activo (NO llamar scoController.stop())
+            // para que la llamada se rutee por BT.
+
+            emitState("paused_for_call")
+
+        } else if (!inCall && pausedForCall) {
+            // Llamada terminada + motor pausado → REANUDAR motor DSP
+            Log.i(TAG, "Phone call ended — RESUMING DSP engine")
+            pausedForCall = false
+
+            // Reiniciar el motor con la última configuración
+            // En modo conversación: 16 kHz / 64 frames
+            val sampleRate = 16_000
+            val bufferSize = 64
+
+            nativeBridge.nativeSetConversationMode(true)
+            nativeBridge.start(
+                sampleRate = sampleRate,
+                bufferSize = bufferSize,
+                eqGains = lastEqGains,
+                volumeDb = lastVolumeDb,
+                expansionKnee = lastExpKnee,
+                expansionRatio = lastExpRatio,
+                compressionKnee = lastCompKnee,
+                compressionRatio = lastCompRatio,
+                attackMs = lastAttackMs,
+                releaseMs = lastReleaseMs,
+                nrLevel = 0, // En conversación siempre NR=0
+                mpoThresholdDbSpl = lastMpoDbSpl
+            )
+
+            // Reattach NoiseSuppressor
+            try {
+                val sessionId = nativeBridge.nativeGetInputSessionId()
+                if (sessionId > 0 && NoiseSuppressor.isAvailable()) {
+                    noiseSuppressor = NoiseSuppressor.create(sessionId)
+                    noiseSuppressor?.enabled = true
+                    Log.i(TAG, "NoiseSuppressor reattached to session $sessionId")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "NoiseSuppressor reattach failed: ${e.message}")
+            }
+
+            emitState("active")
+        }
     }
 }

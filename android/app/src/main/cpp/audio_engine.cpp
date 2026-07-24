@@ -418,28 +418,54 @@ int32_t AudioEngine::getInputSessionId() const {
 
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
+
+    // ─── DeepFilterNet3 (OnnxRuntime directo, 48 kHz nativo) ────────────
+    const bool dfn3Ok = dfn3Denoiser_.initialize(mgr, "dfn3");
+    if (dfn3Ok) {
+        LOGI("initDnnDenoiser: DFN3 initialized OK (OnnxRuntime, 48 kHz native)");
+        useDfn3_ = true;  // Prefer DFN3 when available
+    } else {
+        LOGW("initDnnDenoiser: DFN3 not available — falling back to GTCRN");
+        useDfn3_ = false;
+    }
+
+    // ─── GTCRN fallback (OnnxRuntime, 16 kHz + resampler) ───────────────
     const bool ok = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
     if (!ok) {
-        LOGW("initDnnDenoiser: model not loaded — DNN will be permanently bypassed");
+        LOGW("initDnnDenoiser: GTCRN model not loaded — DNN will be permanently bypassed");
     } else {
-        LOGI("initDnnDenoiser: model ready");
+        LOGI("initDnnDenoiser: GTCRN model ready");
     }
-    return ok;
+    return dfn3Ok || ok;
+}
+
+void AudioEngine::setDfn3Active(bool active) {
+    if (active && dfn3Denoiser_.isActive()) {
+        useDfn3_ = true;
+        LOGI("setDfn3Active: DFN3 selected");
+    } else {
+        useDfn3_ = false;
+        LOGI("setDfn3Active: GTCRN selected");
+    }
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {
     dnnDenoiser_.setEnabled(enabled);
+    dfn3Denoiser_.setEnabled(enabled);
     // Si activamos el DNN, deshabilitamos el NR Wiener clásico para
     // evitar doble denoising. Si desactivamos, restauramos el NR clásico.
     pipeline_.setNrBypassed(enabled);
-    LOGI("setDnnEnabled: %d (active=%d) — NR Wiener bypassed: %d",
+    LOGI("setDnnEnabled: %d (gtcrn_active=%d, dfn3_active=%d, useDfn3=%d) — NR Wiener bypassed: %d",
          enabled ? 1 : 0,
          dnnDenoiser_.isActive() ? 1 : 0,
+         dfn3Denoiser_.isActive() ? 1 : 0,
+         useDfn3_ ? 1 : 0,
          enabled ? 1 : 0);
 }
 
 void AudioEngine::setDnnIntensity(float intensity) {
     dnnDenoiser_.setIntensity(intensity);
+    dfn3Denoiser_.setIntensity(intensity);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -618,14 +644,19 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         }
     }
 
-    // ─── DNN Denoiser (GTCRN) — REEMPLAZA al NR Wiener cuando enabled ────
+    // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
+    // Selección exclusiva: DFN3 (48 kHz nativo) o GTCRN (16 kHz + resampler).
     // Por contrato del wrapper:
-    //   - Si dnnDenoiser_.isEnabled() == false y crossfadeGain == 0 →
+    //   - Si isEnabled() == false y crossfadeGain == 0 →
     //     bypass bit-exact (sin tocar el buffer).
     //   - Si está enabled o haciendo crossfade out → procesa.
     // El DspPipeline ya está configurado (vía setNrBypassed) para no
     // ejecutar el NR Wiener cuando el DNN está activo.
-    dnnDenoiser_.process(outPtr, numFrames);
+    if (useDfn3_ && dfn3Denoiser_.isActive()) {
+        dfn3Denoiser_.process(outPtr, numFrames);
+    } else {
+        dnnDenoiser_.process(outPtr, numFrames);
+    }
 
     // ─── Headroom Stage — restauración post-DNN (R2.3) ───────────────────
     // Si este bloque fue atenuado pre-DNN, restauramos +6 dB para que el

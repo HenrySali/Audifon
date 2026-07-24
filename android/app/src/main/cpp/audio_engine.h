@@ -15,6 +15,7 @@
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
+#include "dfn3_denoiser.h"
 #include "latency_loopback_tester.h"
 
 // Forward decl from <android/asset_manager.h>
@@ -172,6 +173,13 @@ public:
     bool getDnnIsActive() const { return dnnDenoiser_.isActive(); }
     /// @return true si el flag de configuración enabled está en true.
     bool getDnnIsEnabled() const { return dnnDenoiser_.isEnabled(); }
+    /// Selecciona DFN3 como denoiser activo (en vez de GTCRN).
+    /// @param active true=DFN3, false=GTCRN
+    void setDfn3Active(bool active);
+    /// @return true si DFN3 es el motor activo.
+    bool isDfn3Active() const { return useDfn3_; }
+    /// @return true si DFN3 inicializó correctamente.
+    bool isDfn3Ready() const { return dfn3Denoiser_.isActive(); }
 
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
@@ -289,6 +297,13 @@ private:
     /// del DspPipeline. Por default desactivado para arrancar igual que hoy.
     /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
     dnn_denoiser::DnnDenoiser dnnDenoiser_;
+
+    // ─── DFN3 Denoiser (DeepFilterNet3 via OnnxRuntime) ──────────────────
+    /// Alternativa premium al GTCRN. 48 kHz nativo, sin resampler.
+    /// Se inicializa en initDnnDenoiser() y se selecciona con setDfn3Active().
+    dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
+    /// true → usa DFN3 en el pipeline; false → usa GTCRN.
+    bool useDfn3_ = false;
 
     // ─── Pre-DNN Level + Headroom Stage (DSP chain optimization) ────────
     /// Nivel pre-DNN del último bloque (dB SPL). Medido en onBothStreamsReady

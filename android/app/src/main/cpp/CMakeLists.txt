@@ -59,8 +59,10 @@ add_library(
     calibration_spectrum/peak_detector.cpp
     calibration_spectrum/thd_calculator.cpp
     calibration_spectrum/tone_analyzer.cpp
-    # DNN Denoiser (GTCRN vía OnnxRuntime) — reemplazo del NR Wiener cuando enabled
-    dnn_denoiser/dnn_denoiser.cpp
+    # DNN Denoiser (GTCRN vía OnnxRuntime) — sherpa-onnx minimal pipeline
+    dnn_denoiser/dnn_denoiser_sherpa.cpp
+    # DeepFilterNet3 wrapper (dlopen de libdfn3.so en runtime)
+    dfn3_denoiser.cpp
     # Diagnostic Recorder (grabación dual-channel pre/post DSP)
     diagnostic_recorder.cpp
     # Latency Loopback Tester (chirp + cross-correlation para medir latencia round-trip)

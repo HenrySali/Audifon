@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Monitoreo de estado de llamadas para pausar DSP (fix micrófono en llamadas) -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <!-- Guardar el .oirpro.json en Downloads del celular sin share sheet
          (ver LocalDownloadsChannel.kt). En Android 10+ no se requiere
@@ -27,7 +30,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
     <application
-        android:label="Oír Pro"
+        android:label="OirPro k"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:name="${applicationName}"

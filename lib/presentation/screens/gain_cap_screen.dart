@@ -36,7 +36,7 @@ class _GainCapScreenState extends State<GainCapScreen> {
       _autoMode = false;
     } else {
       _autoMode = true;
-      _value = 10.0; // valor inicial visible si el usuario activa manual
+      _value = 8.0; // valor inicial visible en modo manual
     }
   }
 
@@ -170,7 +170,7 @@ class _GainCapScreenState extends State<GainCapScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Tope: ${(_value ?? 10.0).toStringAsFixed(1)} dB',
+                        'Tope: ${(_value ?? 8.0).toStringAsFixed(1)} dB',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 24,
@@ -182,18 +182,18 @@ class _GainCapScreenState extends State<GainCapScreen> {
                       SliderTheme(
                         data: SliderThemeData(
                           activeTrackColor:
-                              (_value ?? 10.0) > 18 ? Colors.red : Colors.cyan,
+                              (_value ?? 8.0) > 18 ? Colors.red : Colors.cyan,
                           inactiveTrackColor: Colors.white24,
                           thumbColor: Colors.white,
                           overlayColor: Colors.cyan.withOpacity(0.2),
                           valueIndicatorColor: const Color(0xFF0f3460),
                         ),
                         child: Slider(
-                          value: (_value ?? 10.0).clamp(_kMin, _kMax),
+                          value: (_value ?? 8.0).clamp(_kMin, _kMax),
                           min: _kMin,
                           max: _kMax,
                           divisions: 40,
-                          label: '${(_value ?? 10.0).toStringAsFixed(1)} dB',
+                          label: '${(_value ?? 8.0).toStringAsFixed(1)} dB',
                           onChanged: (v) => setState(() => _value = v),
                         ),
                       ),
