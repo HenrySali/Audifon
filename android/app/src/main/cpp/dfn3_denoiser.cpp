@@ -292,13 +292,12 @@ struct Dfn3Denoiser::Impl {
         sessionOpts.SetGraphOptimizationLevel(
             GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-        // Ventana Vorbis (usada por DeepFilterNet3, no sqrt-Hann)
-        // w[n] = sin(π/2 × sin²(π × (n + 0.5) / N))
+        // Ventana hann_sqrt (sqrt de periodic Hann)
+        // Esto es lo que DeepFilterNet3 usa para su STFT.
+        // NOTA: Vorbis es para DPDFNet, NO para DFN3.
         for (int i = 0; i < kFftSize; ++i) {
-            float sin_arg = kPi * (static_cast<float>(i) + 0.5f) / static_cast<float>(kFftSize);
-            float sin_sq = std::sin(sin_arg);
-            sin_sq *= sin_sq;
-            hannWin[i] = std::sin(0.5f * kPi * sin_sq);
+            float w = 0.5f * (1.0f - std::cos(2.0f * kPi * i / kFftSize));
+            hannWin[i] = std::sqrt(w);
         }
 
         // Compute WOLA normalization: sum of squared windows at each output
