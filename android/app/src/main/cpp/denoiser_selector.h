@@ -17,12 +17,13 @@
 #include <atomic>
 #include <cstring>
 
-/// Identificadores de los 3 motores disponibles.
+/// Identificadores de los 4 motores disponibles.
 enum class DenoiserType : int {
     kRNNoise = 0,   ///< "Estándar" — RNNoise xiph
     kDFN3    = 1,   ///< "Premium"  — DeepFilterNet3
     kGTCRN   = 2,   ///< "Analítico" — GTCRN via OnnxRuntime
-    kCount   = 3
+    kDPDFNet = 3,   ///< "Ultra" — DPDFNet-4 via OnnxRuntime
+    kCount   = 4
 };
 
 /// Selector exclusivo de denoiser. Solo UNO activo a la vez.

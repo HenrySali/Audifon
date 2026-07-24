@@ -75,6 +75,10 @@ add_library(
     denoiser_selector.cpp
     # DeepFilterNet3 wrapper (dlopen de libdfn3.so en runtime)
     dfn3_denoiser.cpp
+    # DPDFNet-4 denoiser — OnnxRuntime backend, Vorbis window, polyphase resample
+    #   Model: dpdfnet4.onnx (2.36 MB, Apache 2.0, sherpa-onnx)
+    #   16 kHz internal, spec [1,1,161,2], single state vector
+    dpdfnet_denoiser.cpp
     # RNNoise denoiser wrapper + vendored xiph/rnnoise v0.1.1 sources
     #   Statically linked. No dlopen, no asset extraction, no ONNX runtime.
     #   Frame size 480 @ 48 kHz. Model baked into the .so (~90 KB compressed).
