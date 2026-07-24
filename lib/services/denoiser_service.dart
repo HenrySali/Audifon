@@ -6,6 +6,7 @@ enum DenoiserType {
   rnnoise,   // "Estándar" — bajo consumo
   dfn3,      // "Premium" — máxima calidad
   gtcrn,     // "Analítico" — modulación VAD + dual-mic
+  dpdfnet,   // "Ultra" — DPDFNet-4, SOTA causal 2025
 }
 
 /// Servicio para controlar el selector de motor de denoising.

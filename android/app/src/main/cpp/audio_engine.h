@@ -18,6 +18,7 @@
 #include "calibration_spectrum/tone_analyzer.h"
 #include "dnn_denoiser/dnn_denoiser.h"
 #include "dfn3_denoiser.h"
+#include "dpdfnet_denoiser.h"
 #include "rnnoise_denoiser.h"
 #include "denoiser_selector.h"
 #include "rnnoise_adapter.h"
@@ -463,6 +464,9 @@ private:
     /// cargan, se usa DFN3; si no, cae a GTCRN automáticamente.
     dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
 
+    // ─── DPDFNet-4 (4to motor, Ultra, SOTA 2025) ────────────────────────
+    dpdfnet_denoiser::DpdfnetDenoiser dpdfnetDenoiser_;
+
     // ─── RNNoise (xiph, static link, motor primario recomendado) ─────────
     /// Motor RNNoise (48 kHz nativo, C statically linked). Cuando está
     /// activo, reemplaza completamente a GTCRN y DFN3. Se prioriza en
@@ -484,6 +488,7 @@ private:
     RnnoiseAdapter rnnoiseAdapter_{&rnnoiseDenoiser_};
     Dfn3Adapter dfn3Adapter_{&dfn3Denoiser_};
     GtcrnAdapter gtcrnAdapter_{&dnnDenoiser_};
+    DpdfnetAdapter dpdfnetAdapter_{&dpdfnetDenoiser_};
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.

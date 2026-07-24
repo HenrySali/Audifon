@@ -55,11 +55,13 @@ class _DenoiserToggleState extends State<DenoiserToggle> {
         DenoiserType.rnnoise => 'Estándar (RNNoise)',
         DenoiserType.dfn3 => 'Premium (DeepFilterNet3)',
         DenoiserType.gtcrn => 'Analítico (GTCRN)',
+        DenoiserType.dpdfnet => 'Ultra (DPDFNet-4)',
       };
 
   String _subtitle(DenoiserType t) => switch (t) {
         DenoiserType.rnnoise => 'Bajo consumo, siempre disponible',
         DenoiserType.dfn3 => 'Máxima calidad (requiere libdfn3.so)',
         DenoiserType.gtcrn => 'Modulación VAD, soporte dual-mic',
+        DenoiserType.dpdfnet => 'SOTA 2025, Vorbis window, Apache 2.0',
       };
 }

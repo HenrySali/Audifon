@@ -570,10 +570,11 @@ bool extractDfn3Models(AAssetManager* mgr, const std::string& destDir) {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── Registrar los 3 motores en el DenoiserSelector ─────────────────
+    // ─── Registrar los 4 motores en el DenoiserSelector ─────────────────
     denoiserSelector_.registerEngine(DenoiserType::kRNNoise, &rnnoiseAdapter_);
     denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3Adapter_);
     denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &gtcrnAdapter_);
+    denoiserSelector_.registerEngine(DenoiserType::kDPDFNet, &dpdfnetAdapter_);
 
     // ─── Cablear el registro de matraca/calidad al selector ─────────────
     // Configura los taps con la SR efectiva y conecta el log al selector para
@@ -601,6 +602,14 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
         LOGI("initDnnDenoiser: DFN3 activo (OnnxRuntime directo, premium)");
     } else {
         LOGW("initDnnDenoiser: DFN3 no arrancó — disponible solo RNNoise/GTCRN");
+    }
+
+    // ─── Prioridad 3: DPDFNet-4 (OnnxRuntime, Vorbis window, Ultra) ────
+    const bool dpdfnetOk = dpdfnetDenoiser_.initialize(mgr);
+    if (dpdfnetOk) {
+        LOGI("initDnnDenoiser: DPDFNet-4 activo (Ultra, SOTA 2025)");
+    } else {
+        LOGW("initDnnDenoiser: DPDFNet-4 no arrancó — asset dpdfnet/dpdfnet4.onnx?");
     }
 
     // ─── Fallback final: GTCRN mono legacy (ONNXRuntime) ────────────────
