@@ -1482,7 +1482,8 @@ void putArtifactStage(JNIEnv* env, jobject map, jmethodID put,
 
 /// @return resumen estructurado (HashMap) del registro de matraca/calidad.
 /// Claves con prefijo por etapa: `raw*` (mic crudo pre-realce), `input*`
-/// (post-realce), `sys0*`/`sys1*`/`sys2*` (RNNoise/DFN3/GTCRN), `output*`;
+/// (post-realce), `sys0*`/`sys1*`/`sys2*`/`sys3*`
+/// (RNNoise/DFN3 retirado/GTCRN retirado/DPDFNet-4), `output*`;
 /// más `activeEngine` (int). Cada etapa expone
 /// *Active, *Blocks, *Clicks, *ClicksPerSec, *Clip, *NanInf, *MaxJump,
 /// *MeanRmsDbfs, *Quality, *WorstQuality, *WorstEventSec, *ElapsedSec.
@@ -1507,6 +1508,7 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDenoiserArtifactSummar
     putArtifactStage(env, map, put, "sys0",   log.engineSnapshot(0));
     putArtifactStage(env, map, put, "sys1",   log.engineSnapshot(1));
     putArtifactStage(env, map, put, "sys2",   log.engineSnapshot(2));
+    putArtifactStage(env, map, put, "sys3",   log.engineSnapshot(3));
     putArtifactStage(env, map, put, "output", log.outputSnapshot());
 
     env->DeleteLocalRef(hashMapCls);

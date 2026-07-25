@@ -46,12 +46,23 @@ class DenoiserService {
     await refreshActive();
   }
 
-  /// Actualiza el estado del motor activo (puede diferir por fallback).
+  /// Actualiza el estado del motor activo Y del seleccionado leyendo AMBOS
+  /// del nativo. Antes solo se leía `getActiveDenoiser` y el "seleccionado"
+  /// era un valor local de Dart que podía desincronizarse del motor real,
+  /// generando un falso "fallback activo: X no disponible". Al leer también
+  /// `getSelectedDenoiser`, la comparación `active != selected` refleja el
+  /// estado REAL del motor y el radio muestra la selección verdadera.
   Future<void> refreshActive() async {
     try {
       final int idx = await _channel.invokeMethod('getActiveDenoiser');
       if (idx >= 0 && idx < DenoiserType.values.length) {
         _active = DenoiserType.values[idx];
+      }
+    } catch (_) {}
+    try {
+      final int sel = await _channel.invokeMethod('getSelectedDenoiser');
+      if (sel >= 0 && sel < DenoiserType.values.length) {
+        _selected = DenoiserType.values[sel];
       }
     } catch (_) {}
   }
@@ -85,7 +96,8 @@ class DenoiserService {
 
   /// Obtiene el resumen estructurado del registro (para UI en vivo).
   /// Claves con prefijo por etapa: `input*`, `sys0*` (RNNoise), `sys1*`
-  /// (DFN3), `sys2*` (GTCRN), `output*`; más `activeEngine` (int).
+  /// (DFN3 retirado), `sys2*` (GTCRN retirado), `sys3*` (DPDFNet-4),
+  /// `output*`; más `activeEngine` (int).
   Future<Map<String, dynamic>> getArtifactSummary() async {
     try {
       final Map<dynamic, dynamic>? raw =
