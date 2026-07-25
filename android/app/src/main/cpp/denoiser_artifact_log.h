@@ -33,8 +33,12 @@
 /// Registro de artefactos/calidad de los 3 sistemas de limpieza de ruido.
 class DenoiserArtifactLog {
 public:
-    /// Cantidad de motores de limpieza (RNNoise, DFN3, GTCRN).
-    static constexpr int kEngineCount = 3;
+    /// Cantidad de slots de motor, indexados por DenoiserType:
+    /// 0=RNNoise, 1=DFN3 (retirado), 2=GTCRN (retirado), 3=DPDFNet-4.
+    /// DEBE ser 4 para que el índice de DPDFNet-4 (kDPDFNet=3) sea válido:
+    /// con 3, feedEngineOutput(3,...) se rechazaba y activeEngineIdx_ quedaba
+    /// congelado en el último motor válido (bug de incoherencia del selector).
+    static constexpr int kEngineCount = 4;
 
     DenoiserArtifactLog() { configure(48000); }
 
@@ -95,8 +99,9 @@ public:
     static const char* engineName(int i) {
         switch (i) {
             case 0: return "RNNoise (Estandar)";
-            case 1: return "DFN3 (Premium)";
-            case 2: return "GTCRN (Analitico)";
+            case 1: return "DFN3 (retirado)";
+            case 2: return "GTCRN (retirado)";
+            case 3: return "DPDFNet-4 (Ultra)";
             default: return "Bypass";
         }
     }

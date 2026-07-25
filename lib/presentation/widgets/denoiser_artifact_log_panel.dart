@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import '../../services/denoiser_service.dart';
 
 /// Panel de UI para el registro de "matraca" (crackle/clicks) y calidad de los
-/// 3 sistemas de limpieza de ruido (RNNoise/DFN3/GTCRN).
+/// motores de limpieza de ruido activos (RNNoise y DPDFNet-4).
 ///
 /// Muestra, por sesión, la calidad y la tasa de clicks en la ENTRADA a los
-/// sistemas, en cada uno de los 3 sistemas y en la SALIDA FINAL (lo que
+/// sistemas, en cada motor activo y en la SALIDA FINAL (lo que
 /// escucha el usuario), permitiendo identificar en qué etapa aparece la
 /// matraca o si viene de la fuente. Permite:
 ///   - Actualizar el resumen en vivo.
@@ -122,9 +122,10 @@ class _DenoiserArtifactLogPanelState extends State<DenoiserArtifactLogPanel> {
           else ...[
             _stageRow('Mic crudo', 'raw', highlight: false),
             _stageRow('Entrada (post-realce)', 'input', highlight: false),
-            _stageRow('1· RNNoise', 'sys0', highlight: activeEngine == 0),
-            _stageRow('2· DFN3', 'sys1', highlight: activeEngine == 1),
-            _stageRow('3· GTCRN', 'sys2', highlight: activeEngine == 2),
+            // Solo los 2 motores activos: RNNoise (índice 0) y DPDFNet-4
+            // (índice 3). DFN3/GTCRN fueron retirados y ya no se muestran.
+            _stageRow('RNNoise (Estándar)', 'sys0', highlight: activeEngine == 0),
+            _stageRow('DPDFNet-4 (Ultra)', 'sys3', highlight: activeEngine == 3),
             const Divider(height: 10, color: Colors.white12),
             _stageRow('Salida final', 'output', highlight: true),
           ],
