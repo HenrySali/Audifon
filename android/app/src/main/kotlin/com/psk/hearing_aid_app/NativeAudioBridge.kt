@@ -618,6 +618,24 @@ class NativeAudioBridge {
      */
     external fun nativeGetDiagnosticRecordingProgress(): Double
 
+    // ─── DPDFNet-4 Stage Capture (diagnóstico de ronquera) ──────────────
+
+    /**
+     * Arranca la captura por etapas (A/B/C/D) del denoiser DPDFNet-4.
+     * @param dir Carpeta destino absoluta (debe existir; la crea el lado Kotlin).
+     * @return true si arrancó la captura (false si ya había una en curso).
+     */
+    external fun nativeStartDpdfCapture(dir: String): Boolean
+
+    /** Detiene la captura DPDFNet-4 y flushea los WAV a disco (bloqueante). */
+    external fun nativeStopDpdfCapture()
+
+    /** @return true si hay una captura DPDFNet-4 en curso. */
+    external fun nativeIsDpdfCapturing(): Boolean
+
+    /** @return true si los WAV de la última captura ya se escribieron a disco. */
+    external fun nativeIsDpdfCaptureReady(): Boolean
+
     // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
 
     /**

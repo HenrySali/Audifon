@@ -1714,6 +1714,66 @@ Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetDiagnosticRecordingPro
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DPDFNet-4 Stage Capture JNI Functions (diagnóstico de ronquera)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Arranca la captura por etapas (A/B/C/D) del denoiser DPDFNet-4.
+/// @param dir Carpeta destino absoluta (debe existir; la crea Kotlin).
+/// @return true si arrancó la captura.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStartDpdfCapture(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jstring dir) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+    const char* d = env->GetStringUTFChars(dir, nullptr);
+    if (d == nullptr) return JNI_FALSE;
+
+    bool ok = g_engine->startDpdfCapture(std::string(d));
+    LOGI("nativeStartDpdfCapture: %s → %s", d, ok ? "OK" : "BUSY");
+    env->ReleaseStringUTFChars(dir, d);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Detiene la captura DPDFNet-4 y flushea los WAV a disco (bloqueante).
+extern "C" JNIEXPORT void JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeStopDpdfCapture(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) return;
+    g_engine->stopDpdfCapture();
+    LOGI("nativeStopDpdfCapture: flushed");
+}
+
+/// @return true si hay una captura DPDFNet-4 en curso.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeIsDpdfCapturing(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return g_engine->isDpdfCapturing() ? JNI_TRUE : JNI_FALSE;
+}
+
+/// @return true si los WAV de la última captura ya se escribieron a disco.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeIsDpdfCaptureReady(
+        JNIEnv* /* env */,
+        jobject /* thiz */) {
+
+    if (!g_running.load(std::memory_order_acquire) || g_engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return g_engine->isDpdfCaptureReady() ? JNI_TRUE : JNI_FALSE;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Latency Monitor & Loopback Test JNI Functions
 // ─────────────────────────────────────────────────────────────────────────────
 //

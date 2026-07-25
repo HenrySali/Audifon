@@ -42,6 +42,7 @@ import 'simulator_screen.dart';
 import 'smart_scene_screen.dart';
 import 'preset_learning_screen.dart';
 import 'technical_service_screen.dart';
+import 'testing_screen.dart';
 import '../../feedback_checklist/screens/feedback_checklist_dialog.dart';
 import '../../services/denoiser_service.dart';
 import '../widgets/denoiser_toggle.dart';
@@ -904,6 +905,25 @@ class _StatusBar extends StatelessWidget {
                               value: context.read<AmplificationBloc>(),
                               child: const UnifiedDiagnosticsScreen(),
                             ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  // Ventana de Testeo / Diagnóstico — captura por etapas del
+                  // pipeline DPDFNet-4 (diagnóstico de ronquera). Extensible.
+                  Builder(
+                    builder: (context) => IconButton(
+                      icon: const Icon(Icons.science,
+                          color: Colors.tealAccent, size: 21),
+                      tooltip: 'Testeo / Diagnóstico',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 34, minHeight: 34),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const TestingScreen(),
                           ),
                         );
                       },
