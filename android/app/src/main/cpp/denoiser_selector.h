@@ -16,6 +16,9 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <string>
+#include <thread>
+#include <vector>
 
 /// Identificadores de los 4 motores disponibles.
 enum class DenoiserType : int {
@@ -96,6 +99,15 @@ public:
     /// @return nombre legible del motor activo.
     const char* getActiveName() const;
 
+    // ─── Captura genérica IN/OUT del motor activo (diagnóstico) ──────────
+    // Graba la señal pre-denoise (IN) y post-denoise (OUT) @48kHz de CUALQUIER
+    // red activa (RNNoise/DFN3/GTCRN/DPDFNet), para comparar head-to-head.
+    // RT-safe: el audio thread solo hace memcpy; la escritura va en un hilo.
+    bool startCapture(const char* dir);
+    void stopCapture();
+    bool isCapturing() const;
+    bool isCaptureReady() const;
+
     /// Conecta el registro de matraca/calidad (opcional). Cuando está seteado,
     /// process() alimenta el tap de ENTRADA (pre-denoise) y el tap de SALIDA
     /// del motor activo, permitiendo atribuir la matraca a un sistema concreto
@@ -137,6 +149,25 @@ private:
 
     /// Registro de matraca/calidad (no-owning, opcional). nullptr = deshabilitado.
     DenoiserArtifactLog* artifactLog_ = nullptr;
+
+    // ─── Captura IN/OUT (diagnóstico) ────────────────────────────────────
+    void processImpl(float* buffer, int blockSize);  // lógica real de process()
+    static constexpr int kCapSr   = 48000;
+    static constexpr int kCapSecs = 10;
+    static constexpr int kCapCap  = kCapSr * kCapSecs;   // 480000 floats
+    std::vector<float> capIn_;
+    std::vector<float> capOut_;
+    int capInW_ = 0, capOutW_ = 0;
+    std::atomic<bool> capturing_{false};
+    std::atomic<bool> captureReady_{false};
+    std::atomic<bool> flushRequested_{false};
+    std::atomic<bool> writerRunning_{false};
+    std::thread capWriter_;
+    std::string capDir_;
+    std::string capEngine_;
+    char capTs_[24] = {0};
+    void capWriterLoop_();
+    void capWriteFiles_();
 };
 
 #endif // HEARING_AID_DENOISER_SELECTOR_H

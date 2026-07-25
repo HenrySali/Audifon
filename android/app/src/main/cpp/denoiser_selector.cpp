@@ -6,7 +6,11 @@
 #include "denoiser_selector.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include <android/log.h>
 #define LOG_TAG "DenoiserSelector"
@@ -19,6 +23,8 @@
 
 DenoiserSelector::DenoiserSelector() {
     engines_.fill(nullptr);
+    capIn_.resize(static_cast<size_t>(kCapCap));
+    capOut_.resize(static_cast<size_t>(kCapCap));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +109,34 @@ int DenoiserSelector::resolveFallback(int requested) const {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void DenoiserSelector::process(float* buffer, int blockSize) {
+    // Wrapper con captura genérica IN/OUT (RT-safe: solo memcpy aquí).
+    const bool cap = capturing_.load(std::memory_order_acquire);
+    if (cap && buffer && blockSize > 0 && capInW_ < kCapCap) {
+        int room = kCapCap - capInW_;
+        int c = (blockSize < room) ? blockSize : room;
+        std::memcpy(capIn_.data() + capInW_, buffer,
+                    static_cast<size_t>(c) * sizeof(float));
+        capInW_ += c;
+    }
+
+    processImpl(buffer, blockSize);
+
+    if (cap && buffer && blockSize > 0) {
+        if (capOutW_ < kCapCap) {
+            int room = kCapCap - capOutW_;
+            int c = (blockSize < room) ? blockSize : room;
+            std::memcpy(capOut_.data() + capOutW_, buffer,
+                        static_cast<size_t>(c) * sizeof(float));
+            capOutW_ += c;
+        }
+        if (capInW_ >= kCapCap) {   // auto-stop al llenar ~10s
+            capturing_.store(false, std::memory_order_release);
+            flushRequested_.store(true, std::memory_order_release);
+        }
+    }
+}
+
+void DenoiserSelector::processImpl(float* buffer, int blockSize) {
     if (blockSize <= 0 || buffer == nullptr) return;
 
     // ─── Tap de ENTRADA a los sistemas de limpieza (pre-denoise) ─────────
@@ -269,4 +303,103 @@ const char* DenoiserSelector::getActiveName() const {
         return engines_[activeType_]->name();
     }
     return "Bypass";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Captura genérica IN/OUT del motor activo (diagnóstico head-to-head)
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+bool writeWavF32(const std::string& path, const float* data, int n, int sr) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) { LOGW("capture: no puedo abrir %s", path.c_str()); return false; }
+    const uint32_t dataBytes = static_cast<uint32_t>(n) * 4u;
+    const uint32_t riffSize  = 36u + dataBytes;
+    const uint32_t fmtSize   = 16u;
+    const uint16_t audioFmt  = 3;   // IEEE float
+    const uint16_t channels  = 1;
+    const uint32_t srate     = static_cast<uint32_t>(sr);
+    const uint32_t byteRate  = srate * 4u;
+    const uint16_t blockAlign = 4;
+    const uint16_t bits      = 32;
+    std::fwrite("RIFF", 1, 4, f); std::fwrite(&riffSize, 4, 1, f);
+    std::fwrite("WAVE", 1, 4, f); std::fwrite("fmt ", 1, 4, f);
+    std::fwrite(&fmtSize, 4, 1, f); std::fwrite(&audioFmt, 2, 1, f);
+    std::fwrite(&channels, 2, 1, f); std::fwrite(&srate, 4, 1, f);
+    std::fwrite(&byteRate, 4, 1, f); std::fwrite(&blockAlign, 2, 1, f);
+    std::fwrite(&bits, 2, 1, f); std::fwrite("data", 1, 4, f);
+    std::fwrite(&dataBytes, 4, 1, f);
+    if (n > 0) std::fwrite(data, 4, static_cast<size_t>(n), f);
+    std::fclose(f);
+    return true;
+}
+} // namespace
+
+void DenoiserSelector::capWriteFiles_() {
+    // Nombre de motor sin espacios para el filename.
+    std::string eng = capEngine_.empty() ? "unknown" : capEngine_;
+    for (auto& ch : eng) if (ch == ' ' || ch == '/') ch = '_';
+    const std::string base = capDir_ + "/denoise_" + capTs_ + "_" + eng;
+    writeWavF32(base + "_IN.wav",  capIn_.data(),  capInW_,  kCapSr);
+    writeWavF32(base + "_OUT.wav", capOut_.data(), capOutW_, kCapSr);
+    FILE* f = std::fopen((base + "_meta.txt").c_str(), "w");
+    if (f) {
+        std::fprintf(f, "Denoiser IN/OUT capture\nengine=%s\ntimestamp=%s\n",
+                     capEngine_.c_str(), capTs_);
+        std::fprintf(f, "IN_samples=%d (%.2f s @%dk)\n", capInW_,
+                     capInW_ / static_cast<double>(kCapSr), kCapSr / 1000);
+        std::fprintf(f, "OUT_samples=%d (%.2f s @%dk)\n", capOutW_,
+                     capOutW_ / static_cast<double>(kCapSr), kCapSr / 1000);
+        std::fclose(f);
+    }
+    LOGI("capture: WAVs %s (IN=%d OUT=%d)", base.c_str(), capInW_, capOutW_);
+}
+
+void DenoiserSelector::capWriterLoop_() {
+    while (writerRunning_.load(std::memory_order_acquire)) {
+        if (flushRequested_.load(std::memory_order_acquire)) {
+            capWriteFiles_();
+            captureReady_.store(true, std::memory_order_release);
+            capturing_.store(false, std::memory_order_release);
+            flushRequested_.store(false, std::memory_order_release);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+}
+
+bool DenoiserSelector::startCapture(const char* dir) {
+    if (capturing_.load(std::memory_order_acquire)) return false;
+    if (capWriter_.joinable()) {
+        writerRunning_.store(false, std::memory_order_release);
+        capWriter_.join();
+    }
+    capDir_ = (dir && dir[0]) ? dir : "";
+    capEngine_ = getActiveName();
+    capInW_ = 0; capOutW_ = 0;
+    captureReady_.store(false, std::memory_order_release);
+    flushRequested_.store(false, std::memory_order_release);
+    std::time_t t = std::time(nullptr);
+    std::tm tmv{}; localtime_r(&t, &tmv);
+    std::strftime(capTs_, sizeof(capTs_), "%Y%m%d_%H%M%S", &tmv);
+    writerRunning_.store(true, std::memory_order_release);
+    capWriter_ = std::thread(&DenoiserSelector::capWriterLoop_, this);
+    capturing_.store(true, std::memory_order_release);
+    LOGI("capture: START engine=%s dir=%s", capEngine_.c_str(), capDir_.c_str());
+    return true;
+}
+
+void DenoiserSelector::stopCapture() {
+    capturing_.store(false, std::memory_order_release);
+    flushRequested_.store(true, std::memory_order_release);
+    if (capWriter_.joinable()) capWriter_.join();
+    LOGI("capture: STOP (flushed)");
+}
+
+bool DenoiserSelector::isCapturing() const {
+    return capturing_.load(std::memory_order_acquire);
+}
+
+bool DenoiserSelector::isCaptureReady() const {
+    return captureReady_.load(std::memory_order_acquire);
 }

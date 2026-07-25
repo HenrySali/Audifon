@@ -25,7 +25,10 @@ class _DenoiserToggleState extends State<DenoiserToggle> {
         Text('Motor de reducción de ruido',
             style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        ...DenoiserType.values.map((type) => RadioListTile<DenoiserType>(
+        // Solo se ofrecen Estándar (RNNoise) y Ultra (DPDFNet-4).
+        // Premium (DFN3) y Analítico (GTCRN) fueron retirados.
+        ...const [DenoiserType.rnnoise, DenoiserType.dpdfnet]
+            .map((type) => RadioListTile<DenoiserType>(
               title: Text(_label(type)),
               subtitle: Text(_subtitle(type)),
               value: type,

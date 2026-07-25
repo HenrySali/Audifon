@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Log
+import java.io.File
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -139,6 +140,16 @@ class AudioMethodChannel(
     fun register() {
         Log.i(TAG, "Registering platform channels")
 
+        // ─── Auto-limpieza: borrar capturas DPDFNet de sesiones previas ──────
+        // Cada arranque de la app deja la carpeta de capturas vacía, así las
+        // grabaciones de diagnóstico NUNCA se acumulan entre sesiones.
+        try {
+            val n = deleteAllDpdfCaptures()
+            Log.i(TAG, "Auto-limpieza al iniciar: $n capturas DPDFNet borradas")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Auto-limpieza al iniciar falló: ${t.message}")
+        }
+
         // Registrar handler de MethodChannel
         methodChannel.setMethodCallHandler(this)
 
@@ -181,6 +192,13 @@ class AudioMethodChannel(
      */
     fun unregister() {
         Log.i(TAG, "Unregistering platform channels")
+        // Auto-limpieza también al cerrar la app (best-effort).
+        try {
+            val n = deleteAllDpdfCaptures()
+            Log.i(TAG, "Auto-limpieza al cerrar: $n capturas DPDFNet borradas")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Auto-limpieza al cerrar falló: ${t.message}")
+        }
         stopLevelUpdates()
         methodChannel.setMethodCallHandler(null)
         levelEventChannel.setStreamHandler(null)
@@ -472,6 +490,49 @@ class AudioMethodChannel(
                     val progress = nativeBridge.nativeGetDiagnosticRecordingProgress()
                     result.success(progress.toInt())
                 }
+                // ─── DPDFNet-4 Stage Capture (diagnóstico de ronquera) ──────
+                // Vuelca 4 etapas (A dry48 / B ds16 / C model16 / D out48) del
+                // pipeline DPDFNet-4 a WAV float32 mono en el external files dir,
+                // subcarpeta `dpdf_captures/`. Ruta accesible por adb:
+                //   /sdcard/Android/data/com.psk.hearing_aid_app/files/dpdf_captures/
+                "getDpdfCaptureDir" -> {
+                    result.success(dpdfCaptureDir()?.absolutePath)
+                }
+                "startDpdfCapture" -> {
+                    val dir = dpdfCaptureDir()
+                        ?: return result.error(
+                            "STORAGE_ERROR", "External files dir no disponible", null)
+                    if (!dir.exists()) dir.mkdirs()
+                    val ok = nativeBridge.nativeStartDpdfCapture(dir.absolutePath)
+                    result.success(if (ok) dir.absolutePath else null)
+                }
+                "stopDpdfCapture" -> {
+                    nativeBridge.nativeStopDpdfCapture()
+                    // El flush corre en un hilo nativo; esperamos (acotado) a que
+                    // los WAV queden en disco antes de listar. Flush de ~5 MB < 1 s.
+                    var waited = 0
+                    while (!nativeBridge.nativeIsDpdfCaptureReady() && waited < 3000) {
+                        Thread.sleep(50); waited += 50
+                    }
+                    result.success(listDpdfCaptureFiles())
+                }
+                "isDpdfCapturing" -> {
+                    result.success(nativeBridge.nativeIsDpdfCapturing())
+                }
+                "isDpdfCaptureReady" -> {
+                    result.success(nativeBridge.nativeIsDpdfCaptureReady())
+                }
+                "listDpdfCaptures" -> {
+                    result.success(listDpdfCaptureFiles())
+                }
+                "deleteAllDpdfCaptures" -> {
+                    result.success(deleteAllDpdfCaptures())
+                }
+                "deleteDpdfCapture" -> {
+                    val name = call.argument<String>("name")
+                        ?: return result.error("INVALID_ARGS", "Falta 'name'", null)
+                    result.success(deleteDpdfCaptureByName(name))
+                }
                 // ─── Calibración de hardware (C-3, native-calibration-handlers) ─
                 // Implementación real de los 3 handlers con AudioRecord directo
                 // (no pasa por el pipeline DSP del proyecto). Persistencia +
@@ -489,6 +550,74 @@ class AudioMethodChannel(
             Log.e(TAG, "Error handling method ${call.method}", e)
             result.error("NATIVE_ERROR", e.message, e.stackTraceToString())
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // DPDFNet-4 Stage Capture — helpers
+    // ─────────────────────────────────────────────────────────────────────
+
+    /** Carpeta de capturas DPDFNet-4 dentro del external files dir de la app. */
+    private fun dpdfCaptureDir(): File? {
+        val ext = context.getExternalFilesDir(null) ?: return null
+        return File(ext, "dpdf_captures")
+    }
+
+    /**
+     * Lista los WAV de capturas existentes como List<Map> con:
+     *  name (String), path (String), stage (String A/B/C/D), sizeBytes (Long),
+     *  lastModified (Long, epoch ms). Ordenados por fecha desc.
+     */
+    private fun listDpdfCaptureFiles(): List<Map<String, Any>> {
+        val dir = dpdfCaptureDir() ?: return emptyList()
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".wav") }
+            ?: return emptyList()
+        return files.sortedByDescending { it.lastModified() }.map { f ->
+            val stage = when {
+                f.name.contains("_A_") -> "A"
+                f.name.contains("_B_") -> "B"
+                f.name.contains("_C_") -> "C"
+                f.name.contains("_D_") -> "D"
+                else -> "?"
+            }
+            mapOf(
+                "name" to f.name,
+                "path" to f.absolutePath,
+                "stage" to stage,
+                "sizeBytes" to f.length(),
+                "lastModified" to f.lastModified()
+            )
+        }
+    }
+
+    /**
+     * Borra TODAS las capturas (WAV + meta.txt) de la carpeta dpdf_captures.
+     * Devuelve la cantidad de archivos borrados.
+     */
+    private fun deleteAllDpdfCaptures(): Int {
+        val dir = dpdfCaptureDir() ?: return 0
+        val files = dir.listFiles { f -> f.isFile } ?: return 0
+        var deleted = 0
+        for (f in files) {
+            if (f.delete()) deleted++
+        }
+        Log.i(TAG, "deleteAllDpdfCaptures: borrados $deleted archivos")
+        return deleted
+    }
+
+    /**
+     * Borra una captura por nombre (y su meta.txt asociado si aplica).
+     * Devuelve true si borró al menos el archivo pedido.
+     */
+    private fun deleteDpdfCaptureByName(name: String): Boolean {
+        val dir = dpdfCaptureDir() ?: return false
+        val target = File(dir, name)
+        // Borrar también el meta de la misma sesión (dpdf_<ts>_*).
+        val ts = Regex("dpdf_(\\d{8}_\\d{6})_").find(name)?.groupValues?.getOrNull(1)
+        if (ts != null) {
+            dir.listFiles { f -> f.isFile && f.name.contains(ts) }?.forEach { it.delete() }
+            return true
+        }
+        return target.exists() && target.delete()
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -318,6 +318,24 @@ public:
     bool stopDiagnosticRecordingKeep();
     double getDiagnosticRecordingProgress() const;
 
+    // ─── DPDFNet-4 Stage Capture (diagnóstico de ronquera) ──────────────
+    /// Arranca la captura por etapas (A/B/C/D) del denoiser DPDFNet-4.
+    /// Vuelca ~10 s de audio real por etapa a WAV float32 mono en `dir`.
+    /// El audio thread solo hace memcpy; la escritura corre en hilo aparte.
+    /// @param dir Carpeta destino (debe existir).
+    /// @return true si arrancó la captura.
+    bool startDpdfCapture(const std::string& dir) {
+        // Captura GENÉRICA IN/OUT del motor activo (RNNoise/DFN3/GTCRN/DPDFNet)
+        // vía el DenoiserSelector, para comparar head-to-head cualquier red.
+        return denoiserSelector_.startCapture(dir.c_str());
+    }
+    /// Detiene la captura y flushea los WAV a disco.
+    void stopDpdfCapture() { denoiserSelector_.stopCapture(); }
+    /// @return true si hay una captura en curso.
+    bool isDpdfCapturing() const { return denoiserSelector_.isCapturing(); }
+    /// @return true si los WAV de la última captura ya se escribieron.
+    bool isDpdfCaptureReady() const { return denoiserSelector_.isCaptureReady(); }
+
     // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
     /// Renderiza el registro completo (entrada + 3 sistemas + salida final)
     /// como texto copiable. Identifica en qué sistema aparece la matraca o

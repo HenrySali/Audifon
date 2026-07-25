@@ -570,10 +570,10 @@ bool extractDfn3Models(AAssetManager* mgr, const std::string& destDir) {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── Registrar los 4 motores en el DenoiserSelector ─────────────────
+    // ─── Registrar SOLO los 2 motores ofrecidos ────────────────────────
+    // Premium (DFN3) y Analítico (GTCRN) fueron RETIRADOS: no se registran,
+    // por lo que no son seleccionables ni participan del fallback.
     denoiserSelector_.registerEngine(DenoiserType::kRNNoise, &rnnoiseAdapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kDFN3, &dfn3Adapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kGTCRN, &gtcrnAdapter_);
     denoiserSelector_.registerEngine(DenoiserType::kDPDFNet, &dpdfnetAdapter_);
 
     // ─── Cablear el registro de matraca/calidad al selector ─────────────
@@ -620,11 +620,11 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
         LOGI("initDnnDenoiser[mono]: GTCRN model ready");
     }
 
-    // ─── Seleccionar motor default: RNNoise (si disponible) ─────────────
+    // ─── Seleccionar motor default: RNNoise; si no, DPDFNet-4 ───────────
     if (rnnoiseOk) {
         denoiserSelector_.select(DenoiserType::kRNNoise);
-    } else if (okMono) {
-        denoiserSelector_.select(DenoiserType::kGTCRN);
+    } else if (dpdfnetOk) {
+        denoiserSelector_.select(DenoiserType::kDPDFNet);
     }
     // El selector resuelve fallback internamente si ninguno está ready.
 

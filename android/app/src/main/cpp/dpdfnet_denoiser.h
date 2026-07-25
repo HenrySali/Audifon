@@ -76,6 +76,26 @@ public:
     /// Reset internal state (DSP buffers + model state to init values).
     void reset();
 
+    // ─── Stage capture (diagnóstico de ronquera) ─────────────────────────────
+    /// Arranca una sesión de captura por etapas (A/B/C/D). Vuelca ~10 s de
+    /// audio real por etapa a WAV float32 mono en `dir`. El hilo de audio SOLO
+    /// hace memcpy a buffers pre-asignados; la escritura a disco corre en un
+    /// hilo separado disparado por flag atómico (al llenarse o al pedir stop).
+    /// Llamar desde el hilo de control (JNI), NUNCA desde el audio thread.
+    /// @param dir Carpeta destino (debe existir). Ej: .../files/dpdf_captures
+    /// @return true si arrancó (false si ya había una captura en curso).
+    bool startCapture(const char* dir);
+
+    /// Detiene la captura y dispara el flush a disco (bloquea hasta join del
+    /// hilo escritor). Idempotente. Llamar desde el hilo de control.
+    void stopCapture();
+
+    /// @return true si hay una captura activa (audio thread llenando buffers).
+    bool isCapturing() const;
+
+    /// @return true si los WAV de la última sesión ya se escribieron a disco.
+    bool isCaptureReady() const;
+
     // ─── Getters (thread-safe) ───────────────────────────────────────────────
     bool isEnabled() const { return enabled_.load(std::memory_order_acquire); }
     bool isActive() const { return active_.load(std::memory_order_acquire); }
