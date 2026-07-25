@@ -87,10 +87,13 @@ int DenoiserSelector::resolveFallback(int requested) const {
         return requested;
     }
 
-    // Fallback chain: RNNoise → GTCRN → bypass (-1)
+    // Fallback chain: RNNoise → DPDFNet-4 → bypass (-1)
+    // GTCRN y DFN3 fueron RETIRADOS (no se registran), así que ya no pueden
+    // participar del fallback: antes esta cadena caía a kGTCRN, que al no estar
+    // registrado forzaba bypass total en vez de degradar a DPDFNet-4.
     const int fallbackOrder[] = {
         static_cast<int>(DenoiserType::kRNNoise),
-        static_cast<int>(DenoiserType::kGTCRN)
+        static_cast<int>(DenoiserType::kDPDFNet)
     };
     for (int f : fallbackOrder) {
         if (f != requested && engines_[f] && engines_[f]->isActive()) {
