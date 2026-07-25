@@ -590,21 +590,10 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     if (rnnoiseOk) {
         LOGI("initDnnDenoiser: RNNoise activo (motor primario, static link)");
     } else {
-        LOGW("initDnnDenoiser: RNNoise no arrancó — fallback a GTCRN");
+        LOGW("initDnnDenoiser: RNNoise no arrancó — fallback a DPDFNet-4");
     }
 
-    // ─── Prioridad 2: DeepFilterNet3 (OnnxRuntime directo, sin Rust) ────
-    // Reimplementación que carga enc.onnx + erb_dec.onnx desde assets
-    // directamente en OnnxRuntime (elimina dlopen de libdfn3.so que crasheaba
-    // con index out of bounds 481). El adapter se inicializa vía el selector.
-    const bool dfn3Ok = dfn3Denoiser_.initialize(mgr, "dfn3");
-    if (dfn3Ok) {
-        LOGI("initDnnDenoiser: DFN3 activo (OnnxRuntime directo, premium)");
-    } else {
-        LOGW("initDnnDenoiser: DFN3 no arrancó — disponible solo RNNoise/GTCRN");
-    }
-
-    // ─── Prioridad 3: DPDFNet-4 (OnnxRuntime, Vorbis window, Ultra) ────
+    // ─── Prioridad 2: DPDFNet-4 (OnnxRuntime, Vorbis window, Ultra) ────
     const bool dpdfnetOk = dpdfnetDenoiser_.initialize(mgr);
     if (dpdfnetOk) {
         LOGI("initDnnDenoiser: DPDFNet-4 activo (Ultra, SOTA 2025)");
@@ -612,13 +601,11 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
         LOGW("initDnnDenoiser: DPDFNet-4 no arrancó — asset dpdfnet/dpdfnet4.onnx?");
     }
 
-    // ─── Fallback final: GTCRN mono legacy (ONNXRuntime) ────────────────
-    const bool okMono = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
-    if (!okMono) {
-        LOGW("initDnnDenoiser[mono]: model not loaded — mono DNN permanently bypassed");
-    } else {
-        LOGI("initDnnDenoiser[mono]: GTCRN model ready");
-    }
+    // NOTA: DFN3 (Premium) y GTCRN mono (Analítico) fueron RETIRADOS.
+    // Ya no se inicializan ni cargan modelos ONNX — ahorra RAM y tiempo de
+    // arranque. Sus assets se eliminaron del repo. Los miembros
+    // dfn3Denoiser_ / dnnDenoiser_ se conservan solo para telemetría (al no
+    // estar inicializados devuelven valores por defecto). Ver DOCUMENTATION.md.
 
     // ─── Seleccionar motor default: RNNoise; si no, DPDFNet-4 ───────────
     if (rnnoiseOk) {
@@ -629,6 +616,9 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     // El selector resuelve fallback internamente si ninguno está ready.
 
     // ─── Instancia dual-channel (GTCRN dual, ONNX + WPE beamformer) ────
+    // PENDIENTE (decisión de producto): el modelo gtcrn_dual_core.onnx NO
+    // existe en el repo (solo hay gtcrn_dual_mobile.pt/.ptl de PyTorch, no
+    // cargables por OnnxRuntime), por lo que esta ruta hace bypass a ch0.
     const bool okDual =
         dnnDenoiserDual_.initializeDual(mgr, "dnn_denoiser/gtcrn_dual_core.onnx");
     if (!okDual) {
@@ -638,7 +628,8 @@ bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
              static_cast<int>(dnnDenoiserDual_.inputChannels()));
     }
 
-    return okMono;
+    // Éxito = al menos un motor seleccionable (RNNoise o DPDFNet-4) activo.
+    return rnnoiseOk || dpdfnetOk;
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {

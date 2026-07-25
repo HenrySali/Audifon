@@ -43,7 +43,7 @@ Audifon es una **aplicación de amplificación auditiva personal (PSAP)** para A
 ### Diferenciales
 
 - **DSP nativo en C++** con latencia round-trip < 15 ms (Oboe + arm64-v8a).
-- **DNN denoiser** integrado con RNNoise (xiph, static-linked, ~90 KB) como motor primario; GTCRN (ONNX) como fallback. DeepFilterNet3 disponible pero desactivado por bug de runtime.
+- **DNN denoiser** integrado con RNNoise (xiph, static-linked, ~90 KB) como motor primario y DPDFNet-4 (ONNX) como secundario/fallback seleccionable. GTCRN y DeepFilterNet3 fueron retirados (ver §5).
 - **Beamforming MVDR** dual-mic con post-filtro SGJMAP.
 - **Modelo coclear** de 6 etapas (auditory model) que simula el sistema auditivo humano para compresión biológicamente inspirada.
 - **Smart Scene Engine** que clasifica el entorno en 8 clases y aplica presets adaptativos (silencio, voz cercana, ruido de máquinas, música, tráfico, viento, restaurante, cocktail party).
@@ -74,7 +74,7 @@ Audifon es una **aplicación de amplificación auditiva personal (PSAP)** para A
 │      └─▶ DspPipeline: HPF → AFC → NR → SCE → Expander → EQ            │
 │                       → [AuditoryModel | WDRC] → Volume → FBS         │
 │                       → OC → MPO                                       │
-│      ├─▶ Denoiser DNN:  RNNoise (static) / GTCRN (ONNX) / DFN3 (dlopen)│
+│      ├─▶ Denoiser DNN:  RNNoise (static) / DPDFNet-4 (ONNX)           │
 │      ├─▶ MVDR Beamformer (dual mic, WPE + SGJMAP)                     │
 │      ├─▶ Smart Scene Analyzer (VAD + spectral features)                │
 │      └─▶ Calibration Spectrum Validator (FFT, THD, tonos puros)        │
@@ -172,7 +172,7 @@ Input (mic o dual-mic beamforming)
 [2] AFC (Adaptive Feedback Canceller)  — NLMS, cancela realimentación acústica
    │
    ▼
-[3] NR / DNN Denoiser                  — Wiener clásico OR RNNoise/GTCRN/DFN3
+[3] NR / DNN Denoiser                  — Wiener clásico OR RNNoise/DPDFNet-4
    │                                     (excluyente por flag setNrBypassed)
    ▼
 [4] SCE (Spectral Contrast Enhancer)   — Realce de bordes espectrales
@@ -246,50 +246,67 @@ Output (auriculares / BT SCO / speaker)
 
 ## 5. Denoisers DNN
 
-Audifon integra **tres motores de denoising** con dispatch dinámico. El motor activo se elige en `initDnnDenoiser()` según disponibilidad y estabilidad:
+Audifon expone un `DenoiserSelector` que sólo **registra los motores realmente
+ofrecidos**. El registro vive en `initDnnDenoiser()` (`audio_engine.cpp`).
 
-### Prioridad de activación
+> **Actualización (limpieza jul 2026):** el enum `DenoiserType` todavía declara
+> cuatro tipos por compatibilidad, pero **sólo dos se registran y están activos**.
+> GTCRN mono y DFN3 fueron **retirados**: ya no se inicializan ni se cargan sus
+> modelos, y sus assets fueron eliminados del repo (ahorro de ~20 MB de APK y de
+> RAM/arranque). Esta sección es la **única fuente de verdad** sobre qué corre.
+
+### Motores registrados (los únicos activos)
 
 ```
-1. RNNoise      ✅ ACTIVO (motor primario)  — xiph v0.1.1, static-linked
-2. DFN3         ❌ DESACTIVADO             — libdfn3.so SIGABRT en runtime
-3. GTCRN        ✅ FALLBACK                — ONNX Runtime, tarde una carga de 2 MB
+kRNNoise  ✅ ACTIVO — default        — xiph v0.1.1, static-linked, 48 kHz nativo
+kDPDFNet  ✅ ACTIVO — secundario     — DPDFNet-4 (ONNX Runtime), seleccionable + fallback
 ```
 
-### 5.1 RNNoise (xiph)
+Cadena de fallback (audio thread): **RNNoise → DPDFNet-4 → bypass**. Si el motor
+solicitado no está listo, degrada a DPDFNet-4; si tampoco, hace bypass.
 
-- **Motor primario desde julio 2026**.
+### Motores retirados (no se registran, no se inicializan)
+
+```
+kGTCRN    ❌ RETIRADO — GTCRN mono legacy (gtcrn.onnx eliminado)
+kDFN3     ❌ RETIRADO — DeepFilterNet3 (assets dfn3/*.onnx eliminados)
+```
+
+Los miembros C++ `dnnDenoiser_` (GTCRN mono) y `dfn3Denoiser_` se conservan sin
+inicializar sólo porque algunos contadores de telemetría aún los consultan;
+devuelven valores por defecto y **nunca procesan audio**.
+
+### 5.1 RNNoise (xiph) — motor primario ✅
+
+- **Motor primario / default desde julio 2026**.
 - **Fuente**: xiph/rnnoise v0.1.1 vendoreado en `android/app/src/main/cpp/rnnoise/` (~572 KB de fuentes C, modelo tiny de ~90 KB compilado en el `.so`).
 - **Static-linked** — no requiere `.so` externo, no `dlopen`, no extracción de assets.
-- **Ventajas**: 0 crashes por routing (a diferencia de DFN3), 48 kHz nativo, `frame_size` = 480 samples (10 ms).
+- **Ventajas**: 0 crashes por routing, 48 kHz nativo, `frame_size` = 480 samples (10 ms).
 - **Wrapper**: `rnnoise_denoiser.cpp` — usa **ring buffer per-sample** (`inBuffer_` acumula dry, `outBuffer_` drena wet) para garantizar procesamiento continuo con bursts de Oboe de cualquier tamaño.
-- **Uso en producción**: OBS Studio, Mumble, ffmpeg (`arnndn` filter), múltiples prototipos publicados de audífonos.
 - **Licencia**: BSD 3-Clause.
 
-### 5.2 DFN3 (DeepFilterNet3)
+### 5.2 DPDFNet-4 — motor secundario ✅
 
-- **Estado**: **desactivado** por bug de runtime.
-- **Fuente**: `libdfn3.so` (Rust + Tract inference) cargado con `dlopen`.
-- **Modelos ONNX**: `df_dec.onnx`, `enc.onnx`, `erb_dec.onnx` en `assets/dfn3/`, extraídos a `filesDir` al arrancar.
-- **Problema documentado**: `Abort: index out of bounds: the len is 481 but the index is 481` en `libdfn3.so::process_hop`. Tombstone `data_app_native_crash 2026-07-20`. Confirmado en Motorola devon_g.
-- **Se mantiene el código** (`dfn3_denoiser.cpp`, workflow `build-dfn3.yml`) para reactivar cuando se recompile el `.so` corregido.
+- **Estado**: **activo**, registrado como `kDPDFNet`, seleccionable por el usuario y usado como fallback de RNNoise.
+- **Motor**: ONNX Runtime 1.16.3 (`jniLibs/arm64-v8a/libonnxruntime.so`).
+- **Modelo**: `assets/dpdfnet/dpdfnet4.onnx` (~11.6 MB), variante custom sobre DeepFilterNet4, licencia MIT.
+- **Métricas**: PESQ ≈ 3.1, STOI ≈ 0.94.
+- **Wrapper**: `dpdfnet_denoiser.cpp` (ventana Vorbis).
 
-### 5.3 GTCRN (Group Temporal Convolutional Recurrent Network)
+### 5.3 GTCRN — RETIRADO ❌
 
-- **Estado**: fallback si RNNoise no arranca.
-- **Motor**: ONNX Runtime 1.16.3 (compartida vía `jniLibs/arm64-v8a/libonnxruntime.so`).
-- **Dos instancias**:
-  - Mono legacy: `gtcrn.onnx` — usa resampler polyphase 3:1 interno (48 → 16 kHz).
-  - Dual-channel: `gtcrn_dual_core.onnx` + WPE beamformer (activa vía `EnhancementEngineMode::kDualChannelDnn`).
-- **Worker thread propio** con SPSC ring buffers — a diferencia de RNNoise que es síncrono.
+- **Estado**: **retirado**. Antes existía como "Analítico" (fallback) y en una ruta dual.
+- **Mono** (`gtcrn.onnx`): eliminado del repo; el adapter ya no se registra ni se inicializa.
+- **Dual** (`gtcrn_dual_core.onnx` + WPE beamformer, `EnhancementEngineMode::kDualChannelDnn`): **el modelo ONNX nunca existió en el repo** (sólo hay `gtcrn_dual_mobile.pt/.ptl` de PyTorch, no cargables por OnnxRuntime), por lo que esa ruta hace bypass a ch0. Los `.pt/.ptl` se conservan a la espera de una **decisión de producto**: convertirlos a ONNX para habilitar el beamforming dual-mic, o eliminar la ruta como código muerto.
 
-### 5.4 DPDFNet4 (histórico)
+### 5.4 DFN3 (DeepFilterNet3) — RETIRADO ❌
 
-Migración documentada en `SESION.md` sesión 5 → 6:
-
-- **DPDFNet4** = variante custom entrenada sobre DeepFilterNet4, 11.6 MB, licencia MIT.
-- **Métricas**: PESQ ≈ 3.1 (vs GTCRN 2.87), STOI ≈ 0.94.
-- No está activo en el APK actual (código en `_legacy/`).
+- **Estado**: **retirado**. Historial: `libdfn3.so` (Rust + Tract) crasheaba con
+  `Abort: index out of bounds: the len is 481 but the index is 481` en `process_hop`
+  (tombstone `data_app_native_crash 2026-07-20`, Motorola devon_g). Se reescribió a
+  ONNX directo, pero **nunca se llegó a registrar** en el selector.
+- Los modelos `assets/dfn3/{df_dec,enc,erb_dec}.onnx` fueron **eliminados**.
+- Queda código latente (`dfn3_denoiser.cpp`, workflow `build-dfn3.yml`) por si se reactiva en el futuro, pero no se compila dentro del flujo activo de selección.
 
 ---
 

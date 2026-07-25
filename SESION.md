@@ -636,3 +636,34 @@ Agente personalizado en `.kiro/agents/audifon-expert.md` con conocimiento comple
 - Ejecutar `scripts\sync_to_usuario.bat` para sincronizar app usuario
 - Crear el GitHub Release `v1.0-binaries` cuando se quiera sacar binarios del repo
 - Evaluar implementación del spec `oir-pro-patient-mode` (bundle JSON firmado por WhatsApp)
+
+
+---
+
+## Sesión — 25 julio 2026 (limpieza de motores de denoising)
+
+### Auditoría: qué redes neuronales estaban realmente activas
+Revisión del código real (no de la doc, que estaba desincronizada y se contradecía):
+
+- El enum `DenoiserType` declara 4 motores, pero `initDnnDenoiser()` **sólo registraba 2** en el `DenoiserSelector`: `kRNNoise` y `kDPDFNet`.
+- **Activos**: RNNoise (primario/default) + DPDFNet-4 (secundario seleccionable + fallback).
+- **Obsoletos/muertos**: GTCRN mono, DFN3 y GTCRN dual.
+  - GTCRN mono y DFN3 se inicializaban y cargaban modelos ONNX (~20 MB) en cada arranque pero **nunca procesaban audio** (sus adapters no se registraban).
+  - GTCRN dual referencia `gtcrn_dual_core.onnx`, que **no existe** en el repo (sólo `.pt/.ptl` de PyTorch) → bypass a ch0.
+
+### Bug encontrado y corregido
+- `denoiser_selector.cpp::resolveFallback` tenía la cadena `RNNoise → GTCRN → bypass`. Como GTCRN ya no se registra, si RNNoise fallaba en runtime el selector caía a **bypass total** en lugar de degradar a DPDFNet-4. Corregido a `RNNoise → DPDFNet-4 → bypass`.
+
+### Cambios aplicados
+- `denoiser_selector.cpp`: cadena de fallback → RNNoise → DPDFNet-4.
+- `audio_engine.cpp` (`initDnnDenoiser`): eliminada la inicialización de DFN3 y GTCRN mono; `return rnnoiseOk || dpdfnetOk`. Ahorra RAM y tiempo de arranque.
+- `audio_engine.h`: eliminados los adapters muertos `Dfn3Adapter`/`GtcrnAdapter` (nunca registrados). Los miembros `dfn3Denoiser_`/`dnnDenoiser_` se conservan sin inicializar (sólo telemetría).
+- Assets eliminados (~20 MB, blobs crudos): `assets/dfn3/{df_dec,enc,erb_dec}.onnx` y `assets/dnn_denoiser/gtcrn.onnx`. `.gitattributes` limpiado.
+- `DOCUMENTATION.md` §5 reescrita como única fuente de verdad.
+
+### Nota de validación
+Sin Flutter/NDK en el entorno → no se pudo compilar el `.so` ni correr tests. Cambios verificados por análisis estático; conviene confirmar con el CI (`ci-core.yml` incluye build NDK).
+
+### Pendiente (decisión de producto)
+- **Ruta dual-mic (GTCRN dual)**: decidir entre (a) convertir `gtcrn_dual_mobile.pt` → ONNX y añadir `gtcrn_dual_core.onnx` para habilitar el beamforming dual, o (b) eliminar la ruta `kDualChannelDnn` y sus `.pt/.ptl` como código muerto.
+- Código latente de DFN3 (`dfn3_denoiser.cpp`, `build-dfn3.yml`) y `extractDfn3Models()` (función sin uso) quedaron en el repo; evaluar su eliminación total en una pasada posterior.

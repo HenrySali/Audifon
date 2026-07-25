@@ -504,9 +504,9 @@ private:
     /// Adapters que wrappean las instancias existentes bajo IDenoiserEngine.
     /// Viven como miembros para garantizar lifetime >= selector.
     RnnoiseAdapter rnnoiseAdapter_{&rnnoiseDenoiser_};
-    Dfn3Adapter dfn3Adapter_{&dfn3Denoiser_};
-    GtcrnAdapter gtcrnAdapter_{&dnnDenoiser_};
     DpdfnetAdapter dpdfnetAdapter_{&dpdfnetDenoiser_};
+    // NOTA: Dfn3Adapter/GtcrnAdapter fueron eliminados — sus motores (DFN3,
+    // GTCRN mono) están RETIRADOS y nunca se registraban en el selector.
 
     // ─── DNN Denoiser dual-channel (GTCRN dual, ONNX + WPE) ───────────────
     /// SEGUNDA instancia de DnnDenoiser, dedicada al modo kDualChannelDnn.
