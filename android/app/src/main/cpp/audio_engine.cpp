@@ -57,19 +57,11 @@ oboe::Result AudioEngine::openInputStream() {
     builder.setDirection(oboe::Direction::Input);
     // Only set deviceId if explicitly provided (non-zero)
     // When 0, let Oboe use the system default input device (built-in mic)
-    if (preferredInputDeviceId_ > 0) {
-        // User selected a specific microphone via the UI.
-        builder.setDeviceId(preferredInputDeviceId_);
-    } else if (config_.builtInMicDeviceId != 0) {
+    if (config_.builtInMicDeviceId != 0) {
         builder.setDeviceId(config_.builtInMicDeviceId);
     }
     builder.setSampleRate(config_.sampleRate);
-    // Beamforming requiere 2 canales (estereo); legacy usa 1 (mono)
-    int requestedChannels = 1;
-    if (config_.beamformingEnabled) {
-        requestedChannels = 2;
-    }
-    builder.setChannelCount(requestedChannels);
+    builder.setChannelCount(1);
     builder.setFormat(oboe::AudioFormat::Float);
     builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
     // Use Shared mode for input — more compatible across devices.
@@ -77,7 +69,7 @@ oboe::Result AudioEngine::openInputStream() {
     // silence when it falls back silently.
     builder.setSharingMode(oboe::SharingMode::Shared);
     builder.setAudioApi(oboe::AudioApi::Unspecified);
-    builder.setErrorCallback(static_cast<oboe::AudioStreamErrorCallback*>(this));
+    builder.setErrorCallback(this);
     // Pedir al HAL que asigne un audio session ID (para NoiseSuppressor Android).
     // Sin esto, getSessionId() devuelve 0 (None) y NoiseSuppressor no puede attachear.
     builder.setSessionId(oboe::SessionId::Allocate);
@@ -113,30 +105,6 @@ oboe::Result AudioEngine::openInputStream() {
     }
 
     oboe::Result result = builder.openStream(inputStream_);
-
-    // Fallback: si se pidieron 2 canales y fallo, reintentar con 1 canal
-    if (result != oboe::Result::OK && requestedChannels == 2) {
-        LOGW("Stereo input failed (%s), falling back to mono",
-             oboe::convertToText(result));
-        builder.setChannelCount(1);
-        result = builder.openStream(inputStream_);
-        if (result == oboe::Result::OK) {
-            stereoInputAvailable_ = false;
-            LOGI("Input stream opened in MONO fallback mode");
-        }
-    } else if (result == oboe::Result::OK && requestedChannels == 2) {
-        // Verificar que Oboe realmente abrio en estereo
-        if (inputStream_->getChannelCount() == 2) {
-            stereoInputAvailable_ = true;
-            LOGI("Input stream opened in STEREO mode (beamforming ready)");
-        } else {
-            stereoInputAvailable_ = false;
-            LOGW("Requested stereo but got %d channels — beamforming unavailable",
-                 inputStream_->getChannelCount());
-        }
-    } else if (result == oboe::Result::OK) {
-        stereoInputAvailable_ = false;
-    }
 
     if (result == oboe::Result::OK) {
         LOGI("Input stream opened — API: %s, sampleRate: %d, format: %s, "
@@ -199,8 +167,8 @@ oboe::Result AudioEngine::openOutputStream() {
     // output stream's data callback means onAudioReady() fires on the output
     // stream, which internally reads from the input stream and calls
     // onBothStreamsReady(). This is the correct Oboe FullDuplexStream pattern.
-    builder.setDataCallback(static_cast<oboe::AudioStreamDataCallback*>(this));
-    builder.setErrorCallback(static_cast<oboe::AudioStreamErrorCallback*>(this));
+    builder.setDataCallback(this);
+    builder.setErrorCallback(this);
 
     oboe::Result result = builder.openStream(outputStream_);
 
@@ -294,40 +262,19 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
     dspConfig.splOffset = config_.splOffset;
     pipeline_.init(dspConfig);
 
-    // ─── Step 5a: Inform resamplers of native sample rate ─────────────────
-    // (RNNoise and DPDFNet handle this internally via the selector)
-
-    // ─── Enhancement Engine: crossfade y estado inicial (tarea 3.5/3.7) ──
-    // Crossfade entre motores ≈ 20 ms a la rate nativa (mínimo 1 sample).
-    engineXfadeSamples_ = std::max(1, static_cast<int>(effectiveSampleRate * 0.02f));
-    // Sin crossfade pendiente al arrancar; el callback lo dispara si el modo
-    // seleccionado difiere de `activeEngine_`.
-    engineXfadeRemaining_ = 0;
-    if (!firstStartDone_) {
-        // Tarea 3.7 / R8.3: el PRIMER arranque siempre es BYPASS.
-        engineMode_.store(EnhancementEngineMode::kBypass, std::memory_order_release);
-    }
-    // Sincronizar el motor "activo" del callback con el modo seleccionado
-    // (sin crossfade: es un arranque/re-open de stream, no un toggle runtime).
-    activeEngine_ = engineMode_.load(std::memory_order_acquire);
-    prevEngine_ = activeEngine_;
+    // ─── Step 5a: Inform DNN denoiser of the native sample rate ──────────
+    // El wrapper inserta un resampler interno (polyphase 3:1 si sr=48000,
+    // bypass si sr=16000, lineal en otros casos) para que el modelo GTCRN
+    // siga viendo audio a 16 kHz independientemente de lo que negocie Oboe.
+    // Idempotente: si el sr no cambió respecto a la última llamada, es no-op.
+    dnnDenoiser_.setInputSampleRate(effectiveSampleRate);
 
     // ─── Step 5b: Initialize Smart Scene Engine analyzer (Fase 1) ────────
     sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);
 
-    // ─── Step 5c: Initialize MVDR Beamformer ─────────────────────────────
-    // El beamformer se habilita según el selector de motor (no ya según el
-    // flag legacy config_.beamformingEnabled): sólo procesa cuando el modo
-    // activo es kMvdrBackup y hay captura estéreo. renderEngineChunk() lo
-    // invoca directamente; si estuviera deshabilitado haría bypass a ch0.
-    mvdrBeamformer_.init(effectiveSampleRate);
-    const bool mvdrWanted =
-        (engineMode_.load(std::memory_order_acquire) == EnhancementEngineMode::kMvdrBackup);
-    mvdrBeamformer_.setEnabled(mvdrWanted && stereoInputAvailable_);
-
     // ─── Step 6: Configure FullDuplexStream ──────────────────────────────
-    oboe::FullDuplexStream::setInputStream(inputStream_.get());
-    oboe::FullDuplexStream::setOutputStream(outputStream_.get());
+    setInputStream(inputStream_.get());
+    setOutputStream(outputStream_.get());
 
     // ─── Step 7: Start the FullDuplexStream ──────────────────────────────
     // FullDuplexStream::start() will start the input stream for reading
@@ -347,7 +294,6 @@ bool AudioEngine::start(const AudioEngineConfig& config) {
 
     // ─── Step 8: Success ─────────────────────────────────────────────────
     running_.store(true, std::memory_order_release);
-    firstStartDone_ = true;
     callbackCounter_ = 0;
 
     LOGI("AudioEngine started — sampleRate=%d, framesPerBurst=%d, "
@@ -368,7 +314,7 @@ oboe::Result AudioEngine::stop() {
     running_.store(false, std::memory_order_release);
 
     // Stop the FullDuplexStream (base class) — stops both streams
-    oboe::Result stopResult = oboe::FullDuplexStream::stop();
+    oboe::Result stopResult = FullDuplexStream::stop();
     if (stopResult != oboe::Result::OK) {
         LOGW("FullDuplexStream::stop() returned: %s", oboe::convertToText(stopResult));
     }
@@ -435,12 +381,6 @@ void AudioEngine::setSmartPresetPinned(bool pinned) {
 
 void AudioEngine::applyScenePreset(const ScenePreset& preset) {
     pipeline_.applyScenePreset(preset);
-    // Aplicar también el modo de enhancement del preset (unificación
-    // de clasificadores: ScenePolicy decide todo, incluyendo el motor).
-    if (preset.enhancementMode >= 0 && preset.enhancementMode <= 3) {
-        setEnhancementEngineMode(
-            static_cast<EnhancementEngineMode>(preset.enhancementMode));
-    }
 }
 
 int AudioEngine::getCurrentEnvironmentClass() const {
@@ -465,16 +405,6 @@ int32_t AudioEngine::getOutputDeviceId() const {
     return -1;
 }
 
-void AudioEngine::setPreferredInputDevice(int32_t deviceId) {
-    preferredInputDeviceId_ = deviceId;
-    // Si el stream está corriendo, aplicar en caliente.
-    if (inputStream_) {
-        // Oboe no soporta cambiar deviceId en caliente sin re-abrir.
-        // Guardamos el valor para el próximo restart. Si se necesita
-        // efecto inmediato, el caller debe hacer stop/start.
-    }
-}
-
 int32_t AudioEngine::getInputSessionId() const {
     if (inputStream_) {
         return static_cast<int32_t>(inputStream_->getSessionId());
@@ -489,173 +419,68 @@ int32_t AudioEngine::getInputSessionId() const {
 bool AudioEngine::initDnnDenoiser(AAssetManager* mgr) {
     LOGI("initDnnDenoiser: assetMgr=%p", mgr);
 
-    // ─── Registrar SOLO los 3 motores activos ──────────────────────────
-    denoiserSelector_.registerEngine(DenoiserType::kRNNoise, &rnnoiseAdapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kDPDFNet, &dpdfnetAdapter_);
-    denoiserSelector_.registerEngine(DenoiserType::kDTLN, &dtlnAdapter_);
+    // ─── DPDFNet-2 48 kHz (slot "Inteligente", kDPDFNet2=4) ─────────────
+    // Opera a 48 kHz nativo sin resampleo. Reemplaza al DTLN (42 ms).
+    // Se registra en el DenoiserSelector para conmutación exclusiva.
+    denoiserSelector_.registerEngine(DenoiserType::kDPDFNet2, &dpdfnet2Adapter_);
+    LOGI("initDnnDenoiser: DPDFNet2 adapter registered in DenoiserSelector (kDPDFNet2=4)");
 
-    // ─── Cablear el registro de matraca/calidad al selector ─────────────
-    artifactLog_.configure(config_.sampleRate);
-    denoiserSelector_.setArtifactLog(&artifactLog_);
-
-    // ─── Prioridad 1: RNNoise (xiph, static link) ──────────────────────
-    const bool rnnoiseOk = rnnoiseDenoiser_.initialize();
-    if (rnnoiseOk) {
-        LOGI("initDnnDenoiser: RNNoise activo (motor primario, static link)");
+    // ─── DeepFilterNet3 (OnnxRuntime directo, 48 kHz nativo) ────────────
+    const bool dfn3Ok = dfn3Denoiser_.initialize(mgr, "dfn3");
+    if (dfn3Ok) {
+        LOGI("initDnnDenoiser: DFN3 initialized OK (OnnxRuntime, 48 kHz native)");
+        useDfn3_ = true;  // Prefer DFN3 when available
     } else {
-        LOGW("initDnnDenoiser: RNNoise no arrancó");
+        LOGW("initDnnDenoiser: DFN3 not available — falling back to GTCRN");
+        useDfn3_ = false;
     }
 
-    // ─── Prioridad 2: DPDFNet-4 (OnnxRuntime, Vorbis window, Ultra) ────
-    const bool dpdfnetOk = dpdfnetDenoiser_.initialize(mgr);
-    if (dpdfnetOk) {
-        LOGI("initDnnDenoiser: DPDFNet-4 activo (Ultra, SOTA 2025)");
+    // ─── GTCRN fallback (OnnxRuntime, 16 kHz + resampler) ───────────────
+    const bool ok = dnnDenoiser_.initialize(mgr, "dnn_denoiser/gtcrn.onnx");
+    if (!ok) {
+        LOGW("initDnnDenoiser: GTCRN model not loaded — DNN will be permanently bypassed");
     } else {
-        LOGW("initDnnDenoiser: DPDFNet-4 no arrancó — asset dpdfnet/dpdfnet4.onnx?");
+        LOGI("initDnnDenoiser: GTCRN model ready");
     }
 
-    // ─── Prioridad 3: DTLN (dual-model, baja latencia, phase-aware) ─────
-    const bool dtlnOk = dtlnDenoiser_.initialize(mgr);
-    if (dtlnOk) {
-        LOGI("initDnnDenoiser: DTLN activo (Inteligente, dual-model)");
+    // ─── Initialize DenoiserSelector (inicializa todos los motores registrados) ──
+    const bool selectorOk = denoiserSelector_.initializeAll(mgr);
+    if (selectorOk) {
+        LOGI("initDnnDenoiser: DenoiserSelector initialized OK");
     } else {
-        LOGW("initDnnDenoiser: DTLN no arrancó — assets dtln/model_1.onnx, dtln/model_2.onnx?");
+        LOGW("initDnnDenoiser: DenoiserSelector — no engines initialized successfully");
     }
 
-    // ─── Seleccionar motor default: RNNoise; si no, DPDFNet-4 ───────────
-    if (rnnoiseOk) {
-        denoiserSelector_.select(DenoiserType::kRNNoise);
-    } else if (dpdfnetOk) {
-        denoiserSelector_.select(DenoiserType::kDPDFNet);
-    } else if (dtlnOk) {
-        denoiserSelector_.select(DenoiserType::kDTLN);
-    }
+    return dfn3Ok || ok || selectorOk;
+}
 
-    return rnnoiseOk || dpdfnetOk || dtlnOk;
+void AudioEngine::setDfn3Active(bool active) {
+    if (active && dfn3Denoiser_.isActive()) {
+        useDfn3_ = true;
+        LOGI("setDfn3Active: DFN3 selected");
+    } else {
+        useDfn3_ = false;
+        LOGI("setDfn3Active: GTCRN selected");
+    }
 }
 
 void AudioEngine::setDnnEnabled(bool enabled) {
-    denoiserSelector_.setEnabled(enabled);
+    dnnDenoiser_.setEnabled(enabled);
+    dfn3Denoiser_.setEnabled(enabled);
+    // Si activamos el DNN, deshabilitamos el NR Wiener clásico para
+    // evitar doble denoising. Si desactivamos, restauramos el NR clásico.
     pipeline_.setNrBypassed(enabled);
-    LOGI("setDnnEnabled: %d (engine: %s) — NR Wiener bypassed: %d",
+    LOGI("setDnnEnabled: %d (gtcrn_active=%d, dfn3_active=%d, useDfn3=%d) — NR Wiener bypassed: %d",
          enabled ? 1 : 0,
-         denoiserSelector_.getActiveName(),
+         dnnDenoiser_.isActive() ? 1 : 0,
+         dfn3Denoiser_.isActive() ? 1 : 0,
+         useDfn3_ ? 1 : 0,
          enabled ? 1 : 0);
 }
 
 void AudioEngine::setDnnIntensity(float intensity) {
-    denoiserSelector_.setIntensity(intensity);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MVDR Beamformer — wrappers thin sobre mvdrBeamformer_
-// ─────────────────────────────────────────────────────────────────────────────
-
-void AudioEngine::setBeamformingEnabled(bool enabled) {
-    // COMPAT (tarea 3.6): el toggle binario histórico de beamforming ahora
-    // mapea al selector de motor de 3 estados:
-    //   setBeamformingEnabled(true)  → kMvdrBackup  (2 mics → MVDR → mono)
-    //   setBeamformingEnabled(false) → kBypass      (ch0 passthrough)
-    // Toda la lógica de re-open estéreo/mono (Fix #3) vive ahora en
-    // setEnhancementEngineMode; este wrapper sólo traduce el bool al modo.
-    setEnhancementEngineMode(enabled ? EnhancementEngineMode::kMvdrBackup
-                                     : EnhancementEngineMode::kBypass);
-}
-
-bool AudioEngine::isBeamformingActive() const {
-    return mvdrBeamformer_.isEnabled() && stereoInputAvailable_
-        && engineMode_.load(std::memory_order_acquire)
-               == EnhancementEngineMode::kMvdrBackup;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Enhancement Engine selector (spec gtcrn-dual-channel, tarea 3)
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// MAPEO DE SETTERS LEGACY (tarea 3.6) — documentado para no romper callers:
-//
-//   setBeamformingEnabled(true)   → setEnhancementEngineMode(kMvdrBackup)
-//   setBeamformingEnabled(false)  → setEnhancementEngineMode(kBypass)
-//
-//   setDnnEnabled(true/false)     → SIN CAMBIOS. Controla la instancia MONO
-//     legacy (dnnDenoiser_) que corre como stage `process()` del chain DSP,
-//     independiente del selector de motor. El motor dual (dnnDenoiserDual_)
-//     se selecciona SOLO via setEnhancementEngineMode(kDualChannelDnn).
-//     Rationale: el diseno exige coexistencia mono(ONNX)+dual(ONNX+WPE); el
-//     mono legacy es una etapa distinta del pipeline y no debe verse forzado
-//     por el selector. Asi, los callers de setDnnEnabled siguen funcionando.
-
-void AudioEngine::setEnhancementEngineMode(EnhancementEngineMode mode) {
-    const EnhancementEngineMode prev =
-        engineMode_.load(std::memory_order_acquire);
-
-    // kDualChannelDnn no tiene backend (GTCRN removido) → cae a kBypass.
-    if (mode == EnhancementEngineMode::kDualChannelDnn) {
-        mode = EnhancementEngineMode::kBypass;
-    }
-
-    // Publicar el nuevo modo (lock-free).
-    engineMode_.store(mode, std::memory_order_release);
-
-    // Mantener el flag del MVDR coherente con el modo.
-    mvdrBeamformer_.setEnabled((mode == EnhancementEngineMode::kMvdrBackup
-                               || mode == EnhancementEngineMode::kHybridMvdrDnn)
-                               && stereoInputAvailable_);
-
-    // Los modos kMvdrBackup y kHybridMvdrDnn requieren captura estéreo.
-    const bool needStereo = (mode == EnhancementEngineMode::kMvdrBackup
-                             || mode == EnhancementEngineMode::kHybridMvdrDnn);
-
-    if (needStereo && running_.load(std::memory_order_acquire)
-        && !stereoInputAvailable_) {
-        config_.beamformingEnabled = true;
-        stop();
-        start(config_);
-        mvdrBeamformer_.setEnabled((mode == EnhancementEngineMode::kMvdrBackup
-                                   || mode == EnhancementEngineMode::kHybridMvdrDnn)
-                                   && stereoInputAvailable_);
-    }
-
-    LOGI("setEnhancementEngineMode: %d → %d (stereo=%d, running=%d)",
-         static_cast<int>(prev), static_cast<int>(mode),
-         stereoInputAvailable_ ? 1 : 0,
-         running_.load(std::memory_order_acquire) ? 1 : 0);
-}
-
-EnhancementEngineMode AudioEngine::getEnhancementEngineMode() const {
-    return engineMode_.load(std::memory_order_acquire);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Enhancement Engine — render de un chunk por modo (audio thread, no alloc)
-// ─────────────────────────────────────────────────────────────────────────────
-
-void AudioEngine::renderEngineChunk(EnhancementEngineMode mode,
-                                    const float* ch0, const float* ch1,
-                                    float* dst, int chunk, bool vadActive) {
-    switch (mode) {
-        case EnhancementEngineMode::kDualChannelDnn:
-            // GTCRN removido → passthrough a ch0.
-            if (dst != ch0) {
-                std::memcpy(dst, ch0, chunk * sizeof(float));
-            }
-            break;
-        case EnhancementEngineMode::kMvdrBackup:
-            // 2 mics → MVDR → mono.
-            mvdrBeamformer_.process(ch0, ch1, dst, chunk, vadActive);
-            break;
-        case EnhancementEngineMode::kHybridMvdrDnn:
-            // GTCRN dual removido → solo MVDR (fallback).
-            mvdrBeamformer_.process(ch0, ch1, dst, chunk, vadActive);
-            break;
-        case EnhancementEngineMode::kBypass:
-        default:
-            // ch0 passthrough (Property 2: identidad bit-exact sobre ch0).
-            if (dst != ch0) {
-                std::memcpy(dst, ch0, chunk * sizeof(float));
-            }
-            break;
-    }
+    dnnDenoiser_.setIntensity(intensity);
+    dfn3Denoiser_.setIntensity(intensity);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -749,91 +574,7 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     // ─── Copy input to output buffer for in-place processing ─────────────
     const float* inPtr = static_cast<const float*>(inputData);
     float* outPtr = static_cast<float*>(outputData);
-
-    // ─── Enhancement Engine stage (spec gtcrn-dual-channel, tarea 3.3) ──
-    // Enruta el realce por EnhancementEngineMode y produce el mono `outPtr`:
-    //   kDualChannelDnn → deinterleave ch0/ch1 → DnnDenoiser::processStereo
-    //   kMvdrBackup     → deinterleave ch0/ch1 → MvdrBeamformer::process
-    //   kBypass         → ch0 passthrough (o mono directo)
-    // Se procesa en chunks de kMaxBeamBlockSize (contrato del MVDR: overread
-    // de su outputBuf_ si chunk > kFftSize; el dual y el bypass también van
-    // troceados para reutilizar los mismos buffers de deinterleave).
-    //
-    // Transición sin clic (R2.5, tarea 3.5): al cambiar de modo en runtime se
-    // hace un crossfade lineal corto ENTRE motores (distinto del crossfade
-    // dry/wet interno del DnnDenoiser). Durante la ventana se renderiza el
-    // motor saliente en `engineXfadeBuf_` y se mezcla con el entrante.
-    //
-    // Captura mono o modo dual/MVDR sin estéreo disponible → BYPASS
-    // (Property 5, R4.5).
-    {
-        EnhancementEngineMode target = engineMode_.load(std::memory_order_acquire);
-        if (!stereoInputAvailable_
-            && (target == EnhancementEngineMode::kDualChannelDnn
-                || target == EnhancementEngineMode::kMvdrBackup)) {
-            target = EnhancementEngineMode::kBypass;
-        }
-
-        // Disparar crossfade entre motores si cambió el modo activo.
-        if (target != activeEngine_) {
-            prevEngine_ = activeEngine_;
-            activeEngine_ = target;
-            engineXfadeRemaining_ = engineXfadeSamples_;
-        }
-
-        const float xfadeStepInv =
-            1.0f / static_cast<float>(engineXfadeSamples_ > 0 ? engineXfadeSamples_ : 1);
-        const bool vadActive = sceneAnalyzer_.getVad().isVoiceActive();
-
-        int framesRemaining = numFrames;
-        int offset = 0;
-        while (framesRemaining > 0) {
-            const int chunkSize = std::min(framesRemaining, kMaxBeamBlockSize);
-
-            // Deinterleave a ch0/ch1 (mono → ch0 = ch1 = input directo).
-            if (stereoInputAvailable_) {
-                for (int i = 0; i < chunkSize; ++i) {
-                    beamCh0_[i] = inPtr[(offset + i) * 2];      // mic inferior (ch0)
-                    beamCh1_[i] = inPtr[(offset + i) * 2 + 1];  // mic superior (ch1)
-                }
-            } else {
-                for (int i = 0; i < chunkSize; ++i) {
-                    beamCh0_[i] = inPtr[offset + i];
-                    beamCh1_[i] = beamCh0_[i];
-                }
-            }
-
-            // ─── Registro: tap de MICRÓFONO CRUDO (pre-realce) ──────────
-            // beamCh0_ contiene el canal de referencia del mic recién
-            // deinterleaveado, ANTES del realce (MVDR/DNN) y del headroom.
-            // Permite separar la matraca del micrófono/captura de la que
-            // introduce el realce o los sistemas de limpieza.
-            artifactLog_.feedRawInput(beamCh0_, chunkSize);
-
-            // Motor entrante → outPtr + offset.
-            renderEngineChunk(activeEngine_, beamCh0_, beamCh1_,
-                              outPtr + offset, chunkSize, vadActive);
-
-            // Crossfade entre motores: renderizar el saliente y mezclar.
-            if (engineXfadeRemaining_ > 0) {
-                renderEngineChunk(prevEngine_, beamCh0_, beamCh1_,
-                                  engineXfadeBuf_, chunkSize, vadActive);
-                for (int i = 0; i < chunkSize; ++i) {
-                    // g: 0 → 1 conforme remaining decrece (el entrante gana).
-                    float g = 1.0f -
-                        static_cast<float>(engineXfadeRemaining_) * xfadeStepInv;
-                    if (g < 0.0f) g = 0.0f;
-                    else if (g > 1.0f) g = 1.0f;
-                    outPtr[offset + i] =
-                        engineXfadeBuf_[i] * (1.0f - g) + outPtr[offset + i] * g;
-                    if (engineXfadeRemaining_ > 0) --engineXfadeRemaining_;
-                }
-            }
-
-            offset += chunkSize;
-            framesRemaining -= chunkSize;
-        }
-    }
+    std::memcpy(outPtr, inPtr, numFrames * sizeof(float));
 
     // ─── Diagnostic: check if input has actual audio data ────────────────
     // Log once every ~2 seconds to avoid floodear logcat.
@@ -849,13 +590,12 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     if (++diagCounter >= callbacksPerLevelReport_ * 20) {
         diagCounter = 0;
         float maxSample = 0.0f;
-        // Usar outPtr (ya es mono post-beamforming o post-memcpy)
         for (int i = 0; i < numFrames; ++i) {
-            float absVal = std::fabs(outPtr[i]);
+            float absVal = std::fabs(inPtr[i]);
             if (absVal > maxSample) maxSample = absVal;
         }
-        const float userIntensity      = denoiserSelector_.getEffectiveIntensity();
-        const float effectiveIntensity = denoiserSelector_.getEffectiveIntensity();
+        const float userIntensity      = dnnDenoiser_.getIntensity();
+        const float effectiveIntensity = dnnDenoiser_.getEffectiveIntensity();
         const bool  vadActive          = sceneAnalyzer_.getVad().isVoiceActive();
         LOGI("Input diag: numFrames=%d, maxSample=%.6f, "
              "DNN[user=%.2f, eff=%.2f, vad=%d]",
@@ -893,81 +633,54 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         lastPreDnnLevelDb_ = 20.0f * std::log10(rms) + config_.splOffset;
     }
 
-    // ─── Headroom Stage — atenuación pre-DNN suave (R2.1, R2.2, R2.4) ─────
-    // FIX tktktk (Causa 3): reemplazado el sistema binario per-block (on/off)
-    // por una rampa suave con hold + release. El headroomGain_ persiste entre
-    // bloques y rampea continuamente entre kHeadroomAttenLinear (0.5) y 1.0,
-    // eliminando los escalones de 6 dB que causaban clicks.
+    // ─── Headroom Stage — atenuación pre-DNN (R2.1, R2.2, R2.4) ──────────
+    // Sólo atenuamos cuando el DNN está habilitado: señales near-full-scale
+    // (peak > -3 dBFS ≈ 0.7079 lineal) saturan la representación interna
+    // de GTCRN y producen THD excesiva. Atenuamos -6 dB (×0.5) antes del
+    // modelo y restauramos +6 dB (×2.0) después. Si el DNN está off, no
+    // hay riesgo de saturación interna y la señal pasa sin modificar
+    // (Requirement 2.4).
     //
-    // Comportamiento:
-    //   - Peak > umbral → attack rápido (~2 ms) hacia 0.5
-    //   - Peak < umbral → hold N bloques, luego release lento (~20 ms) hacia 1.0
-    //   - DNN deshabilitado → release inmediato (sin headroom necesario)
-    // Dispatch al motor activo vía el getter unificado getDnnIsEnabled()
-    // (delega al DenoiserSelector).
-    if (getDnnIsEnabled()) {
+    // El flag `headroomApplied_` es por-bloque (no estado persistente):
+    // se reinicia en cada callback y la restauración post-DNN sólo se
+    // ejecuta si este mismo bloque fue atenuado.
+    headroomApplied_ = false;
+    if (dnnDenoiser_.isEnabled()) {
         float peakSample = 0.0f;
         for (int i = 0; i < numFrames; ++i) {
             float absVal = std::fabs(outPtr[i]);
             if (absVal > peakSample) peakSample = absVal;
         }
-
-        // Determinar target del headroom gain.
-        float headroomTarget;
         if (peakSample > kHeadroomThresholdLinear) {
-            // Pico alto: atenuar. Resetear hold counter.
-            headroomTarget = kHeadroomAttenLinear;
-            headroomHoldBlocks_ = kHeadroomHoldBlocks;
-        } else if (headroomHoldBlocks_ > 0) {
-            // En periodo de hold: mantener atenuación.
-            headroomTarget = kHeadroomAttenLinear;
-            headroomHoldBlocks_--;
-        } else {
-            // Sin pico y hold expirado: restaurar.
-            headroomTarget = 1.0f;
-        }
-
-        // Aplicar rampa per-sample al buffer.
-        for (int i = 0; i < numFrames; ++i) {
-            // Avanzar headroomGain_ hacia target.
-            if (headroomGain_ > headroomTarget) {
-                // Attack: bajar hacia 0.5
-                headroomGain_ = std::max(headroomTarget,
-                                         headroomGain_ - kHeadroomAttackStep);
-            } else if (headroomGain_ < headroomTarget) {
-                // Release: subir hacia 1.0
-                headroomGain_ = std::min(headroomTarget,
-                                         headroomGain_ + kHeadroomReleaseStep);
-            }
-            outPtr[i] *= headroomGain_;
-        }
-    } else {
-        // DNN off: restaurar headroom rápidamente si estaba activo.
-        if (headroomGain_ < 1.0f) {
             for (int i = 0; i < numFrames; ++i) {
-                headroomGain_ = std::min(1.0f, headroomGain_ + kHeadroomReleaseStep * 10.0f);
-                outPtr[i] *= headroomGain_;
+                outPtr[i] *= kHeadroomAttenLinear;
             }
+            headroomApplied_ = true;
         }
-        headroomHoldBlocks_ = 0;
     }
 
     // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
-    // ─── DNN Denoiser — REEMPLAZA al NR Wiener cuando enabled ──────────
-    // DenoiserSelector maneja el toggle exclusivo entre RNNoise/DPDFNet.
-    // Internamente resuelve fallback y crossfade entre motores.
-    denoiserSelector_.process(outPtr, numFrames);
+    // Selección exclusiva: DFN3 (48 kHz nativo) o GTCRN (16 kHz + resampler).
+    // Por contrato del wrapper:
+    //   - Si isEnabled() == false y crossfadeGain == 0 →
+    //     bypass bit-exact (sin tocar el buffer).
+    //   - Si está enabled o haciendo crossfade out → procesa.
+    // El DspPipeline ya está configurado (vía setNrBypassed) para no
+    // ejecutar el NR Wiener cuando el DNN está activo.
+    if (useDfn3_ && dfn3Denoiser_.isActive()) {
+        dfn3Denoiser_.process(outPtr, numFrames);
+    } else {
+        dnnDenoiser_.process(outPtr, numFrames);
+    }
 
     // ─── Headroom Stage — restauración post-DNN (R2.3) ───────────────────
-    // FIX tktktk (Causa 3): la restauración ahora compensa el headroomGain_
-    // aplicado pre-DNN. Si gain < 1.0, multiplicamos por el inverso para
-    // restaurar el nivel original. La rampa garantiza que no hay escalones.
-    // Usamos el gain al final del bloque (headroomGain_) como aproximación
-    // uniforme — el error es < 0.5 dB dado que el step por bloque es pequeño.
-    if (headroomGain_ < 0.999f) {
-        const float restore = 1.0f / headroomGain_;
+    // Si este bloque fue atenuado pre-DNN, restauramos +6 dB para que el
+    // resto del pipeline (HPF, EQ, WDRC, MPO) reciba la señal al mismo
+    // nivel que tendría sin el headroom. Round-trip 0.5 × 2.0 == 1.0
+    // (bit-exact en float32 para todos los samples representables).
+    if (headroomApplied_) {
         for (int i = 0; i < numFrames; ++i) {
-            outPtr[i] *= restore;
+            outPtr[i] *= kHeadroomRestoreLinear;
         }
     }
 
@@ -998,11 +711,8 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
         postDnnLevelDb = 20.0f * std::log10(rms) + config_.splOffset;
     }
     const float dnnAttenDb = lastPreDnnLevelDb_ - postDnnLevelDb;
-    // Dispatch al motor activo — antes leía dnnDenoiser_.isEnabled() (GTCRN)
-    // hardcoded, con lo cual el WDRC siempre usaba el nivel pre-DNN aunque
-    // RNNoise estuviera atenuando (WDRC sobre-comprimía la voz limpia).
     const float wdrcInputLevelDb =
-        (getDnnIsEnabled() && dnnAttenDb > 3.0f)
+        (dnnDenoiser_.isEnabled() && dnnAttenDb > 3.0f)
             ? postDnnLevelDb
             : lastPreDnnLevelDb_;
 
@@ -1021,38 +731,27 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     pipeline_.processBlock(outPtr, numFrames, wdrcInputLevelDb,
                            vadFromLastBlock);
 
-    // ─── Registro de matraca/calidad: tap de SALIDA FINAL ───────────────
-    // `outPtr` es ahora la señal que escucha el usuario (post-pipeline
-    // completo: NR/EQ/WDRC/MPO/etc.). Mide la calidad final y permite
-    // detectar matraca introducida por etapas posteriores al denoiser.
-    artifactLog_.feedOutput(outPtr, numFrames);
+    // ─── Smart Scene Engine analysis (Fase 1, read-only on input) ────────
+    sceneAnalyzer_.process(inPtr, numFrames);
 
-    // ─── Smart Scene Engine analysis (Fase 1, read-only) ────────────────
-    // Fix #5 (auditoría MVDR): alimentar el SceneAnalyzer con `outPtr`, que
-    // ya es la señal mono resultante (beamformed en estéreo, o memcpy de ch0
-    // en mono legacy). Antes se le pasaba `beamCh0_`, que en modo chunked
-    // solo contenía el ÚLTIMO chunk deinterleaveado (datos stale para
-    // numFrames > kMaxBeamBlockSize) y además ignoraba el beamforming. Usar
-    // `outPtr` da al VAD la señal coherente con la que sale del beamformer.
-    sceneAnalyzer_.process(outPtr, numFrames);
-
-    // Propagar la SceneClass del SceneAnalyzer al pipeline para que la
-    // tabla unificada (scene_policy.h) tome las decisiones de NR/WDRC/TNR.
-    {
-        auto snap = sceneAnalyzer_.getSnapshot();
-        pipeline_.setLastSceneClass(snap.scene_class);
-    }
+    // ─── Cablear voice_active al DNN denoiser para el cap del Paso 1 ────
+    // Spec dnn-voice-level-recovery R1.1, R1.2, R5.2:
+    //
+    // El SceneAnalyzer corre AHORA, sobre el input crudo del bloque actual,
+    // pero `dnnDenoiser_.process()` del callback corriente ya consumió el
+    // valor de `voice_active` del bloque ANTERIOR (lectura atomic en
+    // `process()`).
+    //
+    // Por lo tanto, el flag que estamos guardando acá lo va a leer el
+    // PRÓXIMO callback (latencia de 1 bloque ≈ 5 ms a 16 kHz), lo cual
+    // es despreciable frente a la rampa asimétrica del cap (40 ms attack,
+    // 300 ms release). Esto evita reordenar el callback para correr el
+    // VAD antes del DNN.
+    dnnDenoiser_.notifyVoiceActive(sceneAnalyzer_.getVad().isVoiceActive());
 
     // ─── Calibration Spectrum Validator (Fase 2, read-only on input) ─────
     // Sólo procesa si el técnico activó una secuencia de validación.
-    // En modo estereo, alimentar con el canal de referencia (ch0, mono).
-    // NOTA: beamCh0_ contiene el ÚLTIMO chunk deinterleaveado (igual que antes
-    // en modo chunked); es el canal de referencia disponible sin recomputar.
-    if (stereoInputAvailable_) {
-        toneAnalyzer_.process(beamCh0_, numFrames);
-    } else {
-        toneAnalyzer_.process(inPtr, numFrames);
-    }
+    toneAnalyzer_.process(inPtr, numFrames);
 
     // ─── Zero any remaining output frames beyond what we processed ───────
     if (numOutputFrames > numFrames) {
@@ -1060,12 +759,7 @@ oboe::DataCallbackResult AudioEngine::onBothStreamsReady(
     }
 
     // ─── Diagnostic Recorder: feed pre/post DSP ─────────────────────────
-    // En modo estereo, el pre-DSP es el canal de referencia (ch0, mono).
-    if (stereoInputAvailable_) {
-        diagnosticRecorder_.feedPreDsp(beamCh0_, numFrames);
-    } else {
-        diagnosticRecorder_.feedPreDsp(inPtr, numFrames);
-    }
+    diagnosticRecorder_.feedPreDsp(inPtr, numFrames);
     diagnosticRecorder_.feedPostDsp(outPtr, numFrames);
 
     // ─── Level accumulation and callback emission (~100ms) ───────────────
@@ -1139,10 +833,6 @@ bool AudioEngine::stopDiagnosticRecording() {
     return diagnosticRecorder_.getState() == DiagRecorderState::COMPLETED;
 }
 
-bool AudioEngine::stopDiagnosticRecordingKeep() {
-    return diagnosticRecorder_.stopAndKeep();
-}
-
 double AudioEngine::getDiagnosticRecordingProgress() const {
     auto state = diagnosticRecorder_.getState();
     if (state == DiagRecorderState::COMPLETED || state == DiagRecorderState::FINALIZING) {
@@ -1213,10 +903,10 @@ void AudioEngine::attemptReconnection() {
         }
 
         // Success — start full-duplex
-        oboe::FullDuplexStream::setInputStream(inputStream_.get());
-        oboe::FullDuplexStream::setOutputStream(outputStream_.get());
+        setInputStream(inputStream_.get());
+        setOutputStream(outputStream_.get());
 
-        auto startResult = oboe::FullDuplexStream::start();
+        auto startResult = FullDuplexStream::start();
         if (startResult == oboe::Result::OK) {
             reconnecting_.store(false, std::memory_order_release);
             LOGI("Reconnection successful on attempt %d", attempt + 1);
@@ -1362,11 +1052,13 @@ LatencyMetrics AudioEngine::getLatencyMetrics() const {
     }
 
     // ─── DNN denoiser ───────────────────────────────────────────────────
-    // Inferencia en µs → ms. Leemos del DenoiserSelector (motor activo).
-    m.dnnInferenceMs = static_cast<double>(denoiserSelector_.getLastInferenceUs())
+    // Inferencia en µs → ms. Si el DNN está en bypass este valor refleja
+    // la última inferencia válida o 0 si nunca corrió.
+    m.dnnInferenceMs = static_cast<double>(dnnDenoiser_.getLastInferenceUs())
                        / 1000.0;
-    // Group delay (~1.5 ms) sólo si el DNN procesa audio.
-    m.dnnGroupDelayMs = denoiserSelector_.isActive() ? kDnnGroupDelayMsActive : 0.0;
+    // Group delay del resampler (~1.5 ms) sólo si el DNN procesa audio
+    // (active=true). Si está en bypass, no introduce delay.
+    m.dnnGroupDelayMs = dnnDenoiser_.isActive() ? kDnnGroupDelayMsActive : 0.0;
 
     // ─── Estado de salud ───────────────────────────────────────────────
     // `getXRunCount()` retorna `ResultWithValue<int32_t>`; si la API no

@@ -182,74 +182,6 @@ class NativeAudioBridge {
     }
 
     /**
-     * Configura el Expansor de baja frecuencia ≤1000 Hz (R1, spec
-     * mvdr-noise-clarity-tuning). Downward expansion band-limitada para
-     * eliminar el hiss del mic en silencios sin tocar consonantes.
-     * Default OFF / ratio 1.0 → passthrough (comportamiento previo, R6.3).
-     * Thread-safe.
-     *
-     * @param enabled Toggle de activación (AC5). Default false.
-     * @param kneeDbSpl Knee de expansión en dB SPL (AC1). Default 45.
-     * @param ratio Ratio de expansión, 1.0 = passthrough (AC4). Default 1.0.
-     * @param cutoffHz Frecuencia de corte superior (AC2). Default 1000.
-     * @param attackMs Ataque (recuperación de ganancia) en ms (AC6, ≤50).
-     * @param releaseMs Liberación (atenuación) en ms (AC4a). Default 400.
-     */
-    fun setExpander(
-        enabled: Boolean = false,
-        kneeDbSpl: Float = 45f,
-        ratio: Float = 1f,
-        cutoffHz: Float = 1000f,
-        attackMs: Float = 30f,
-        releaseMs: Float = 400f
-    ) {
-        nativeSetExpander(enabled, kneeDbSpl, ratio, cutoffHz, attackMs, releaseMs)
-    }
-
-    /**
-     * Configura el Supresor de reverberación tardía del MVDR (R5, spec
-     * mvdr-noise-clarity-tuning). Efectivo solo en modo MVDR; fuera de él
-     * el beamformer hace bypass. Default = comportamiento previo
-     * (enabled=true, strength=1.6, floor=0.30, decay=0.80). Thread-safe.
-     *
-     * @param enabled Toggle del dereverb (AC3). Default true.
-     * @param strength Over-subtraction factor (AC2). Default 1.6.
-     * @param floor Suelo espectral (AC2/AC4). Default 0.30.
-     * @param decay Factor de decaimiento / RT60 proxy (AC1). Default 0.80.
-     */
-    fun setDereverb(
-        enabled: Boolean = true,
-        strength: Float = 1.6f,
-        floor: Float = 0.30f,
-        decay: Float = 0.80f
-    ) {
-        nativeSetDereverb(enabled, strength, floor, decay)
-    }
-
-    /**
-     * Configura los umbrales del clasificador de entorno (R4, spec
-     * mvdr-noise-clarity-tuning). Defaults = valores previos si no se envían
-     * (R6.5). Thread-safe.
-     *
-     * @param speechEnterDb SNR (dB) para ENTRAR a SPEECH. Default 6.0.
-     * @param speechExitDb SNR (dB) para SALIR de SPEECH. Default 4.0.
-     * @param noiseSnrDb SNR (dB) bajo el cual el entorno es NOISE. Default 1.5.
-     * @param quietEnterDbSpl Nivel (dB SPL) para ENTRAR a QUIET. Default 44.
-     * @param quietExitDbSpl Nivel (dB SPL) para SALIR de QUIET. Default 49.
-     */
-    fun setClassifierThresholds(
-        speechEnterDb: Float = 6f,
-        speechExitDb: Float = 4f,
-        noiseSnrDb: Float = 1.5f,
-        quietEnterDbSpl: Float = 44f,
-        quietExitDbSpl: Float = 49f
-    ) {
-        nativeSetClassifierThresholds(
-            speechEnterDb, speechExitDb, noiseSnrDb, quietEnterDbSpl, quietExitDbSpl
-        )
-    }
-
-    /**
      * Habilita/deshabilita la clasificación automática de entorno.
      * Thread-safe, puede llamarse desde cualquier hilo.
      *
@@ -329,33 +261,6 @@ class NativeAudioBridge {
      */
     fun getOutputDeviceId(): Int = nativeGetOutputDeviceId()
 
-    /**
-     * Establece el micrófono preferido para el input stream.
-     *
-     * Si [deviceId] == -1, restaura el micrófono por defecto del sistema.
-     * Si el motor está corriendo, intenta aplicar el cambio en caliente
-     * vía el setter nativo. Si no está corriendo, guarda el ID para
-     * aplicarlo en el próximo `start()`.
-     *
-     * @return true si el cambio se aplicó o se guardó exitosamente.
-     */
-    fun setPreferredInputDevice(deviceId: Int): Boolean {
-        preferredInputDeviceId = deviceId
-        return try {
-            nativeSetPreferredInputDevice(deviceId)
-            true
-        } catch (e: Exception) {
-            Log.w("NativeAudioBridge", "setPreferredInputDevice failed: $e")
-            // Guardar para aplicar en próximo start — no es error fatal.
-            true
-        }
-    }
-
-    /** Device ID preferido para input (-1 = default del sistema). */
-    @Volatile
-    var preferredInputDeviceId: Int = -1
-        private set
-
     // ─────────────────────────────────────────────────────────────────────
     // Polling de nivel
     // ─────────────────────────────────────────────────────────────────────
@@ -408,33 +313,6 @@ class NativeAudioBridge {
 
     private external fun nativeSetNrLevel(level: Int)
 
-    /** Expansor de baja frecuencia ≤1000 Hz (R1). Ver [setExpander]. */
-    private external fun nativeSetExpander(
-        enabled: Boolean,
-        kneeDbSpl: Float,
-        ratio: Float,
-        cutoffHz: Float,
-        attackMs: Float,
-        releaseMs: Float
-    )
-
-    /** Supresor de reverberación tardía del MVDR (R5). Ver [setDereverb]. */
-    private external fun nativeSetDereverb(
-        enabled: Boolean,
-        strength: Float,
-        floor: Float,
-        decay: Float
-    )
-
-    /** Umbrales del clasificador de entorno (R4). Ver [setClassifierThresholds]. */
-    private external fun nativeSetClassifierThresholds(
-        speechEnterDb: Float,
-        speechExitDb: Float,
-        noiseSnrDb: Float,
-        quietEnterDbSpl: Float,
-        quietExitDbSpl: Float
-    )
-
     private external fun nativeSetAutoClassifyEnabled(enabled: Boolean)
 
     private external fun nativeSetSmartPresetPinned(pinned: Boolean)
@@ -449,9 +327,6 @@ class NativeAudioBridge {
 
     private external fun nativeGetOutputDeviceId(): Int
 
-    /** Setter nativo del preferred input device (Oboe setPreferredDevice). */
-    private external fun nativeSetPreferredInputDevice(deviceId: Int)
-
     /** Retorna el audio session ID del input stream (para NoiseSuppressor Android). */
     external fun nativeGetInputSessionId(): Int
 
@@ -462,15 +337,6 @@ class NativeAudioBridge {
      * audio al canal SCO Bluetooth. Spec: modo-conversacion-sco.
      */
     external fun nativeSetConversationMode(enabled: Boolean)
-
-    /**
-     * Setea el flag de beamforming dual-mic (captura estéreo + MVDR).
-     * Debe llamarse ANTES de [start] (o antes de un stop→start) para que
-     * el motor abra el input stream con 2 canales y active el MVDR.
-     *
-     * @param enabled true para captura estéreo + MVDR beamformer.
-     */
-    external fun nativeSetBeamformingMode(enabled: Boolean)
 
     // ─── Spectrum Analyzer (implementados en native_bridge.cpp) ──────────
 
@@ -493,36 +359,6 @@ class NativeAudioBridge {
     // ─── Transient Noise Reducer (TNR) ──────────────────────────────────
 
     external fun nativeSetTnrEnabled(enabled: Boolean)
-
-    // ─── Auditory Model (simulación del sistema auditivo humano) ─────────
-
-    /**
-     * Habilita/deshabilita el Modelo Auditivo (6 etapas cocleares).
-     * Cuando habilitado, simula la cadena auditiva humana y aplica
-     * compensaciones personalizadas según el audiograma del paciente.
-     * Se inserta después del EQ, antes del WDRC en el pipeline.
-     * Thread-safe (std::atomic interno). Default: OFF.
-     *
-     * @param enabled true para activar, false para bypass (passthrough)
-     */
-    external fun nativeSetAuditoryModelEnabled(enabled: Boolean)
-
-    /**
-     * Configura el audiograma del paciente para el modelo auditivo.
-     * Los umbrales en dB HL (12 bandas) determinan la compensación OHC
-     * por banda. Frecuencias: 250, 500, 750, 1000, 1500, 2000, 2500,
-     * 3000, 3500, 4000, 6000, 8000 Hz.
-     *
-     * @param thresholds FloatArray de 12 valores en dB HL (0 = audición normal)
-     */
-    external fun nativeSetAuditoryModelAudiogram(thresholds: FloatArray)
-
-    /**
-     * Configura la ganancia del modelo auditivo avanzado (slider UI).
-     * Rango: 0 (mínimo) a 18 (máximo). Default: 12 (normal).
-     * Controla la intensidad del procesamiento multicanal.
-     */
-    external fun nativeSetAuditoryModelEarCanalGain(gainDb: Float)
 
     // ─── Smart Scene Engine (Fase 1) ────────────────────────────────────
 
@@ -587,6 +423,28 @@ class NativeAudioBridge {
      */
     external fun nativeGetToneSnapshot(): ByteArray
 
+    // ─── DenoiserSelector Toggle (spec ruidolimpio.md / dpdfnet-48khz-denoiser) ──
+
+    /**
+     * Selecciona el motor de denoising activo. Solo 1 puede estar activo.
+     * @param type 0=RNNoise(Estándar), 1=DFN3(Premium), 2=GTCRN(Analítico),
+     *             3=DPDFNet-4(Ultra), 4=DPDFNet-2 48k(Inteligente)
+     */
+    external fun nativeSelectDenoiser(type: Int)
+
+    /**
+     * @return índice del motor actualmente activo (con fallback resuelto).
+     * 0=RNNoise, 1=DFN3, 2=GTCRN, 3=DPDFNet-4, 4=DPDFNet-2 48k
+     */
+    external fun nativeGetActiveDenoiser(): Int
+
+    /**
+     * @return índice del motor seleccionado por el usuario (puede diferir
+     * del activo si hubo fallback).
+     * 0=RNNoise, 1=DFN3, 2=GTCRN, 3=DPDFNet-4, 4=DPDFNet-2 48k
+     */
+    external fun nativeGetSelectedDenoiser(): Int
+
     // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
 
     // ─── Diagnostic Recorder (grabación dual-channel pre/post DSP) ──────
@@ -605,36 +463,10 @@ class NativeAudioBridge {
     external fun nativeStopDiagnosticRecording(): Boolean
 
     /**
-     * Detiene la grabación diagnóstica y CONSERVA el archivo WAV parcial.
-     * Finaliza el encabezado WAV con la duración real alcanzada.
-     * Diseñado para grabaciones intencionalmente cortas (test A/B, 5s por modo).
-     * @return true si el archivo se conservó correctamente.
-     */
-    external fun nativeStopDiagnosticRecordingKeep(): Boolean
-
-    /**
      * Obtiene el progreso de la grabación diagnóstica.
      * @return Progreso como fracción [0.0, 1.0], o -1 si no hay grabación activa.
      */
     external fun nativeGetDiagnosticRecordingProgress(): Double
-
-    // ─── DPDFNet-4 Stage Capture (diagnóstico de ronquera) ──────────────
-
-    /**
-     * Arranca la captura por etapas (A/B/C/D) del denoiser DPDFNet-4.
-     * @param dir Carpeta destino absoluta (debe existir; la crea el lado Kotlin).
-     * @return true si arrancó la captura (false si ya había una en curso).
-     */
-    external fun nativeStartDpdfCapture(dir: String): Boolean
-
-    /** Detiene la captura DPDFNet-4 y flushea los WAV a disco (bloqueante). */
-    external fun nativeStopDpdfCapture()
-
-    /** @return true si hay una captura DPDFNet-4 en curso. */
-    external fun nativeIsDpdfCapturing(): Boolean
-
-    /** @return true si los WAV de la última captura ya se escribieron a disco. */
-    external fun nativeIsDpdfCaptureReady(): Boolean
 
     // ─── DNN Denoiser (GTCRN vía OnnxRuntime) ───────────────────────────
 
@@ -670,127 +502,6 @@ class NativeAudioBridge {
      *         false si está en bypass (por config o por error de inicialización).
      */
     external fun nativeGetDnnIsActive(): Boolean
-
-    /**
-     * Retorna diagnósticos en tiempo real del DNN denoiser como HashMap.
-     * Claves: isActive, isEnabled, processedFrames, droppedFrames,
-     * lastInferenceUs, effectiveIntensity, userIntensity, inputChannels.
-     * @return HashMap<String, Any> con los valores, o null si el engine no corre.
-     */
-    external fun nativeGetDnnDiagnostics(): HashMap<String, Any>?
-
-    // ─── DenoiserSelector — toggle exclusivo (spec ruidolimpio.md) ──────
-
-    /**
-     * Selecciona el motor de denoising activo. Solo 1 puede estar activo.
-     * @param type 0=RNNoise, 3=DPDFNet(Ultra), 4=DTLN(Inteligente)
-     */
-    external fun nativeSelectDenoiser(type: Int)
-
-    /**
-     * @return índice del motor actualmente activo (con fallback resuelto).
-     * 0=RNNoise, 1=DFN3, 2=GTCRN
-     */
-    external fun nativeGetActiveDenoiser(): Int
-
-    /**
-     * @return índice del motor seleccionado por el usuario (puede diferir
-     * del activo si hubo fallback).
-     * 0=RNNoise, 1=DFN3, 2=GTCRN
-     */
-    external fun nativeGetSelectedDenoiser(): Int
-
-    // ─── BT bypass denoiser (reduce latencia ~10ms en modo SCO) ─────────
-
-    /**
-     * Habilita/deshabilita el bypass del denoiser en modo BT/SCO.
-     * Cuando activo y conversationMode=true, el denoiser se salta.
-     */
-    external fun nativeSetBtBypassDenoiser(bypass: Boolean)
-
-    /**
-     * @return true si el bypass BT del denoiser está habilitado.
-     */
-    external fun nativeGetBtBypassDenoiser(): Boolean
-
-    // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
-
-    /**
-     * Devuelve el registro completo de matraca/calidad como texto copiable
-     * (entrada a los sistemas + cada uno de los 3 sistemas + salida final,
-     * con diagnóstico del origen de la matraca). Cadena vacía si el motor
-     * no está corriendo.
-     */
-    external fun nativeGetDenoiserArtifactReport(): String
-
-    /** Reinicia el registro de matraca/calidad (nueva sesión de medición). */
-    external fun nativeResetDenoiserArtifactLog()
-
-    /**
-     * Resumen estructurado del registro de matraca/calidad como HashMap.
-     * Claves con prefijo por etapa: `input*`, `sys0*` (RNNoise), `sys1*`
-     * (DFN3), `sys2*` (GTCRN), `output*`; más `activeEngine` (int). Cada
-     * etapa expone *Active, *Blocks, *Clicks, *ClicksPerSec, *Clip, *NanInf,
-     * *MaxJump, *MeanRmsDbfs, *Quality, *WorstQuality, *WorstEventSec,
-     * *ElapsedSec. Null si el motor no está corriendo.
-     */
-    external fun nativeGetDenoiserArtifactSummary(): HashMap<String, Any>?
-
-    // ─── MVDR Dual-Mic Beamforming ─────────────────────────────────────
-
-    /**
-     * Habilita/deshabilita el MVDR dual-mic beamformer.
-     * Thread-safe (std::atomic interno). Si el motor no está activo, la
-     * llamada se ignora silenciosamente.
-     *
-     * @param enabled true para activar beamforming, false para bypass mono.
-     */
-    external fun nativeSetBeamformingEnabled(enabled: Boolean)
-
-    /**
-     * Setea el flag de "beamforming solicitado" que consume [nativeStart].
-     *
-     * Debe llamarse ANTES de [start] (o antes de un stop→start) para que el
-     * motor abra el stream de entrada en estéreo (2 canales) y el MVDR
-     * beamformer reciba ambos micrófonos. A diferencia de
-     * [nativeSetBeamformingEnabled] (que togglea el beamformer ya corriendo),
-     * este flag decide la geometría de captura del próximo start.
-     * Thread-safe (std::atomic). Spec: dual-mic-mvdr-beamforming.
-     */
-    external fun nativeSetBeamformingRequested(enabled: Boolean)
-
-    /**
-     * Consulta si el MVDR beamformer está activo (enabled + procesando).
-     * Thread-safe (lee std::atomic<bool> interno).
-     *
-     * @return true si el beamformer está habilitado y procesando audio.
-     */
-    external fun nativeGetBeamformingActive(): Boolean
-
-    // ─── Enhancement Engine selector (spec gtcrn-dual-channel) ──────────
-
-    /**
-     * Selecciona el motor de realce de voz.
-     *
-     * Contrato del entero (mapea al enum C++ `EnhancementEngineMode`):
-     *   0 = Bypass (ch0 passthrough, default de arranque),
-     *   1 = DualChannelDnn (GTCRN dual → mono realzado),
-     *   2 = MvdrBackup (MVDR beamformer → mono realzado).
-     *
-     * Los modos 1 y 2 necesitan captura estéreo. El lado nativo actualiza
-     * el flag de captura estéreo solicitada (el mismo que consume
-     * `nativeStart`) según el modo, y hace el re-open en caliente si el
-     * motor ya está corriendo. Thread-safe. Valores fuera de [0,2] se
-     * ignoran en el lado nativo.
-     */
-    external fun nativeSetEnhancementEngineMode(mode: Int)
-
-    /**
-     * Consulta el motor de realce seleccionado actualmente.
-     * @return 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup. Devuelve 0 si el
-     *         motor nativo no está activo (coherente con el default).
-     */
-    external fun nativeGetEnhancementEngineMode(): Int
 
     /**
      * Retorna métricas de todas las etapas del pipeline DSP como Map.

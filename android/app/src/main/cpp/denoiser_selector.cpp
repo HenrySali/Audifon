@@ -1,7 +1,8 @@
 /// @file denoiser_selector.cpp
 /// @brief Implementación del DenoiserSelector — toggle exclusivo con crossfade.
 ///
-/// Spec: ruidolimpio.md § 4.2
+/// Fallback chain actualizada: kDPDFNet2 → kRNNoise → bypass.
+/// Requirements: 4.1, 4.2, 4.3, 5.3
 
 #include "denoiser_selector.h"
 
@@ -87,12 +88,11 @@ int DenoiserSelector::resolveFallback(int requested) const {
         return requested;
     }
 
-    // Fallback chain: DPDFNet → DTLN → RNNoise → bypass (-1)
-    // Slots 1 (DFN3) y 2 (GTCRN) están eliminados — nunca registrados.
+    // Fallback chain: kDPDFNet2 → kRNNoise → bypass (-1)
+    // Req 4.3: cuando DPDFNet2 falla, cae a RNNoise.
     const int fallbackOrder[] = {
-        static_cast<int>(DenoiserType::kRNNoise),
-        static_cast<int>(DenoiserType::kDPDFNet),
-        static_cast<int>(DenoiserType::kDTLN)
+        static_cast<int>(DenoiserType::kDPDFNet2),
+        static_cast<int>(DenoiserType::kRNNoise)
     };
     for (int f : fallbackOrder) {
         if (f != requested && engines_[f] && engines_[f]->isActive()) {
@@ -141,11 +141,6 @@ void DenoiserSelector::process(float* buffer, int blockSize) {
 void DenoiserSelector::processImpl(float* buffer, int blockSize) {
     if (blockSize <= 0 || buffer == nullptr) return;
 
-    // ─── Tap de ENTRADA a los sistemas de limpieza (pre-denoise) ─────────
-    // Mide la señal ANTES de que el motor la procese, para el registro de
-    // matraca/calidad. Si la matraca ya aparece acá, la fuente es previa.
-    if (artifactLog_) artifactLog_->feedDenoiserInput(buffer, blockSize);
-
     // Leer la selección del usuario.
     const int target = selectedType_.load(std::memory_order_acquire);
     const int resolved = resolveFallback(target);
@@ -171,8 +166,6 @@ void DenoiserSelector::processImpl(float* buffer, int blockSize) {
     if (xfadeRemaining_ <= 0 || prevType_ < 0 || !engines_[prevType_]) {
         engines_[activeType_]->process(buffer, blockSize);
         xfadeRemaining_ = 0;
-        // Tap de SALIDA del sistema activo (post-denoise) para el registro.
-        if (artifactLog_) artifactLog_->feedEngineOutput(activeType_, buffer, blockSize);
         return;
     }
 
@@ -220,11 +213,6 @@ void DenoiserSelector::processImpl(float* buffer, int blockSize) {
         }
         prevType_ = -1;
     }
-
-    // Tap de SALIDA del sistema entrante (post-denoise) para el registro.
-    // Durante el crossfade el buffer ya contiene la mezcla dominada por el
-    // motor entrante, así que se atribuye al motor activo (activeType_).
-    if (artifactLog_) artifactLog_->feedEngineOutput(activeType_, buffer, blockSize);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

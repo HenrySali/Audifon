@@ -8,7 +8,7 @@ enum DenoiserType {
   dfn3,          // "Premium" — máxima calidad (retirado)
   gtcrn,         // "Analítico" — modulación VAD + dual-mic (retirado)
   dpdfnet,       // "Ultra" — DPDFNet-4, SOTA causal 2025
-  dtln,          // "Inteligente" — DTLN, baja latencia, phase-aware
+  dpdfnet2,      // "Inteligente" — DPDFNet-2 48kHz nativo, baja latencia
 }
 
 /// Servicio para controlar el selector de motor de denoising.
@@ -42,7 +42,7 @@ class DenoiserService extends ChangeNotifier {
   /// Selecciona el motor de denoising. Persiste y propaga al nativo.
   Future<void> selectDenoiser(DenoiserType type) async {
     _selected = type;
-    // Los 3 motores disponibles (RNNoise/DPDFNet/DTLN) siempre cargan OK.
+    // Los 3 motores disponibles (RNNoise/DPDFNet-4/DPDFNet-2) siempre cargan OK.
     // Asignar active = selected inmediatamente evita el flash de "fallback"
     // que ocurre por la race condition con el audio thread.
     _active = type;
@@ -75,11 +75,9 @@ class DenoiserService extends ChangeNotifier {
   /// Obtiene el registro completo de matraca/calidad como texto copiable.
   ///
   /// Incluye, por sesión: la matraca detectada en la ENTRADA a los sistemas
-  /// de limpieza, en cada uno de los 3 sistemas (RNNoise/DFN3/GTCRN) y en la
-  /// SALIDA FINAL que escucha el usuario, más un diagnóstico automático del
-  /// origen (fuente previa vs. introducida por un sistema vs. etapa DSP
-  /// posterior) y la calidad de cada etapa. Cadena vacía si el motor no
-  /// está corriendo.
+  /// de limpieza, en cada uno de los sistemas y en la SALIDA FINAL que
+  /// escucha el usuario, más un diagnóstico automático del origen y la
+  /// calidad de cada etapa. Cadena vacía si el motor no está corriendo.
   Future<String> getArtifactReport() async {
     try {
       final String? report =

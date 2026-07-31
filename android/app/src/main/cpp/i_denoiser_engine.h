@@ -1,5 +1,5 @@
 /// @file i_denoiser_engine.h
-/// @brief Interfaz polimórfica para motores de denoising (RNNoise, DFN3, GTCRN).
+/// @brief Interfaz polimórfica para motores de denoising (RNNoise, DFN3, DPDFNet-4, DPDFNet-2).
 ///
 /// Cada implementación hereda de IDenoiserEngine y delega a su clase concreta.
 /// El DenoiserSelector usa esta interfaz para conmutar exclusivamente entre
@@ -11,12 +11,11 @@
 #define HEARING_AID_I_DENOISER_ENGINE_H
 
 #include <cstdint>
-#include <string>
 
 struct AAssetManager;
 
 /// Interfaz polimórfica para motores de denoising.
-/// Cada implementación (RNNoise, DFN3, GTCRN) hereda de esta.
+/// Cada implementación (RNNoise, DFN3, DPDFNet-4, DPDFNet-2) hereda de esta.
 class IDenoiserEngine {
 public:
     virtual ~IDenoiserEngine() = default;

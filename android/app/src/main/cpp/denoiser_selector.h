@@ -4,15 +4,14 @@
 /// Solo UN motor activo a la vez. Al cambiar selección se aplica crossfade
 /// lineal de 20ms (960 samples @48kHz) entre motor saliente y entrante.
 /// Fallback automático: si el seleccionado no está disponible, cae a
-/// RNNoise → GTCRN → bypass.
+/// kDPDFNet2 → kRNNoise → bypass.
 ///
-/// Spec: ruidolimpio.md § 4.2
+/// Requirements: 4.1, 4.2, 4.3, 5.3
 
 #ifndef HEARING_AID_DENOISER_SELECTOR_H
 #define HEARING_AID_DENOISER_SELECTOR_H
 
 #include "i_denoiser_engine.h"
-#include "denoiser_artifact_log.h"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -21,15 +20,16 @@
 #include <vector>
 
 /// Identificadores de los motores disponibles.
-/// Slots 1 y 2 eliminados (DFN3/GTCRN removidos). kCount se mantiene coherente
-/// con la indexación JNI/Kotlin/Dart.
+/// El valor numérico de cada entry es estable y se persiste en Hive (Dart).
+/// kDPDFNet2 = 4 reemplaza al antiguo kDTLN = 4, preservando compatibilidad
+/// con la persistencia existente.
 enum class DenoiserType : int {
-    kRNNoise = 0,       ///< "Estándar" — RNNoise xiph
-    // kDFN3 = 1 removed (DeepFilterNet3 — crashed on startup)
-    // kGTCRN = 2 removed (GTCRN — model never loaded)
-    kDPDFNet = 3,       ///< "Ultra" — DPDFNet-4 via OnnxRuntime (FP32)
-    kDTLN    = 4,       ///< "Inteligente" — DTLN dual-model, baja latencia
-    kCount   = 5        ///< Array size (slots 1,2 are empty/removed)
+    kRNNoise  = 0,   ///< "Estándar" — RNNoise xiph
+    kDFN3     = 1,   ///< "Premium" (DeepFilterNet3) — deprecated
+    kGTCRN    = 2,   ///< "Analítico" (GTCRN) — deprecated
+    kDPDFNet  = 3,   ///< "Ultra" — DPDFNet-4 via OnnxRuntime
+    kDPDFNet2 = 4,   ///< "Inteligente" — DPDFNet-2 48kHz (reemplaza kDTLN)
+    kCount    = 5    ///< Array size sentinel
 };
 
 /// Selector exclusivo de denoiser. Solo UNO activo a la vez.
@@ -59,7 +59,7 @@ public:
 
     /// Selecciona el motor activo. Desactiva los otros.
     /// Si el motor seleccionado no está disponible (isActive()=false),
-    /// cae al fallback automático (RNNoise → GTCRN → bypass).
+    /// cae al fallback automático: kDPDFNet2 → kRNNoise → bypass.
     /// Thread-safe (atómico + crossfade en audio thread).
     void select(DenoiserType type);
 
@@ -104,19 +104,12 @@ public:
 
     // ─── Captura genérica IN/OUT del motor activo (diagnóstico) ──────────
     // Graba la señal pre-denoise (IN) y post-denoise (OUT) @48kHz de CUALQUIER
-    // red activa (RNNoise/DFN3/GTCRN/DPDFNet), para comparar head-to-head.
+    // red activa (RNNoise/DFN3/DPDFNet/DPDFNet2), para comparar head-to-head.
     // RT-safe: el audio thread solo hace memcpy; la escritura va en un hilo.
     bool startCapture(const char* dir);
     void stopCapture();
     bool isCapturing() const;
     bool isCaptureReady() const;
-
-    /// Conecta el registro de matraca/calidad (opcional). Cuando está seteado,
-    /// process() alimenta el tap de ENTRADA (pre-denoise) y el tap de SALIDA
-    /// del motor activo, permitiendo atribuir la matraca a un sistema concreto
-    /// o determinar si viene de la fuente. Llamar desde el hilo de control
-    /// (antes de arrancar el audio). Puntero no-owning (vive en AudioEngine).
-    void setArtifactLog(DenoiserArtifactLog* log) { artifactLog_ = log; }
 
 private:
     /// Array de motores registrados (nullptr si no registrado).
@@ -147,11 +140,9 @@ private:
     float xfadeBuf_[kXfadeSamples] = {};
 
     /// Resuelve fallback si el motor seleccionado no está disponible.
-    /// @return índice del motor a usar (fallback chain: RNNoise → GTCRN → -1).
+    /// Fallback chain: kDPDFNet2 → kRNNoise → bypass (-1).
+    /// @return índice del motor a usar, o -1 si ninguno disponible (bypass).
     int resolveFallback(int requested) const;
-
-    /// Registro de matraca/calidad (no-owning, opcional). nullptr = deshabilitado.
-    DenoiserArtifactLog* artifactLog_ = nullptr;
 
     // ─── Captura IN/OUT (diagnóstico) ────────────────────────────────────
     void processImpl(float* buffer, int blockSize);  // lógica real de process()

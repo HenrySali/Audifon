@@ -10,19 +10,16 @@
 #include <cstdint>
 
 #include <oboe/Oboe.h>
-#include <string>
 #include "dsp_pipeline.h"
 #include "diagnostic_recorder.h"
-#include "denoiser_artifact_log.h"
 #include "smart_scene/scene_analyzer.h"
 #include "calibration_spectrum/tone_analyzer.h"
-#include "dpdfnet_denoiser.h"
-#include "dtln_denoiser.h"
-#include "rnnoise_denoiser.h"
+#include "dnn_denoiser/dnn_denoiser.h"
+#include "dfn3_denoiser.h"
+#include "dpdfnet2_48khz_denoiser.h"
+#include "dpdfnet2_adapter.h"
 #include "denoiser_selector.h"
-#include "rnnoise_adapter.h"
 #include "latency_loopback_tester.h"
-#include "mvdr_beamformer.h"
 
 // Forward decl from <android/asset_manager.h>
 struct AAssetManager;
@@ -44,8 +41,6 @@ struct AudioEngineConfig {
     /// el enlace BT (son perfiles mutuamente excluyentes). Spec:
     /// modo-conversacion-sco.
     bool conversationMode = false;
-    bool beamformingEnabled = false;     ///< Habilitar captura estereo + MVDR beamformer
-    bool btBypassDenoiser = false;       ///< Bypass denoiser (ahorra ~10ms latencia)
 };
 
 /// Snapshot de métricas de latencia del motor de audio.
@@ -93,25 +88,6 @@ struct LatencyMetrics {
     int32_t schemaVersion = 1;       ///< versión del esquema
 };
 
-/// Selector del motor de realce de voz (spec gtcrn-dual-channel, tarea 3.1).
-///
-/// Reemplaza el par de flags históricos `beamformingEnabled` + `dnnEnabled`
-/// por un selector explícito de 3 estados mutuamente excluyentes. El default
-/// de arranque es `kBypass` (R8.3). Cablea vía JNI → Kotlin → UI (tarea 4/5).
-///
-///   kBypass         -> ch0 passthrough, sin realce (default arranque).
-///   kDualChannelDnn -> 2 mics -> WPE + GTCRN dual (ONNX) -> mono realzado.
-///   kMvdrBackup     -> 2 mics -> MVDR beamformer -> mono realzado.
-///
-/// Los valores enteros (0/1/2) son parte del contrato JNI/Kotlin/Dart y no
-/// deben reordenarse sin bumpear el mapeo del puente.
-enum class EnhancementEngineMode {
-    kBypass = 0,
-    kDualChannelDnn = 1,
-    kMvdrBackup = 2,
-    kHybridMvdrDnn = 3   ///< MVDR crossover ≤1000 Hz + DualDNN (modo premium)
-};
-
 /// Motor de audio de baja latencia con procesamiento DSP integrado.
 /// Usa Oboe FullDuplexStream para I/O sincronizado en un callback.
 class AudioEngine : public oboe::FullDuplexStream,
@@ -154,50 +130,8 @@ public:
     void setTnrThreshold(float ratio) { pipeline_.setTnrThreshold(ratio); }
     void setTnrAttenuationDb(float db) { pipeline_.setTnrAttenuationDb(db); }
 
-    // ─── Audífono Avanzado (compresión multicanal adaptativa) ──────────
-    void setAuditoryModelEnabled(bool enabled) { pipeline_.setAuditoryModelEnabled(enabled); }
-    bool isAuditoryModelEnabled() const { return pipeline_.isAuditoryModelEnabled(); }
-    void setAuditoryModelAudiogram(const float thresholds[12]) {
-        pipeline_.setAuditoryModelAudiogram(thresholds);
-    }
-    void setAuditoryModelEarCanalGain(float gainDb) {
-        pipeline_.setAuditoryModelEarCanalGain(gainDb);
-    }
-
-    // ─── Expansor de baja frecuencia (R1, tarea 4.3) ─────────────────────
-    /// Forward a DspPipeline::setExpanderParams. Default OFF/ratio 1.0 →
-    /// passthrough (R6.3). Thread-safe.
-    void setExpanderParams(bool enabled, float kneeDbSpl, float ratio,
-                           float cutoffHz, float attackMs, float releaseMs) {
-        pipeline_.setExpanderParams(enabled, kneeDbSpl, ratio, cutoffHz,
-                                    attackMs, releaseMs);
-    }
-
-    // ─── Supresor de reverberacion (R5, tarea 5.2) ───────────────────────
-    /// Forward a MvdrBeamformer. Los setters son no-op efectivos fuera del
-    /// modo MVDR (el beamformer hace bypass), pero el estado queda guardado
-    /// para cuando se active el modo MVDR. Default = comportamiento previo.
-    void setDereverbParams(bool enabled, float strength, float floor,
-                           float decay) {
-        mvdrBeamformer_.setDereverbEnabled(enabled);
-        mvdrBeamformer_.setDereverbStrength(strength);
-        mvdrBeamformer_.setDereverbFloor(floor);
-        mvdrBeamformer_.setDereverbDecay(decay);
-    }
-
     // ─── Environment Classifier (thread-safe) ───────────────────────────
     void setAutoClassifyEnabled(bool enabled);
-
-    /// Configura los umbrales del clasificador de entorno (R4, tarea 3.3).
-    /// Forward a DspPipeline::setClassifierThresholds. Defaults = valores
-    /// previos si Dart no envía (R6.5). Thread-safe.
-    void setClassifierThresholds(float speechEnterDb, float speechExitDb,
-                                 float noiseSnrDb,
-                                 float quietEnterDbSpl, float quietExitDbSpl) {
-        pipeline_.setClassifierThresholds(speechEnterDb, speechExitDb,
-                                          noiseSnrDb, quietEnterDbSpl,
-                                          quietExitDbSpl);
-    }
     /// Pin del preset Smart Scene aplicado manualmente — ver
     /// DspPipeline::setSmartPresetPinned() para la semántica completa.
     /// Wrapper directo al pipeline subyacente.
@@ -238,71 +172,17 @@ public:
     void setDnnEnabled(bool enabled);
     /// Mezcla dry/wet del DNN denoiser (0..1).
     void setDnnIntensity(float intensity);
-
-    /// Habilita/deshabilita el bypass automático del denoiser en modo BT/SCO.
-    /// Cuando está activo Y conversationMode=true, el denoiser se salta
-    /// para reducir ~10ms de latencia. Thread-safe (atomic).
-    void setBtBypassDenoiser(bool bypass) {
-        btBypassDnn_.store(bypass, std::memory_order_relaxed);
-    }
-    bool getBtBypassDenoiser() const {
-        return btBypassDnn_.load(std::memory_order_relaxed);
-    }
     /// @return true si el DNN denoiser está procesando audio (no en bypass por error).
-    bool getDnnIsActive() const {
-        return denoiserSelector_.isActive();
-    }
+    bool getDnnIsActive() const { return dnnDenoiser_.isActive(); }
     /// @return true si el flag de configuración enabled está en true.
-    bool getDnnIsEnabled() const {
-        return denoiserSelector_.isEnabled();
-    }
-    /// @return total de hops procesados por el motor DNN activo.
-    uint64_t getDnnProcessedFrames() const {
-        return denoiserSelector_.getProcessedFrames();
-    }
-    /// @return total de frames descartados.
-    uint64_t getDnnDroppedFrames() const {
-        return denoiserSelector_.getDroppedFrames();
-    }
-    /// @return microsegundos de la última inferencia del motor activo.
-    uint32_t getDnnLastInferenceUs() const {
-        return denoiserSelector_.getLastInferenceUs();
-    }
-    /// @return intensidad efectiva post-VAD-cap (valor aplicado en mezcla).
-    float getDnnEffectiveIntensity() const {
-        return denoiserSelector_.getEffectiveIntensity();
-    }
-    /// @return intensidad del usuario (slider). Dispatch al motor activo.
-    float getDnnUserIntensity() const {
-        return denoiserSelector_.getEffectiveIntensity();
-    }
-    /// @return canales de entrada del modelo (siempre 1 — no hay DNN dual).
-    int getDnnInputChannels() const { return 1; }
-
-    /// @return referencia al DenoiserSelector para acceso desde JNI.
-    DenoiserSelector& getDenoiserSelector() { return denoiserSelector_; }
-
-    // ─── MVDR Beamformer (dual-mic) ─────────────────────────────────────
-    /// Habilita/deshabilita el beamformer MVDR en runtime (thread-safe).
-    /// COMPAT: mapea al selector `EnhancementEngineMode` — ver
-    /// `setEnhancementEngineMode` y la doc de mapeo en el .cpp.
-    ///   setBeamformingEnabled(true)  → setEnhancementEngineMode(kMvdrBackup)
-    ///   setBeamformingEnabled(false) → setEnhancementEngineMode(kBypass)
-    void setBeamformingEnabled(bool enabled);
-    /// @return true si el beamformer MVDR esta activo y procesando.
-    bool isBeamformingActive() const;
-
-    // ─── Enhancement Engine selector (spec gtcrn-dual-channel, tarea 3) ──
-    /// Selecciona el motor de realce en runtime (thread-safe, lock-free).
-    /// No reinicia los streams salvo que el modo requiera cambiar la
-    /// geometría de captura mono↔estéreo (Fix #3 reutilizado). Los modos
-    /// kDualChannelDnn y kMvdrBackup requieren captura estéreo; kBypass
-    /// corre sobre ch0 (o el mono capturado) sin reabrir el stream. La
-    /// transición entre motores aplica un crossfade lineal corto anti-clic
-    /// dentro del callback (R2.5).
-    void setEnhancementEngineMode(EnhancementEngineMode mode);
-    /// @return el modo de realce seleccionado actualmente (lock-free).
-    EnhancementEngineMode getEnhancementEngineMode() const;
+    bool getDnnIsEnabled() const { return dnnDenoiser_.isEnabled(); }
+    /// Selecciona DFN3 como denoiser activo (en vez de GTCRN).
+    /// @param active true=DFN3, false=GTCRN
+    void setDfn3Active(bool active);
+    /// @return true si DFN3 es el motor activo.
+    bool isDfn3Active() const { return useDfn3_; }
+    /// @return true si DFN3 inicializó correctamente.
+    bool isDfn3Ready() const { return dfn3Denoiser_.isActive(); }
 
     // ─── Spectrum Analyzer forwarding ───────────────────────────────────
     void startSpectrumAnalysis() { pipeline_.getSpectrumAnalyzer().setActive(true); }
@@ -317,39 +197,7 @@ public:
     // ─── Diagnostic Recorder (dual-channel pre/post DSP) ────────────────
     bool startDiagnosticRecording(const std::string& filePath);
     bool stopDiagnosticRecording();
-    /// Detiene y conserva el WAV parcial (para grabaciones cortas intencionales).
-    bool stopDiagnosticRecordingKeep();
     double getDiagnosticRecordingProgress() const;
-
-    // ─── DPDFNet-4 Stage Capture (diagnóstico de ronquera) ──────────────
-    /// Arranca la captura por etapas (A/B/C/D) del denoiser DPDFNet-4.
-    /// Vuelca ~10 s de audio real por etapa a WAV float32 mono en `dir`.
-    /// El audio thread solo hace memcpy; la escritura corre en hilo aparte.
-    /// @param dir Carpeta destino (debe existir).
-    /// @return true si arrancó la captura.
-    bool startDpdfCapture(const std::string& dir) {
-        // Captura GENÉRICA IN/OUT del motor activo (RNNoise/DFN3/GTCRN/DPDFNet)
-        // vía el DenoiserSelector, para comparar head-to-head cualquier red.
-        return denoiserSelector_.startCapture(dir.c_str());
-    }
-    /// Detiene la captura y flushea los WAV a disco.
-    void stopDpdfCapture() { denoiserSelector_.stopCapture(); }
-    /// @return true si hay una captura en curso.
-    bool isDpdfCapturing() const { return denoiserSelector_.isCapturing(); }
-    /// @return true si los WAV de la última captura ya se escribieron.
-    bool isDpdfCaptureReady() const { return denoiserSelector_.isCaptureReady(); }
-
-    // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
-    /// Renderiza el registro completo (entrada + 3 sistemas + salida final)
-    /// como texto copiable. Identifica en qué sistema aparece la matraca o
-    /// si viene de la fuente, y mide la calidad de cada etapa. Thread-safe.
-    std::string getDenoiserArtifactReport() const {
-        return artifactLog_.renderReport();
-    }
-    /// Reinicia el registro (nueva sesión de medición). Thread-safe.
-    void resetDenoiserArtifactLog() { artifactLog_.reset(); }
-    /// Acceso de solo lectura al registro (para el resumen estructurado JNI).
-    const DenoiserArtifactLog& getArtifactLog() const { return artifactLog_; }
 
     // ─── Callback de nivel para UI ──────────────────────────────────────
     using LevelCallback = std::function<void(float levelDbSpl)>;
@@ -358,10 +206,6 @@ public:
     // ─── Device info (for UI display) ───────────────────────────────────
     int32_t getInputDeviceId() const;
     int32_t getOutputDeviceId() const;
-
-    /// Establece el micrófono preferido por device ID.
-    /// -1 = restaurar al default del sistema (kUnspecified).
-    void setPreferredInputDevice(int32_t deviceId);
 
     /// Retorna el audio session ID del input stream (para NoiseSuppressor Android).
     /// @return Session ID (>0 si válido), o -1 si el stream no está activo.
@@ -437,32 +281,11 @@ private:
     /// Attempts to reopen both streams after error.
     void attemptReconnection();
 
-    /// Renderiza un chunk (≤ kMaxBeamBlockSize) del motor `mode` sobre `dst`.
-    /// Llamado SOLO desde el audio thread (onBothStreamsReady). No alloc/lock.
-    ///   kBypass         → dst = ch0 (copia).
-    ///   kMvdrBackup     → mvdrBeamformer_.process(ch0, ch1, dst, chunk, vad).
-    ///   kDualChannelDnn → dnnDenoiserDual_.processStereo(ch0, ch1, dst, chunk).
-    /// @param ch0 canal 0 deinterleaveado (mic inferior), chunk samples.
-    /// @param ch1 canal 1 deinterleaveado (mic superior), chunk samples.
-    /// @param dst destino mono, chunk samples (puede aliasar ch0).
-    /// @param chunk número de samples del chunk.
-    /// @param vadActive flag VAD del SceneAnalyzer para el MVDR.
-    void renderEngineChunk(EnhancementEngineMode mode,
-                           const float* ch0, const float* ch1,
-                           float* dst, int chunk, bool vadActive);
-
     // ─── Pipeline DSP ───────────────────────────────────────────────────
     DspPipeline pipeline_;
 
     // ─── Diagnostic Recorder ─────────────────────────────────────────────
     DiagnosticRecorder diagnosticRecorder_;
-
-    // ─── Registro de matraca/calidad de los 3 sistemas de limpieza ──────
-    /// Acumula clicks/crackle + calidad en taps de entrada, por-sistema y
-    /// salida final. El DenoiserSelector alimenta los taps de entrada y por
-    /// sistema (setArtifactLog en initDnnDenoiser); el callback alimenta la
-    /// salida final tras el DspPipeline. Lock-free, RT-safe.
-    DenoiserArtifactLog artifactLog_;
 
     // ─── Smart Scene Engine (Fase 1) ─────────────────────────────────────
     smart_scene::SceneAnalyzer sceneAnalyzer_;
@@ -472,76 +295,31 @@ private:
     /// sólo activo cuando el técnico inicia una secuencia de validación.
     cal_spectrum::ToneAnalyzer toneAnalyzer_;
 
-    // ─── DPDFNet-4 (4to motor, Ultra, SOTA 2025) ────────────────────────
-    dpdfnet_denoiser::DpdfnetDenoiser dpdfnetDenoiser_;
+    // ─── DNN Denoiser (GTCRN) ────────────────────────────────────────────
+    /// SubVI estilo LabVIEW: cuando enabled=true REEMPLAZA al NR Wiener
+    /// del DspPipeline. Por default desactivado para arrancar igual que hoy.
+    /// El Impl interno tiene un worker thread propio y ring buffers SPSC.
+    dnn_denoiser::DnnDenoiser dnnDenoiser_;
 
-    // ─── DTLN (5to motor, Inteligente, baja latencia, phase-aware) ──────
-    dtln_denoiser::DtlnDenoiser dtlnDenoiser_;
+    // ─── DFN3 Denoiser (DeepFilterNet3 via OnnxRuntime) ──────────────────
+    /// Alternativa premium al GTCRN. 48 kHz nativo, sin resampler.
+    /// Se inicializa en initDnnDenoiser() y se selecciona con setDfn3Active().
+    dfn3_denoiser::Dfn3Denoiser dfn3Denoiser_;
+    /// true → usa DFN3 en el pipeline; false → usa GTCRN.
+    bool useDfn3_ = false;
 
-    // ─── RNNoise (xiph, static link, motor primario recomendado) ─────────
-    /// Motor RNNoise (48 kHz nativo, C statically linked). Motor primario
-    /// recomendado: no requiere .so externo ni modelo por filesystem.
-    /// Modelo tiny (~90 KB), probado en producción (OBS, Mumble, ffmpeg).
-    rnnoise_denoiser::RnnoiseDenoiser rnnoiseDenoiser_;
+    // ─── DPDFNet-2 48 kHz Denoiser (slot "Inteligente", kDPDFNet2=4) ────
+    /// Motor de denoising DPDFNet-2 operando a 48 kHz nativo sin resampleo.
+    /// Reemplaza al DTLN en el slot index=4 del DenoiserSelector.
+    dpdfnet2_denoiser::Dpdfnet2_48khzDenoiser dpdfnet2Denoiser_;
+    /// Adapter que expone dpdfnet2Denoiser_ a través de IDenoiserEngine.
+    DPDFNet2Adapter dpdfnet2Adapter_{&dpdfnet2Denoiser_};
 
-    // ─── DenoiserSelector (toggle exclusivo entre motores mono) ──────────
-    /// Selector unificado: maneja crossfade 20ms entre motores al cambiar selección.
+    // ─── DenoiserSelector (toggle exclusivo entre motores) ───────────────
+    /// Selector unificado que maneja crossfade 20ms entre motores al
+    /// cambiar selección. Registra DPDFNet2 (y potencialmente otros) vía
+    /// IDenoiserEngine para conmutación exclusiva.
     DenoiserSelector denoiserSelector_;
-    /// Adapters que wrappean las instancias existentes bajo IDenoiserEngine.
-    /// Viven como miembros para garantizar lifetime >= selector.
-    RnnoiseAdapter rnnoiseAdapter_{&rnnoiseDenoiser_};
-    DpdfnetAdapter dpdfnetAdapter_{&dpdfnetDenoiser_, "dpdfnet/dpdfnet4.onnx", "DPDFNet-4"};
-    DtlnAdapter dtlnAdapter_{&dtlnDenoiser_, "DTLN"};
-
-    // ─── MVDR Beamformer (dual-mic, pre-DNN) ─────────────────────────────
-    /// Beamformer MVDR de 2 microfonos. Procesa antes de la DNN.
-    MvdrBeamformer mvdrBeamformer_;
-    /// Buffers temporales para deinterleave de estereo.
-    /// Tamaño = MvdrBeamformer::kFftSize (256): el beamformer procesa en
-    /// frames de kFftSize y su outputBuf_ interno solo garantiza kFftSize*2
-    /// muestras. Procesar chunks > kFftSize provocaba overread de outputBuf_
-    /// en MvdrBeamformer::process (Fix #2/#7 auditoría MVDR). El callback
-    /// trocea numFrames en chunks de este tamaño.
-    static constexpr int kMaxBeamBlockSize = MvdrBeamformer::kFftSize;
-    float beamCh0_[kMaxBeamBlockSize] = {};
-    float beamCh1_[kMaxBeamBlockSize] = {};
-    /// Estado del filtro LP para el crossover del modo híbrido (MVDR ≤1000 Hz).
-    float hybridLpState_ = 0.0f;
-    float hybridLpStateDnn_ = 0.0f;
-    /// Flag indicando si el stream de input es realmente estereo.
-    /// Se setea en openInputStream() cuando se logra abrir con 2 canales.
-    bool stereoInputAvailable_ = false;
-
-    // ─── Enhancement Engine selector — estado (tarea 3.2/3.5) ────────────
-    /// Modo de realce seleccionado (lado control → callback). Lock-free.
-    /// Default kBypass (R8.3). Lo escribe setEnhancementEngineMode() y lo
-    /// lee onBothStreamsReady() con acquire.
-    std::atomic<EnhancementEngineMode> engineMode_{EnhancementEngineMode::kBypass};
-
-    /// Motor que el callback está renderizando actualmente como "entrante".
-    /// SÓLO tocado desde el audio thread (no atómico). Se sincroniza con
-    /// `engineMode_` al inicio de cada callback; si difieren, arranca un
-    /// crossfade entre `prevEngine_` (saliente) y `activeEngine_` (entrante).
-    EnhancementEngineMode activeEngine_ = EnhancementEngineMode::kBypass;
-    /// Motor saliente durante un crossfade entre motores. Audio-thread-only.
-    EnhancementEngineMode prevEngine_ = EnhancementEngineMode::kBypass;
-    /// Muestras restantes del crossfade entre motores (0 = sin crossfade).
-    /// Audio-thread-only. Se recarga a `engineXfadeSamples_` al cambiar modo.
-    int engineXfadeRemaining_ = 0;
-    /// Duración del crossfade entre motores en samples (≈20 ms a la rate
-    /// nativa). Se calcula en start() con el sampleRate efectivo. El
-    /// DnnDenoiser tiene su propio crossfade dry/wet interno; ESTE es el
-    /// crossfade ENTRE motores distintos (R2.5).
-    int engineXfadeSamples_ = 960;
-    /// false hasta el primer start() exitoso. En el PRIMER start() el motor
-    /// arranca forzado en kBypass (R8.3); los re-open posteriores por cambio
-    /// de geometría (Fix #3) preservan el modo seleccionado.
-    bool firstStartDone_ = false;
-    /// Buffer temporal para renderizar el motor SALIENTE durante el
-    /// crossfade (se mezcla contra outPtr con ganancia rampeada). Miembro
-    /// (no stack) para no allocar en el hot path. Se procesa por chunks de
-    /// hasta kMaxBeamBlockSize, así que este tamaño alcanza.
-    float engineXfadeBuf_[kMaxBeamBlockSize] = {};
 
     // ─── Pre-DNN Level + Headroom Stage (DSP chain optimization) ────────
     /// Nivel pre-DNN del último bloque (dB SPL). Medido en onBothStreamsReady
@@ -549,17 +327,10 @@ private:
     /// el WDRC use el nivel real de entrada en lugar del nivel post-DNN.
     /// Expuesto al DiagnosticRecorder para verificación del compression ratio.
     float lastPreDnnLevelDb_ = 0.0f;
-    /// Ganancia actual del headroom stage [kHeadroomAttenLinear..1.0].
-    /// FIX tktktk (Causa 3): reemplaza el flag binario headroomApplied_ con
-    /// una rampa suave que evita escalones de 6 dB entre bloques. Persiste
-    /// entre bloques para mantener continuidad.
-    float headroomGain_ = 1.0f;
-
-    /// Contador de hold: cuántos bloques mantener la atenuación después de
-    /// que el peak baje del umbral. Evita que un solo bloque sin pico cause
-    /// una restauración inmediata (que sería un click si el próximo bloque
-    /// vuelve a tener pico).
-    int   headroomHoldBlocks_ = 0;
+    /// Flag por-bloque: indica si el Headroom_Stage atenuó el bloque actual
+    /// antes de la DNN. Si true, post-DNN se restaura el nivel multiplicando
+    /// por kHeadroomRestoreLinear. NO es estado persistente entre bloques.
+    bool  headroomApplied_ = false;
 
     // ─── Configuración ──────────────────────────────────────────────────
     AudioEngineConfig config_;
@@ -568,16 +339,10 @@ private:
     std::shared_ptr<oboe::AudioStream> inputStream_;
     std::shared_ptr<oboe::AudioStream> outputStream_;
 
-    /// Device ID preferido para input (-1 = kUnspecified/default).
-    int32_t preferredInputDeviceId_ = -1;
-
     // ─── Estado ─────────────────────────────────────────────────────────
     std::atomic<bool> running_{false};
     std::atomic<bool> reconnecting_{false};
     std::atomic<int> reconnectAttempts_{0};
-
-    // ─── BT bypass denoiser (reduce latencia ~10ms en modo SCO) ──────────
-    std::atomic<bool> btBypassDnn_{false};
 
     // ─── Level callback ─────────────────────────────────────────────────
     LevelCallback levelCallback_;
@@ -598,18 +363,6 @@ private:
     /// Restauración post-DNN: multiplicador lineal para +6 dB.
     /// kHeadroomAttenLinear * kHeadroomRestoreLinear == 1.0 (round-trip 0 dB).
     static constexpr float kHeadroomRestoreLinear   = 2.0f;
-
-    // FIX tktktk (Causa 3): parámetros de la rampa suave del headroom.
-    /// Bloques de hold tras detectar pico: mantiene la atenuación N bloques
-    /// después de que el peak baje del umbral. A ~48 kHz con burst de 64-192,
-    /// 1 bloque ≈ 1-4 ms. 8 bloques ≈ 10-30 ms de hold.
-    static constexpr int   kHeadroomHoldBlocks      = 8;
-    /// Step de attack (hacia 0.5): rápido, ~2 ms. El ataque es por-sample.
-    /// A 48 kHz, 2 ms = 96 samples → step = 0.5/96 ≈ 0.0052.
-    static constexpr float kHeadroomAttackStep      = 0.005f;
-    /// Step de release (hacia 1.0): lento, ~20 ms. Por-sample.
-    /// A 48 kHz, 20 ms = 960 samples → step = 0.5/960 ≈ 0.00052.
-    static constexpr float kHeadroomReleaseStep     = 0.0005f;
 
     // ─── Latency Monitor — campos privados (spec monitor-latencia-audio) ──
     /// Tamaño del ring buffer de medidas DSP timing (50 callbacks ≈ 50 ms

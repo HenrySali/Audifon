@@ -7,7 +7,6 @@ import android.media.AudioManager
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Log
-import java.io.File
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -76,6 +75,16 @@ class AudioMethodChannel(
     private val scoController = BluetoothScoController(context)
     @Volatile private var conversationMode: Boolean = false
 
+    /** Monitor de llamadas telefónicas para pausar el motor DSP durante llamadas. */
+    private val callStateMonitor = CallStateMonitor(context).apply {
+        onCallStateChanged = { inCall ->
+            handlePhoneCallStateChange(inCall)
+        }
+    }
+
+    /** Flag: true si el motor fue pausado por una llamada telefónica. */
+    @Volatile private var pausedForCall: Boolean = false
+
     /** NoiseSuppressor del sistema Android (Fase 1 noise gate HW). */
     private var noiseSuppressor: NoiseSuppressor? = null
 
@@ -140,16 +149,6 @@ class AudioMethodChannel(
     fun register() {
         Log.i(TAG, "Registering platform channels")
 
-        // ─── Auto-limpieza: borrar capturas DPDFNet de sesiones previas ──────
-        // Cada arranque de la app deja la carpeta de capturas vacía, así las
-        // grabaciones de diagnóstico NUNCA se acumulan entre sesiones.
-        try {
-            val n = deleteAllDpdfCaptures()
-            Log.i(TAG, "Auto-limpieza al iniciar: $n capturas DPDFNet borradas")
-        } catch (t: Throwable) {
-            Log.w(TAG, "Auto-limpieza al iniciar falló: ${t.message}")
-        }
-
         // Registrar handler de MethodChannel
         methodChannel.setMethodCallHandler(this)
 
@@ -183,6 +182,9 @@ class AudioMethodChannel(
             }
         })
 
+        // Iniciar monitor de llamadas telefónicas
+        callStateMonitor.start()
+
         Log.i(TAG, "Platform channels registered successfully")
     }
 
@@ -192,14 +194,8 @@ class AudioMethodChannel(
      */
     fun unregister() {
         Log.i(TAG, "Unregistering platform channels")
-        // Auto-limpieza también al cerrar la app (best-effort).
-        try {
-            val n = deleteAllDpdfCaptures()
-            Log.i(TAG, "Auto-limpieza al cerrar: $n capturas DPDFNet borradas")
-        } catch (t: Throwable) {
-            Log.w(TAG, "Auto-limpieza al cerrar falló: ${t.message}")
-        }
         stopLevelUpdates()
+        callStateMonitor.stop()
         methodChannel.setMethodCallHandler(null)
         levelEventChannel.setStreamHandler(null)
         stateEventChannel.setStreamHandler(null)
@@ -222,25 +218,12 @@ class AudioMethodChannel(
                 "updateVolume" -> handleUpdateVolume(call, result)
                 "updateWdrcParams" -> handleUpdateWdrcParams(call, result)
                 "updateNrLevel" -> handleUpdateNrLevel(call, result)
-                // ─── mvdr-noise-clarity-tuning ──────────────────────────
-                "setExpander" -> handleSetExpander(call, result)
-                "setDereverb" -> handleSetDereverb(call, result)
-                "setClassifierThresholds" -> handleSetClassifierThresholds(call, result)
                 "updateAutoClassify" -> handleUpdateAutoClassify(call, result)
                 "setSmartPresetPinned" -> handleSetSmartPresetPinned(call, result)
                 "applyCalibration" -> handleApplyCalibration(call, result)
                 "setMpoThresholdDbSpl" -> handleSetMpoThresholdDbSpl(call, result)
                 "getDebugInfo" -> handleGetDebugInfo(result)
                 "getDeviceInfo" -> handleGetDeviceInfo(result)
-                "hasExternalOutput" -> {
-                    val monitor = AudioRouteMonitor(context)
-                    result.success(monitor.hasHeadsetOutput())
-                }
-                "setPreferredInputDevice" -> {
-                    val deviceId = call.argument<Int>("deviceId") ?: -1
-                    val success = nativeBridge.setPreferredInputDevice(deviceId)
-                    result.success(success)
-                }
                 // Spectrum Analyzer
                 "startSpectrumAnalysis" -> { nativeBridge.nativeStartSpectrumAnalysis(); result.success(null) }
                 "stopSpectrumAnalysis" -> { nativeBridge.nativeStopSpectrumAnalysis(); result.success(null) }
@@ -259,25 +242,6 @@ class AudioMethodChannel(
                 "updateTnrEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: true
                     nativeBridge.nativeSetTnrEnabled(enabled)
-                    result.success(null)
-                }
-                // Auditory Model (simulación del sistema auditivo humano)
-                "setAuditoryModelEnabled" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    nativeBridge.nativeSetAuditoryModelEnabled(enabled)
-                    result.success(null)
-                }
-                "setAuditoryModelAudiogram" -> {
-                    val thresholdsList = call.argument<List<Double>>("thresholds") ?: List(12) { 0.0 }
-                    val thresholds = FloatArray(12) { i ->
-                        if (i < thresholdsList.size) thresholdsList[i].toFloat() else 0f
-                    }
-                    nativeBridge.nativeSetAuditoryModelAudiogram(thresholds)
-                    result.success(null)
-                }
-                "setAuditoryModelEarCanalGain" -> {
-                    val gainDb = (call.argument<Double>("gainDb") ?: 12.0).toFloat()
-                    nativeBridge.nativeSetAuditoryModelEarCanalGain(gainDb)
                     result.success(null)
                 }
                 // Smart Scene Engine (Fase 1)
@@ -377,11 +341,10 @@ class AudioMethodChannel(
                     val active = nativeBridge.nativeGetDnnIsActive()
                     result.success(active)
                 }
-                "getDnnDiagnostics" -> {
-                    val diag = nativeBridge.nativeGetDnnDiagnostics()
-                    result.success(diag)
-                }
-                // ─── DenoiserSelector Toggle (spec ruidolimpio.md) ──────
+                // ─── DenoiserSelector Toggle (spec dpdfnet-48khz-denoiser) ──
+                // Forwarding directo del index entero al nativo. El Dart envía
+                // el ordinal del enum DenoiserType:
+                //   0=RNNoise, 1=DFN3, 2=GTCRN, 3=DPDFNet-4, 4=DPDFNet-2 48k
                 "selectDenoiser" -> {
                     val type = call.argument<Int>("type") ?: 0
                     nativeBridge.nativeSelectDenoiser(type)
@@ -392,60 +355,6 @@ class AudioMethodChannel(
                 }
                 "getSelectedDenoiser" -> {
                     result.success(nativeBridge.nativeGetSelectedDenoiser())
-                }
-                // ─── BT bypass denoiser (reduce latencia ~10ms) ─────────
-                "setBtBypassDenoiser" -> {
-                    val bypass = call.argument<Boolean>("bypass") ?: true
-                    nativeBridge.nativeSetBtBypassDenoiser(bypass)
-                    result.success(null)
-                }
-                "getBtBypassDenoiser" -> {
-                    result.success(nativeBridge.nativeGetBtBypassDenoiser())
-                }
-                // ─── Registro de matraca/calidad de los 3 sistemas ──────
-                "getDenoiserArtifactReport" -> {
-                    val report = try {
-                        nativeBridge.nativeGetDenoiserArtifactReport()
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "getDenoiserArtifactReport failed", t); ""
-                    }
-                    result.success(report)
-                }
-                "resetDenoiserArtifactLog" -> {
-                    try { nativeBridge.nativeResetDenoiserArtifactLog() }
-                    catch (t: Throwable) { Log.w(TAG, "resetDenoiserArtifactLog failed", t) }
-                    result.success(null)
-                }
-                "getDenoiserArtifactSummary" -> {
-                    val summary = try {
-                        nativeBridge.nativeGetDenoiserArtifactSummary()
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "getDenoiserArtifactSummary failed", t); null
-                    }
-                    result.success(summary)
-                }
-                // ─── MVDR Dual-Mic Beamforming ──────────────────────────
-                "setBeamformingEnabled" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    handleSetBeamformingMode(enabled, result)
-                }
-                "getBeamformingActive" -> {
-                    val active = nativeBridge.nativeGetBeamformingActive()
-                    result.success(active)
-                }
-                // ─── Enhancement Engine selector (spec gtcrn-dual-channel) ─
-                // Selector de 3 estados: 0=Bypass, 1=DualChannelDnn, 2=MvdrBackup.
-                // El lado nativo valida el rango [0,2], actualiza la geometría
-                // de captura estéreo solicitada (flag que consume nativeStart)
-                // y hace el re-open en caliente si el motor ya corre.
-                "setEnhancementEngineMode" -> {
-                    val mode = call.argument<Int>("mode") ?: 0
-                    nativeBridge.nativeSetEnhancementEngineMode(mode)
-                    result.success(null)
-                }
-                "getEnhancementEngineMode" -> {
-                    val mode = nativeBridge.nativeGetEnhancementEngineMode()
-                    result.success(mode)
                 }
                 // ─── MHL Prescripción / Modo Música ─────────────────────
                 // Espejo bit-a-bit de AudioMethodChannelPatient.kt
@@ -478,9 +387,7 @@ class AudioMethodChannel(
                         )
                     val fullPath = "${dir.absolutePath}/$filePath"
                     val ok = nativeBridge.nativeStartDiagnosticRecording(fullPath)
-                    // Devolver el fullPath real para que Dart no tenga que reconstruirlo.
-                    // Si ok=false, devolver null para indicar fallo.
-                    result.success(if (ok) fullPath else null)
+                    result.success(ok)
                 }
                 "stopDiagnosticRecording" -> {
                     val ok = nativeBridge.nativeStopDiagnosticRecording()
@@ -489,58 +396,9 @@ class AudioMethodChannel(
                     // exactamente como el paciente: ok→0, err→-1.
                     result.success(if (ok) 0 else -1)
                 }
-                "stopDiagnosticRecordingKeep" -> {
-                    val ok = nativeBridge.nativeStopDiagnosticRecordingKeep()
-                    // ok=true → WAV parcial conservado exitosamente (0)
-                    // ok=false → sin datos o error de finalización (-1)
-                    result.success(if (ok) 0 else -1)
-                }
                 "getDiagnosticRecordingProgress" -> {
                     val progress = nativeBridge.nativeGetDiagnosticRecordingProgress()
                     result.success(progress.toInt())
-                }
-                // ─── DPDFNet-4 Stage Capture (diagnóstico de ronquera) ──────
-                // Vuelca 4 etapas (A dry48 / B ds16 / C model16 / D out48) del
-                // pipeline DPDFNet-4 a WAV float32 mono en el external files dir,
-                // subcarpeta `dpdf_captures/`. Ruta accesible por adb:
-                //   /sdcard/Android/data/com.psk.hearing_aid_app/files/dpdf_captures/
-                "getDpdfCaptureDir" -> {
-                    result.success(dpdfCaptureDir()?.absolutePath)
-                }
-                "startDpdfCapture" -> {
-                    val dir = dpdfCaptureDir()
-                        ?: return result.error(
-                            "STORAGE_ERROR", "External files dir no disponible", null)
-                    if (!dir.exists()) dir.mkdirs()
-                    val ok = nativeBridge.nativeStartDpdfCapture(dir.absolutePath)
-                    result.success(if (ok) dir.absolutePath else null)
-                }
-                "stopDpdfCapture" -> {
-                    nativeBridge.nativeStopDpdfCapture()
-                    // El flush corre en un hilo nativo; esperamos (acotado) a que
-                    // los WAV queden en disco antes de listar. Flush de ~5 MB < 1 s.
-                    var waited = 0
-                    while (!nativeBridge.nativeIsDpdfCaptureReady() && waited < 3000) {
-                        Thread.sleep(50); waited += 50
-                    }
-                    result.success(listDpdfCaptureFiles())
-                }
-                "isDpdfCapturing" -> {
-                    result.success(nativeBridge.nativeIsDpdfCapturing())
-                }
-                "isDpdfCaptureReady" -> {
-                    result.success(nativeBridge.nativeIsDpdfCaptureReady())
-                }
-                "listDpdfCaptures" -> {
-                    result.success(listDpdfCaptureFiles())
-                }
-                "deleteAllDpdfCaptures" -> {
-                    result.success(deleteAllDpdfCaptures())
-                }
-                "deleteDpdfCapture" -> {
-                    val name = call.argument<String>("name")
-                        ?: return result.error("INVALID_ARGS", "Falta 'name'", null)
-                    result.success(deleteDpdfCaptureByName(name))
                 }
                 // ─── Calibración de hardware (C-3, native-calibration-handlers) ─
                 // Implementación real de los 3 handlers con AudioRecord directo
@@ -559,74 +417,6 @@ class AudioMethodChannel(
             Log.e(TAG, "Error handling method ${call.method}", e)
             result.error("NATIVE_ERROR", e.message, e.stackTraceToString())
         }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // DPDFNet-4 Stage Capture — helpers
-    // ─────────────────────────────────────────────────────────────────────
-
-    /** Carpeta de capturas DPDFNet-4 dentro del external files dir de la app. */
-    private fun dpdfCaptureDir(): File? {
-        val ext = context.getExternalFilesDir(null) ?: return null
-        return File(ext, "dpdf_captures")
-    }
-
-    /**
-     * Lista los WAV de capturas existentes como List<Map> con:
-     *  name (String), path (String), stage (String A/B/C/D), sizeBytes (Long),
-     *  lastModified (Long, epoch ms). Ordenados por fecha desc.
-     */
-    private fun listDpdfCaptureFiles(): List<Map<String, Any>> {
-        val dir = dpdfCaptureDir() ?: return emptyList()
-        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".wav") }
-            ?: return emptyList()
-        return files.sortedByDescending { it.lastModified() }.map { f ->
-            val stage = when {
-                f.name.contains("_A_") -> "A"
-                f.name.contains("_B_") -> "B"
-                f.name.contains("_C_") -> "C"
-                f.name.contains("_D_") -> "D"
-                else -> "?"
-            }
-            mapOf(
-                "name" to f.name,
-                "path" to f.absolutePath,
-                "stage" to stage,
-                "sizeBytes" to f.length(),
-                "lastModified" to f.lastModified()
-            )
-        }
-    }
-
-    /**
-     * Borra TODAS las capturas (WAV + meta.txt) de la carpeta dpdf_captures.
-     * Devuelve la cantidad de archivos borrados.
-     */
-    private fun deleteAllDpdfCaptures(): Int {
-        val dir = dpdfCaptureDir() ?: return 0
-        val files = dir.listFiles { f -> f.isFile } ?: return 0
-        var deleted = 0
-        for (f in files) {
-            if (f.delete()) deleted++
-        }
-        Log.i(TAG, "deleteAllDpdfCaptures: borrados $deleted archivos")
-        return deleted
-    }
-
-    /**
-     * Borra una captura por nombre (y su meta.txt asociado si aplica).
-     * Devuelve true si borró al menos el archivo pedido.
-     */
-    private fun deleteDpdfCaptureByName(name: String): Boolean {
-        val dir = dpdfCaptureDir() ?: return false
-        val target = File(dir, name)
-        // Borrar también el meta de la misma sesión (dpdf_<ts>_*).
-        val ts = Regex("dpdf_(\\d{8}_\\d{6})_").find(name)?.groupValues?.getOrNull(1)
-        if (ts != null) {
-            dir.listFiles { f -> f.isFile && f.name.contains(ts) }?.forEach { it.delete() }
-            return true
-        }
-        return target.exists() && target.delete()
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -724,10 +514,6 @@ class AudioMethodChannel(
         // CRÍTICO: setear el flag de Modo Conversación ANTES de start() para
         // que el motor abra los streams con Usage::VoiceCommunication (SCO).
         nativeBridge.nativeSetConversationMode(conversationMode)
-        // CRÍTICO: setear el flag de beamforming ANTES de start() para que
-        // el motor abra el input stream con 2 canales (estéreo).
-        val beamformingEnabled = call.argument<Boolean>("beamformingEnabled") ?: false
-        nativeBridge.nativeSetBeamformingMode(beamformingEnabled)
         nativeBridge.start(
             sampleRate = sampleRate,
             bufferSize = bufferSize,
@@ -969,26 +755,6 @@ class AudioMethodChannel(
     }
 
     /**
-     * Habilita/deshabilita el beamforming MVDR dual-mic.
-     *
-     * En la nueva arquitectura (spec gtcrn-dual-channel), el toggle binario
-     * de beamforming mapea al selector de motor de 3 estados:
-     *   enabled=true  → kMvdrBackup  (mode=2)
-     *   enabled=false → kBypass      (mode=0)
-     *
-     * El engine maneja internamente el re-open estéreo/mono en caliente
-     * (crossfade anti-clic + geometría de captura). NO se necesita restart.
-     */
-    private fun handleSetBeamformingMode(
-        enabled: Boolean,
-        result: MethodChannel.Result
-    ) {
-        val mode = if (enabled) 2 else 0  // 2=kMvdrBackup, 0=kBypass
-        nativeBridge.nativeSetEnhancementEngineMode(mode)
-        result.success(null)
-    }
-
-    /**
      * Actualiza las ganancias del EQ (12 bandas).
      *
      * Argumentos: { "gains": List<Double> }
@@ -1049,58 +815,6 @@ class AudioMethodChannel(
             compRatio = compRatio.toFloat(),
             attackMs = attackMs.toFloat(),
             releaseMs = releaseMs.toFloat()
-        )
-        result.success(null)
-    }
-
-    /**
-     * Configura el Expansor de baja frecuencia ≤1000 Hz (R1, spec
-     * mvdr-noise-clarity-tuning). Default OFF/ratio 1.0 → passthrough (R6.5).
-     *
-     * Argumentos: { enabled: Boolean, kneeDbSpl, ratio, cutoffHz, attackMs,
-     *               releaseMs } (todos opcionales; ausencia → default seguro).
-     */
-    private fun handleSetExpander(call: MethodCall, result: MethodChannel.Result) {
-        val enabled = call.argument<Boolean>("enabled") ?: false
-        val kneeDbSpl = (call.argument<Double>("kneeDbSpl") ?: 45.0).toFloat()
-        val ratio = (call.argument<Double>("ratio") ?: 1.0).toFloat()
-        val cutoffHz = (call.argument<Double>("cutoffHz") ?: 1000.0).toFloat()
-        val attackMs = (call.argument<Double>("attackMs") ?: 30.0).toFloat()
-        val releaseMs = (call.argument<Double>("releaseMs") ?: 400.0).toFloat()
-        nativeBridge.setExpander(enabled, kneeDbSpl, ratio, cutoffHz, attackMs, releaseMs)
-        result.success(null)
-    }
-
-    /**
-     * Configura el Supresor de reverberación tardía del MVDR (R5, spec
-     * mvdr-noise-clarity-tuning). Default = comportamiento previo (R6.5).
-     *
-     * Argumentos: { enabled: Boolean, strength, floor, decay } (opcionales).
-     */
-    private fun handleSetDereverb(call: MethodCall, result: MethodChannel.Result) {
-        val enabled = call.argument<Boolean>("enabled") ?: true
-        val strength = (call.argument<Double>("strength") ?: 1.6).toFloat()
-        val floor = (call.argument<Double>("floor") ?: 0.30).toFloat()
-        val decay = (call.argument<Double>("decay") ?: 0.80).toFloat()
-        nativeBridge.setDereverb(enabled, strength, floor, decay)
-        result.success(null)
-    }
-
-    /**
-     * Configura los umbrales del clasificador de entorno (R4, spec
-     * mvdr-noise-clarity-tuning). Default = valores previos (R6.5).
-     *
-     * Argumentos: { speechEnterDb, speechExitDb, noiseSnrDb, quietEnterDbSpl,
-     *               quietExitDbSpl } (opcionales; ausencia → default previo).
-     */
-    private fun handleSetClassifierThresholds(call: MethodCall, result: MethodChannel.Result) {
-        val speechEnterDb = (call.argument<Double>("speechEnterDb") ?: 6.0).toFloat()
-        val speechExitDb = (call.argument<Double>("speechExitDb") ?: 4.0).toFloat()
-        val noiseSnrDb = (call.argument<Double>("noiseSnrDb") ?: 1.5).toFloat()
-        val quietEnterDbSpl = (call.argument<Double>("quietEnterDbSpl") ?: 44.0).toFloat()
-        val quietExitDbSpl = (call.argument<Double>("quietExitDbSpl") ?: 49.0).toFloat()
-        nativeBridge.setClassifierThresholds(
-            speechEnterDb, speechExitDb, noiseSnrDb, quietEnterDbSpl, quietExitDbSpl
         )
         result.success(null)
     }
@@ -1787,5 +1501,95 @@ class AudioMethodChannel(
             nativeBridge.setAutoClassifyEnabled(false)
         }
         // OFF: el lado Dart reaplica nrLevel + dnnIntensity desde Settings.
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phone Call State Handler (Fix: micrófono no funciona en llamadas)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Maneja cambios en el estado de llamadas telefónicas.
+     *
+     * Durante una llamada (RINGING o OFFHOOK), **detiene el motor DSP**
+     * para liberar el micrófono (AudioRecord) que el sistema telefónico
+     * necesita. El SCO permanece activo para rutear la llamada por BT.
+     *
+     * Cuando la llamada termina (IDLE), **reinicia el motor DSP** con la
+     * última configuración guardada.
+     *
+     * Solución al bug crítico: "micrófono no funciona en llamadas con Modo
+     * Conversación" — el problema era conflicto de recursos entre el motor
+     * DSP (Oboe) y el sistema telefónico de Android compitiendo por el mismo
+     * AudioRecord.
+     *
+     * @param inCall true si hay una llamada activa o entrante, false si
+     *               terminó (IDLE).
+     */
+    private fun handlePhoneCallStateChange(inCall: Boolean) {
+        if (!conversationMode) {
+            // Si el modo conversación no está activo, no hacer nada.
+            // El motor puede seguir corriendo normal (A2DP @ 48 kHz).
+            return
+        }
+
+        val engineRunning = nativeBridge.getOutputDeviceId() >= 0
+
+        if (inCall && engineRunning && !pausedForCall) {
+            // Llamada entrante/activa + motor corriendo → PAUSAR motor DSP
+            Log.i(TAG, "Phone call detected — PAUSING DSP engine to free mic")
+            pausedForCall = true
+
+            // Liberar NoiseSuppressor
+            noiseSuppressor?.release()
+            noiseSuppressor = null
+
+            // Detener el motor para liberar el micrófono
+            nativeBridge.stop()
+
+            // El SCO permanece activo (NO llamar scoController.stop())
+            // para que la llamada se rutee por BT.
+
+            emitState("paused_for_call")
+
+        } else if (!inCall && pausedForCall) {
+            // Llamada terminada + motor pausado → REANUDAR motor DSP
+            Log.i(TAG, "Phone call ended — RESUMING DSP engine")
+            pausedForCall = false
+
+            // Reiniciar el motor con la última configuración
+            // En modo conversación: 16 kHz / 64 frames
+            val sampleRate = 16_000
+            val bufferSize = 64
+
+            nativeBridge.nativeSetConversationMode(true)
+            nativeBridge.start(
+                sampleRate = sampleRate,
+                bufferSize = bufferSize,
+                eqGains = lastEqGains,
+                volumeDb = lastVolumeDb,
+                expansionKnee = lastExpKnee,
+                expansionRatio = lastExpRatio,
+                compressionKnee = lastCompKnee,
+                compressionRatio = lastCompRatio,
+                attackMs = lastAttackMs,
+                releaseMs = lastReleaseMs,
+                nrLevel = 0, // En conversación siempre NR=0
+                mpoThresholdDbSpl = lastMpoDbSpl
+            )
+
+            // Reattach NoiseSuppressor
+            try {
+                val sessionId = nativeBridge.nativeGetInputSessionId()
+                if (sessionId > 0 && NoiseSuppressor.isAvailable()) {
+                    noiseSuppressor = NoiseSuppressor.create(sessionId)
+                    noiseSuppressor?.enabled = true
+                    Log.i(TAG, "NoiseSuppressor reattached to session $sessionId")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "NoiseSuppressor reattach failed: ${e.message}")
+            }
+
+            emitState("active")
+        }
     }
 }
