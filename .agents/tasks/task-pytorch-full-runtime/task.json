@@ -1,0 +1,7 @@
+{
+  "task_id": "task-pytorch-full-runtime",
+  "task_description": "Migrate from PyTorch Lite (mobile interpreter) to PyTorch Full runtime to resolve SIGSEGV crash in GTCRN dual-channel model on Android. The crash occurs because the model was traced with T=48000 and the lite interpreter cannot handle dynamic shapes. The full runtime's torch::jit::load() can handle the full JIT interpreter which properly executes traced models even with fixed shapes.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

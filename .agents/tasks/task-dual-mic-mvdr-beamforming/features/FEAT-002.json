@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Phase 3+4: JNI bridge (native_bridge.cpp), Kotlin bridge (NativeAudioBridge.kt + AudioMethodChannel.kt), and Dart bridge (audio_bridge.dart + audio_bridge_impl.dart) for beamforming enable/disable and status query.",
+  "status": "completed",
+  "steps": [
+    "1. Modify android/app/src/main/cpp/native_bridge.cpp: Add two new JNI functions following the existing pattern (check g_engine != nullptr, use g_running guard). Function 1: Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeSetBeamformingEnabled(JNIEnv*, jobject, jboolean enabled) - calls g_engine->setBeamformingEnabled(enabled). Function 2: Java_com_psk_hearing_1aid_1app_NativeAudioBridge_nativeGetBeamformingActive(JNIEnv*, jobject) - returns g_engine->isBeamformingActive().",
+    "2. Modify android/app/src/main/kotlin/com/psk/hearing_aid_app/NativeAudioBridge.kt: Add two external fun declarations in the 'native methods' section: 'external fun nativeSetBeamformingEnabled(enabled: Boolean)' and 'external fun nativeGetBeamformingActive(): Boolean'.",
+    "3. Modify android/app/src/main/kotlin/com/psk/hearing_aid_app/AudioMethodChannel.kt: Add two new handler cases in the onMethodCall when block: 'setBeamformingEnabled' reads call.argument<Boolean>(\"enabled\") and calls nativeBridge.nativeSetBeamformingEnabled(enabled), returns result.success(null). 'getBeamformingActive' calls nativeBridge.nativeGetBeamformingActive() and returns result.success(active).",
+    "4. Modify lib/data/bridges/audio_bridge.dart: Add two new abstract methods to the AudioBridge abstract class: 'Future<void> setBeamformingEnabled(bool enabled);' with doc comment about enabling/disabling the MVDR dual-mic beamformer, and 'Future<bool> getBeamformingActive();' with doc comment about querying whether the beamformer is active.",
+    "5. Modify lib/data/bridges/audio_bridge_impl.dart: Implement the two new methods in AudioBridgeImpl. setBeamformingEnabled invokes _methodChannel.invokeMethod<void>('setBeamformingEnabled', {'enabled': enabled}). getBeamformingActive invokes _methodChannel.invokeMethod<bool>('getBeamformingActive') and returns the result (defaulting to false if null)."
+  ],
+  "acceptance_criteria": [
+    "native_bridge.cpp contains nativeSetBeamformingEnabled and nativeGetBeamformingActive JNI functions",
+    "NativeAudioBridge.kt declares the two external fun methods",
+    "AudioMethodChannel.kt handles 'setBeamformingEnabled' and 'getBeamformingActive' method calls",
+    "audio_bridge.dart abstract class declares the two new methods",
+    "audio_bridge_impl.dart implements the two new methods using MethodChannel"
+  ],
+  "verification": [
+    "Verify JNI function signatures match the Kotlin package name mangling pattern (Java_com_psk_hearing_1aid_1app_NativeAudioBridge_)",
+    "Verify Kotlin external fun names match the JNI C function names",
+    "Verify MethodChannel method names match between Kotlin handlers and Dart invokers"
+  ],
+  "blocked_reason": null,
+  "findings": "All 5 steps completed. JNI function naming follows Java_com_psk_hearing_1aid_1app_NativeAudioBridge_ prefix with _1 escaping for underscores. Guard pattern (g_running + g_engine != nullptr) used for both functions. MethodChannel names match exactly: setBeamformingEnabled and getBeamformingActive across Kotlin handlers and Dart invokers. getBeamformingActive uses invokeMethod<bool> with null fallback to false, setBeamformingEnabled uses _safeInvokeVoid pattern (tolerates MissingPluginException). No C++ syntax check possible for native_bridge.cpp (no NDK headers), but pattern matches existing nativeSetDnnEnabled/nativeGetDnnIsActive exactly. Mock-based test classes auto-handle new abstract methods via Mockito."
+}

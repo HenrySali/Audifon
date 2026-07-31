@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Phase 1+2: Create the MVDR beamformer header-only C++ module and integrate stereo capture + beamforming into the AudioEngine. This includes: creating mvdr_beamformer.h with full MVDR algorithm (FFT, STFT, overlap-add, Rnn estimation, weight computation, steering vector), modifying audio_engine.h to add beamformingEnabled config + MvdrBeamformer member + deinterleave buffers, and modifying audio_engine.cpp to support conditional stereo capture and invoke the beamformer in onBothStreamsReady before the DNN.",
+  "status": "completed",
+  "steps": [
+    "1. Create android/app/src/main/cpp/mvdr_beamformer.h as a complete header-only implementation following the pseudocode in the spec (section 6). Include: MvdrBeamformer class with init(), setEnabled(), isEnabled(), process() methods. Internals: realFFT/realIFFT (Cooley-Tukey radix-2), processFrame (STFT+MVDR+ISTFT), updateRnn (exponential smoothing), computeMvdrWeights (2x2 matrix inversion), computeSteeringVector. Constants: kFftSize=256, kHopSize=128, kNumBins=129, kRnnAlpha=0.98, kReg=1e-6, kMicSpacing=0.14, kSoundSpeed=343. Use std::complex<float>, std::atomic<bool> for enabled_, overlap-add output buffer.",
+    "2. Modify android/app/src/main/cpp/audio_engine.h: Add '#include \"mvdr_beamformer.h\"' after the existing includes. Add 'bool beamformingEnabled = false;' field to AudioEngineConfig struct. In the private section of AudioEngine class, add: 'static constexpr int kMaxBeamBlockSize = 1024;', 'float beamCh0_[kMaxBeamBlockSize] = {};', 'float beamCh1_[kMaxBeamBlockSize] = {};', 'MvdrBeamformer mvdrBeamformer_;'. Add public methods: 'void setBeamformingEnabled(bool enabled);' and 'bool isBeamformingActive() const;'.",
+    "3. Modify android/app/src/main/cpp/audio_engine.cpp - openInputStream(): After the existing 'builder.setChannelCount(1);' line, replace it with conditional logic: if config_.beamformingEnabled, set ChannelCount(2), else set ChannelCount(1). Add fallback: if openStream fails with 2 channels, retry with 1 channel and log warning, setting a flag that stereo is unavailable.",
+    "4. Modify android/app/src/main/cpp/audio_engine.cpp - start(): After the line 'sceneAnalyzer_.init(effectiveSampleRate, config_.splOffset);', add 'mvdrBeamformer_.init(effectiveSampleRate);' and 'if (config_.beamformingEnabled) { mvdrBeamformer_.setEnabled(true); }'.",
+    "5. Modify android/app/src/main/cpp/audio_engine.cpp - onBothStreamsReady(): Replace the block that copies input to output ('std::memcpy(outPtr, inPtr, numFrames * sizeof(float));') with the deinterleave + beamforming logic from the spec section 5.5. When beamforming is enabled AND mvdrBeamformer_ is enabled, deinterleave stereo input into beamCh0_/beamCh1_, get VAD state from sceneAnalyzer_.getVad().isVoiceActive(), call mvdrBeamformer_.process(beamCh0_, beamCh1_, outPtr, numFrames, vadActive). When beamforming config is on but beamformer is disabled (bypass), extract only ch0 from interleaved. When beamforming is off (legacy mono), use memcpy as before.",
+    "6. Implement setBeamformingEnabled() and isBeamformingActive() in audio_engine.cpp: setBeamformingEnabled delegates to mvdrBeamformer_.setEnabled(enabled). isBeamformingActive returns mvdrBeamformer_.isEnabled().",
+    "7. Verify: run clang++ -std=c++17 -fsyntax-only on mvdr_beamformer.h standalone to confirm it compiles without errors."
+  ],
+  "acceptance_criteria": [
+    "mvdr_beamformer.h exists and contains the complete MVDR beamformer implementation as a header-only class",
+    "audio_engine.h includes mvdr_beamformer.h and declares the beamformer member, buffers, and config field",
+    "audio_engine.cpp conditionally opens stereo input when beamformingEnabled=true",
+    "audio_engine.cpp onBothStreamsReady deinterleaves stereo and invokes the beamformer before DNN",
+    "Fallback to mono capture if stereo fails",
+    "beamformingEnabled defaults to false (retrocompatible)",
+    "clang++ -std=c++17 -fsyntax-only passes on mvdr_beamformer.h"
+  ],
+  "verification": [
+    "clang++ -std=c++17 -fsyntax-only android/app/src/main/cpp/mvdr_beamformer.h"
+  ],
+  "blocked_reason": null,
+  "findings": "All 7 steps completed successfully. mvdr_beamformer.h passes clang++ -std=c++17 -fsyntax-only standalone. Added stereoInputAvailable_ flag for robust fallback detection. Fixed SceneAnalyzer, ToneAnalyzer, and DiagnosticRecorder to use mono reference channel (beamCh0_) when in stereo mode. Diagnostic log now uses outPtr (post-beamforming mono) for peak measurement consistency."
+}

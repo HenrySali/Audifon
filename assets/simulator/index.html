@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador DSP — Audífono Digital V2</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🦻 Simulador DSP — Audífono Digital V2</h1>
+            <p class="subtitle">Procesamiento de audio en tiempo real con Web Audio API</p>
+            <button class="theme-toggle" id="theme-toggle" title="Cambiar tema">
+                <span id="theme-icon">☀️</span>
+                <span class="theme-toggle-label" id="theme-label">Claro</span>
+            </button>
+        </header>
+
+        <!-- Sección: Carga de Audio -->
+        <section class="card" id="audio-section">
+            <h2>1. Cargar Audio</h2>
+            <div class="upload-area" id="drop-zone">
+                <input type="file" id="file-input" accept=".wav,.mp3,.ogg,.flac" hidden>
+                <div class="upload-content">
+                    <span class="upload-icon">📁</span>
+                    <p>Arrastrá un archivo de audio aquí o <button id="browse-btn" class="link-btn">buscá en tu PC</button></p>
+                    <p class="hint">Formatos: WAV, MP3, OGG, FLAC</p>
+                </div>
+            </div>
+            <div id="file-info" class="file-info hidden">
+                <span id="file-name"></span>
+                <span id="file-duration"></span>
+                <button id="remove-file" class="btn-small btn-danger">✕</button>
+            </div>
+        </section>
+
+        <!-- Sección: Audiograma -->
+        <section class="card" id="audiogram-section">
+            <h2>2. Audiograma del Paciente</h2>
+            <p class="description">Ingresá los umbrales auditivos (dB HL) obtenidos de la audiometría:</p>
+            
+            <div class="prescription-selector">
+                <label>Método de prescripción:</label>
+                <select id="prescription-method">
+                    <option value="halfGain">Half-Gain Rule (simple)</option>
+                    <option value="nalNL2">NAL-NL2 (clínico)</option>
+                </select>
+                <button id="btn-calculate" class="btn btn-primary">Calcular Ganancias</button>
+            </div>
+
+            <div class="audiogram-grid" id="audiogram-sliders">
+                <!-- Se genera dinámicamente -->
+            </div>
+
+            <div class="presets">
+                <label>Presets:</label>
+                <button class="btn btn-small" data-preset="normal">Audición Normal</button>
+                <button class="btn btn-small" data-preset="mild">Pérdida Leve</button>
+                <button class="btn btn-small" data-preset="moderate">Pérdida Moderada</button>
+                <button class="btn btn-small" data-preset="severe">Pérdida Severa</button>
+                <button class="btn btn-small" data-preset="highfreq">Presbiacusia</button>
+                <button class="btn btn-small" data-preset="from1k">Pérdida desde 1kHz</button>
+                <button class="btn btn-small" data-preset="flat">Pérdida Plana</button>
+            </div>
+
+            <div class="presets" style="margin-top: 8px;">
+                <label>Diagnósticos clínicos:</label>
+                <button class="btn btn-small btn-primary" data-diagnosis="child-mild-hf">👶 Niño — Leve HF</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="child-moderate">👶 Niño — Moderada</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="child-mild-flat">👶 Niño — Leve Plana</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="child-profound">👶 Niño — Profunda</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="child-reverse-slope">👶 Niño — Ascendente</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="adult-hf-abrupt">🧑 Adulto — Caída Abrupta 1kHz</button>
+            </div>
+            <div class="presets" style="margin-top: 4px;">
+                <label></label>
+                <button class="btn btn-small btn-primary" data-diagnosis="adult-presbycusis">👴 Adulto — Presbiacusia</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="adult-severe-flat">👴 Adulto — Severa Plana</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="adult-moderate-descending">👴 Adulto — Mod-Severa</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="adult-cookie-bite">👴 Adulto — Cookie Bite</button>
+                <button class="btn btn-small btn-primary" data-diagnosis="adult-mild-unilateral">👴 Adulto — Leve Unilateral</button>
+            </div>
+
+            <div id="active-config-indicator" style="margin-top: 10px; padding: 8px 12px; border-radius: 6px; background: var(--bg-card); border: 1px solid var(--border); display: none;">
+                <span style="font-size: 0.85em; color: var(--text-secondary);">Configuración activa:</span>
+                <strong id="active-config-name" style="margin-left: 6px; color: var(--accent);"></strong>
+                <span id="active-config-method" style="margin-left: 10px; font-size: 0.8em; color: var(--text-secondary);"></span>
+            </div>
+        </section>
+
+        <!-- Sección: Ecualizador -->
+        <section class="card" id="eq-section">
+            <h2>3. Ecualizador — Ganancia por Banda</h2>
+            <p class="description">Ganancias calculadas (ajustables manualmente):</p>
+            
+            <div class="eq-grid" id="eq-sliders">
+                <!-- Se genera dinámicamente -->
+            </div>
+
+            <div class="eq-controls">
+                <button id="btn-reset-eq" class="btn btn-small">Reset a 0 dB</button>
+                <span class="eq-info" id="eq-total-info"></span>
+            </div>
+        </section>
+
+        <!-- Sección: Parámetros DSP -->
+        <section class="card" id="dsp-section">
+            <h2>4. Parámetros DSP</h2>
+            <div class="dsp-params">
+                <div class="param-group">
+                    <label>Perfil de Entorno:</label>
+                    <select id="env-profile">
+                        <option value="quiet">Quiet (silencioso)</option>
+                        <option value="conversation" selected>Conversation (diálogo)</option>
+                        <option value="noisy">Noisy (ruidoso)</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <label>Reducción de Ruido:</label>
+                    <select id="nr-level">
+                        <option value="0">Off</option>
+                        <option value="1">Mild (suave)</option>
+                        <option value="2">Moderate</option>
+                        <option value="3">Strong (fuerte)</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <label>Compresión (WDRC):</label>
+                    <select id="wdrc-ratio">
+                        <option value="1.0">1:1 (sin compresión)</option>
+                        <option value="1.5">1.5:1 (suave)</option>
+                        <option value="2.0" selected>2:1 (moderada)</option>
+                        <option value="2.5">2.5:1 (moderada-fuerte)</option>
+                        <option value="3.0">3:1 (fuerte)</option>
+                        <option value="3.5">3.5:1 (muy fuerte)</option>
+                        <option value="4.0">4:1 (máxima)</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <label>Feedback Cancel:</label>
+                    <select id="feedback-cancel">
+                        <option value="1">ON (audífono real)</option>
+                        <option value="0" selected>OFF (prueba con archivo)</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <label>MPO Threshold:</label>
+                    <select id="mpo-threshold">
+                        <option value="90">90 dB SPL (niños)</option>
+                        <option value="95">95 dB SPL</option>
+                        <option value="100">100 dB SPL</option>
+                        <option value="105">105 dB SPL (estándar)</option>
+                        <option value="110" selected>110 dB SPL (máximo)</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <label>Volumen Maestro:</label>
+                    <input type="range" id="master-volume" min="-20" max="10" value="0" step="1">
+                    <span id="master-volume-val">0 dB</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sección: Reproducción -->
+        <section class="card" id="playback-section">
+            <h2>5. Reproducción</h2>
+            <div class="player-controls">
+                <div class="player-group">
+                    <h3>🔇 Original (sin audífono)</h3>
+                    <button id="btn-play-original" class="btn btn-large" disabled>▶ Reproducir Original</button>
+                </div>
+                <div class="player-group">
+                    <h3>🔊 Procesado (con audífono)</h3>
+                    <button id="btn-play-processed" class="btn btn-large btn-success" disabled>▶ Reproducir Procesado</button>
+                </div>
+                <div class="player-group">
+                    <button id="btn-stop" class="btn btn-large btn-danger" disabled>⏹ Detener</button>
+                </div>
+            </div>
+            <div class="progress-bar hidden" id="progress-container">
+                <div class="progress" id="progress-bar"></div>
+                <span id="progress-time">0:00 / 0:00</span>
+            </div>
+        </section>
+
+        <!-- Sección: Reporte -->
+        <section class="card" id="report-section">
+            <h2>6. Reporte de Procesamiento <button id="btn-copy-report" class="btn btn-small" style="margin-left:12px;" title="Copiar reporte al portapapeles">📋 Copiar</button></h2>
+            <div id="report-content" class="report">
+                <p class="hint">Procesá un audio para ver el reporte.</p>
+            </div>
+        </section>
+
+        <!-- Sección: Calibración ANSI S3.22 -->
+        <section class="card" id="calibration-section">
+            <h2>7. Calibración ANSI S3.22</h2>
+            <p class="description">Simulación de auto-calibración: detecta degradación de hardware y calcula compensación automática.</p>
+
+            <div class="calib-controls">
+                <div class="param-group">
+                    <label>Perfil de Degradación:</label>
+                    <select id="calib-profile">
+                        <option value="none">Sin degradación (nuevo)</option>
+                        <option value="receiver_aging">Envejecimiento del receptor</option>
+                        <option value="mic_drift">Deriva del micrófono</option>
+                        <option value="battery_degradation">Degradación de batería</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <label>Intensidad:</label>
+                    <input type="range" id="calib-intensity" min="0" max="200" value="100" step="10">
+                    <span id="calib-intensity-val">1.0×</span>
+                </div>
+                <div class="param-group">
+                    <button id="btn-run-selfcheck" class="btn btn-primary">▶ Ejecutar Self-Check</button>
+                    <button id="btn-reset-degradation" class="btn btn-small">Reset</button>
+                </div>
+            </div>
+
+            <!-- Resultado del Self-Check -->
+            <div id="calib-result" class="calib-result hidden">
+                <div class="calib-di-display">
+                    <div class="di-gauge">
+                        <div class="di-fill" id="di-fill"></div>
+                    </div>
+                    <div class="di-info">
+                        <span class="di-value" id="di-value">0.0%</span>
+                        <span class="di-label" id="di-label">Sin degradación</span>
+                    </div>
+                </div>
+
+                <div class="calib-metrics">
+                    <div class="metric">
+                        <span class="metric-label">HFA-OSPL90</span>
+                        <span class="metric-value" id="metric-ospl90">—</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">HFA-FOG</span>
+                        <span class="metric-value" id="metric-fog">—</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">EIN</span>
+                        <span class="metric-value" id="metric-ein">—</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">THD (1kHz)</span>
+                        <span class="metric-value" id="metric-thd">—</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Batería</span>
+                        <span class="metric-value" id="metric-battery">—</span>
+                    </div>
+                </div>
+
+                <!-- Gráfico de compensación por banda -->
+                <div class="calib-compensation">
+                    <h3>Curva de Compensación (por banda)</h3>
+                    <div class="comp-bars" id="comp-bars">
+                        <!-- Se genera dinámicamente -->
+                    </div>
+                    <div class="comp-legend">
+                        <span class="legend-item"><span class="legend-color" style="background:#4CAF50"></span> Compensación aplicada</span>
+                        <span class="legend-item"><span class="legend-color" style="background:#FF9800"></span> Limitada a 10 dB</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <!-- Sección: Exportar Configuración DSP -->
+        <section class="card" id="export-section">
+            <h2>8. Exportar Configuración DSP</h2>
+            <p class="description">Exportá la configuración actual del pipeline DSP para uso en herramientas externas de simulación y análisis.</p>
+
+            <div class="export-controls">
+                <div class="param-group">
+                    <label for="export-format">Formato de exportación:</label>
+                    <select id="export-format">
+                        <option value="matlab">Matlab (.m)</option>
+                        <option value="json">JSON (.json)</option>
+                        <option value="simulink">Simulink (.m)</option>
+                        <option value="labview">LabVIEW (.json)</option>
+                    </select>
+                </div>
+                <div class="param-group">
+                    <button id="btn-export-config" class="btn btn-primary">📥 Exportar Configuración</button>
+                </div>
+            </div>
+
+            <div id="export-status" class="export-status hidden"></div>
+        </section>
+
+        <!-- Sección: Modo Tiempo Real -->
+        <section class="card" id="realtime-section">
+            <h2>9. Modo Tiempo Real</h2>
+            <p class="description">Captura audio del micrófono y aplica el pipeline DSP en vivo. Usá auriculares para evitar retroalimentación.</p>
+
+            <div class="dsp-params" style="margin-bottom: 12px;">
+                <div class="param-group">
+                    <label for="mic-selector">Micrófono de entrada:</label>
+                    <select id="mic-selector">
+                        <option value="">Predeterminado del sistema</option>
+                    </select>
+                    <button id="btn-refresh-mics" class="btn btn-small" title="Actualizar lista de micrófonos">🔄</button>
+                </div>
+                <p class="hint" style="margin-top:4px; font-size:0.8em;">💡 Si usás auriculares BT, seleccioná el micrófono del celular para capturar sonido externo y escucharlo amplificado en los auriculares.</p>
+            </div>
+
+            <div class="player-controls">
+                <button id="btn-realtime" class="btn btn-primary">Modo Tiempo Real</button>
+                <button id="btn-bypass" class="btn" disabled>Bypass</button>
+                <button id="btn-record" class="btn" disabled>🔴 Grabar</button>
+                <span id="record-duration" style="display:none; margin-left:8px; font-family:monospace; font-size:0.9em;">0:00</span>
+            </div>
+
+            <div id="level-meter-container"></div>
+
+            <!-- Reporte de procesamiento en tiempo real -->
+            <div id="realtime-report" class="report" style="display:none; margin-top:12px; font-family:monospace; font-size:0.85em; line-height:1.6; padding:12px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                    <div><strong>📥 Entrada:</strong> <span id="rt-input-level">— dB SPL</span></div>
+                    <div><strong>📤 Salida:</strong> <span id="rt-output-level">— dBFS</span></div>
+                    <div><strong>📈 Ganancia:</strong> <span id="rt-gain">— dB</span></div>
+                    <div><strong>🔊 Volumen:</strong> <span id="rt-volume">0 dB</span></div>
+                    <div><strong>🎚️ WDRC:</strong> <span id="rt-wdrc-state">—</span></div>
+                    <div><strong>🛡️ MPO:</strong> <span id="rt-mpo-state">Inactivo</span></div>
+                    <div><strong>🔇 NR:</strong> <span id="rt-nr-state">Off</span></div>
+                    <div><strong>⏱️ Latencia:</strong> <span id="rt-latency">—</span></div>
+                </div>
+                <div style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px;">
+                    <strong>EQ Ganancias:</strong> <span id="rt-eq-gains" style="font-size:0.8em;">—</span>
+                </div>
+            </div>
+
+            <p id="realtime-status" class="status-message"></p>
+            <span id="realtime-overload" style="display:none;">⚠️ Procesamiento reducido</span>
+        </section>
+    </div>
+
+    <script src="dsp-engine-browser.js"></script>
+    <script src="app.js"></script>
+    <script src="calibration-ui.js"></script>
+    <script src="dsp-config-export.js"></script>
+    <script src="level-meter.js"></script>
+    <script src="realtime-module.js"></script>
+    <script src="realtime-recorder.js"></script>
+    <script>
+    // --- Export Section: Event Handlers & Status Display ---
+    (function() {
+        'use strict';
+
+        var btnExport = document.getElementById('btn-export-config');
+        var selectFormat = document.getElementById('export-format');
+        var statusEl = document.getElementById('export-status');
+        var hideTimer = null;
+
+        /**
+         * Muestra un mensaje de estado en #export-status.
+         * @param {string} message - Texto a mostrar
+         * @param {'success'|'error'} type - Tipo de mensaje
+         */
+        function showExportStatus(message, type) {
+            if (hideTimer) {
+                clearTimeout(hideTimer);
+                hideTimer = null;
+            }
+            statusEl.textContent = message;
+            statusEl.className = 'export-status export-status--' + type;
+            statusEl.classList.remove('hidden');
+
+            // Auto-hide después de 8 segundos
+            hideTimer = setTimeout(function() {
+                statusEl.classList.add('hidden');
+                hideTimer = null;
+            }, 8000);
+        }
+
+        btnExport.addEventListener('click', function() {
+            var selectedFormat = selectFormat.value;
+
+            // Verificar que DspConfigExport esté disponible
+            if (typeof DspConfigExport === 'undefined' || typeof DspConfigExport.exportConfig !== 'function') {
+                showExportStatus('Error: módulo de exportación no disponible.', 'error');
+                return;
+            }
+
+            try {
+                var result = DspConfigExport.exportConfig(selectedFormat);
+
+                if (result && result.success) {
+                    showExportStatus(
+                        '✓ Configuración exportada exitosamente como ' + (result.filename || selectedFormat),
+                        'success'
+                    );
+                } else if (result && result.error) {
+                    showExportStatus('✗ ' + result.error, 'error');
+                } else {
+                    showExportStatus('✓ Exportación completada.', 'success');
+                }
+            } catch (err) {
+                showExportStatus('✗ Error al exportar: ' + err.message, 'error');
+            }
+        });
+    })();
+    </script>
+    <script>
+    // --- Realtime Mode: Event Handlers & Wiring ---
+    (function() {
+        'use strict';
+
+        var btnRealtime = document.getElementById('btn-realtime');
+        var btnBypass = document.getElementById('btn-bypass');
+        var btnRecord = document.getElementById('btn-record');
+        var recordDuration = document.getElementById('record-duration');
+        var statusEl = document.getElementById('realtime-status');
+        var overloadEl = document.getElementById('realtime-overload');
+        var meterContainer = document.getElementById('level-meter-container');
+
+        // Check browser compatibility
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.AudioWorkletNode) {
+            btnRealtime.disabled = true;
+            btnRealtime.setAttribute('aria-disabled', 'true');
+            statusEl.textContent = 'Tu navegador no soporta captura de audio en tiempo real.';
+            statusEl.style.color = 'var(--error, #e74c3c)';
+            return;
+        }
+
+        // Initialize LevelMeter
+        if (window.LevelMeter && meterContainer) {
+            LevelMeter.init(meterContainer);
+        }
+
+        /**
+         * Format seconds as M:SS string.
+         * @param {number} sec
+         * @returns {string}
+         */
+        function formatDuration(sec) {
+            var m = Math.floor(sec / 60);
+            var s = Math.floor(sec % 60);
+            return m + ':' + (s < 10 ? '0' : '') + s;
+        }
+
+        /**
+         * Update record button UI based on recording state.
+         * @param {boolean} recording
+         */
+        function updateRecordUI(recording) {
+            if (recording) {
+                btnRecord.textContent = '⏹ Detener Grabación';
+                btnRecord.classList.add('active');
+                recordDuration.style.display = 'inline';
+            } else {
+                btnRecord.textContent = '🔴 Grabar';
+                btnRecord.classList.remove('active');
+                recordDuration.style.display = 'none';
+                recordDuration.textContent = '0:00';
+            }
+        }
+
+        // Wire RealtimeRecorder callbacks
+        if (window.RealtimeRecorder) {
+            RealtimeRecorder.onDurationUpdate = function(elapsed) {
+                recordDuration.textContent = formatDuration(elapsed);
+            };
+
+            RealtimeRecorder.onRecordingComplete = function(duration) {
+                updateRecordUI(false);
+            };
+        }
+
+        // State change handler
+        if (window.RealtimeModule) {
+            RealtimeModule.onStateChange = function(state) {
+                switch (state) {
+                    case 'requesting':
+                        btnRealtime.textContent = 'Conectando...';
+                        btnRealtime.disabled = true;
+                        btnRecord.disabled = true;
+                        statusEl.textContent = 'Solicitando acceso al micrófono...';
+                        statusEl.style.color = '';
+                        break;
+                    case 'active':
+                        btnRealtime.textContent = 'Detener Tiempo Real';
+                        btnRealtime.disabled = false;
+                        btnRealtime.classList.add('active');
+                        btnBypass.disabled = false;
+                        btnRecord.disabled = false;
+                        statusEl.textContent = 'Procesando audio en tiempo real';
+                        statusEl.style.color = 'var(--success, #27ae60)';
+                        break;
+                    case 'error':
+                        btnRealtime.textContent = 'Modo Tiempo Real';
+                        btnRealtime.disabled = false;
+                        btnRealtime.classList.remove('active');
+                        btnBypass.disabled = true;
+                        btnRecord.disabled = true;
+                        statusEl.style.color = 'var(--error, #e74c3c)';
+                        // Auto-stop recording if active
+                        if (window.RealtimeRecorder && RealtimeRecorder.isRecording()) {
+                            RealtimeRecorder.stopRecording();
+                            updateRecordUI(false);
+                        }
+                        break;
+                    case 'idle':
+                        btnRealtime.textContent = 'Modo Tiempo Real';
+                        btnRealtime.disabled = false;
+                        btnRealtime.classList.remove('active');
+                        btnBypass.disabled = true;
+                        btnBypass.classList.remove('active');
+                        btnRecord.disabled = true;
+                        statusEl.textContent = '';
+                        overloadEl.style.display = 'none';
+                        if (window.LevelMeter) LevelMeter.reset();
+                        // Ocultar reporte de tiempo real
+                        var rtRep = document.getElementById('realtime-report');
+                        if (rtRep) rtRep.style.display = 'none';
+                        // Auto-stop recording if active
+                        if (window.RealtimeRecorder && RealtimeRecorder.isRecording()) {
+                            RealtimeRecorder.stopRecording();
+                            updateRecordUI(false);
+                        }
+                        break;
+                }
+            };
+
+            RealtimeModule.onError = function(msg) {
+                statusEl.textContent = msg;
+                statusEl.style.color = 'var(--error, #e74c3c)';
+            };
+
+            RealtimeModule.onLevels = function(inputRms, outputRms) {
+                if (window.LevelMeter) LevelMeter.update(inputRms, outputRms);
+
+                // Actualizar reporte de procesamiento en tiempo real
+                var rtReport = document.getElementById('realtime-report');
+                if (rtReport && RealtimeModule.state === 'active') {
+                    rtReport.style.display = 'block';
+
+                    // Calcular niveles en dB
+                    var SPL_OFFSET = 76; // offset para browser mic
+                    var inputDbFs = inputRms > 1e-10 ? 20 * Math.log10(inputRms) : -100;
+                    var outputDbFs = outputRms > 1e-10 ? 20 * Math.log10(outputRms) : -100;
+                    var inputSpl = inputDbFs + SPL_OFFSET;
+                    var gainDb = outputDbFs - inputDbFs;
+
+                    document.getElementById('rt-input-level').textContent = inputSpl.toFixed(1) + ' dB SPL';
+                    document.getElementById('rt-output-level').textContent = (outputDbFs + SPL_OFFSET).toFixed(1) + ' dB SPL';
+                    document.getElementById('rt-gain').textContent = (gainDb > 0 ? '+' : '') + gainDb.toFixed(1) + ' dB';
+
+                    // Volumen
+                    var vol = window.currentMasterVolumeDb || 0;
+                    document.getElementById('rt-volume').textContent = (vol >= 0 ? '+' : '') + vol + ' dB';
+
+                    // Estado WDRC
+                    var wdrcRatio = window.currentWdrcRatio || 2.0;
+                    var expKnee = 35, compKnee = 50;
+                    var wdrcState = 'Lineal';
+                    if (inputSpl < expKnee) wdrcState = 'Expansión ↓';
+                    else if (inputSpl > compKnee) wdrcState = 'Compresión (' + wdrcRatio + ':1)';
+                    document.getElementById('rt-wdrc-state').textContent = wdrcState;
+
+                    // Estado MPO
+                    var mpoThresh = window.currentMpoThreshold || 110;
+                    var mpoActive = outputDbFs > (mpoThresh - SPL_OFFSET - 3);
+                    document.getElementById('rt-mpo-state').textContent = mpoActive ? '⚠️ LIMITANDO' : 'Inactivo';
+                    document.getElementById('rt-mpo-state').style.color = mpoActive ? '#e74c3c' : '';
+
+                    // NR
+                    var nrSel = document.getElementById('nr-level');
+                    var nrLabels = ['Off', 'Mild', 'Moderate', 'Strong'];
+                    document.getElementById('rt-nr-state').textContent = nrLabels[nrSel ? parseInt(nrSel.value) : 0] || 'Off';
+
+                    // Latencia estimada
+                    var ctx = RealtimeModule.audioContext;
+                    if (ctx) {
+                        var blockMs = (128 / ctx.sampleRate * 1000).toFixed(1);
+                        document.getElementById('rt-latency').textContent = '~' + (parseFloat(blockMs) * 2).toFixed(1) + ' ms';
+                    }
+
+                    // EQ gains
+                    var eqGains = window.currentEqGains || [];
+                    if (eqGains.length >= 12) {
+                        var freqs = ['250','500','750','1k','1.5k','2k','2.5k','3k','3.5k','4k','6k','8k'];
+                        var eqStr = eqGains.map(function(g, i) { return freqs[i] + ':' + (g > 0 ? '+' : '') + g.toFixed(0); }).join(' | ');
+                        document.getElementById('rt-eq-gains').textContent = eqStr;
+                    }
+                }
+            };
+
+            RealtimeModule.onOverload = function(consecutive) {
+                overloadEl.style.display = consecutive >= 3 ? 'inline' : 'none';
+            };
+        }
+
+        // Start/Stop button
+        btnRealtime.addEventListener('click', function() {
+            if (!window.RealtimeModule) return;
+            if (RealtimeModule.state === 'active') {
+                RealtimeModule.stop();
+            } else if (RealtimeModule.state === 'idle') {
+                RealtimeModule.start();
+            }
+        });
+
+        // Bypass button
+        btnBypass.addEventListener('click', function() {
+            if (!window.RealtimeModule) return;
+            RealtimeModule.toggleBypass();
+            btnBypass.classList.toggle('active', RealtimeModule.bypassActive);
+            btnBypass.textContent = RealtimeModule.bypassActive ? 'Bypass ON' : 'Bypass';
+        });
+
+        // Record button
+        btnRecord.addEventListener('click', function() {
+            if (!window.RealtimeRecorder) return;
+
+            if (RealtimeRecorder.isRecording()) {
+                // Stop recording
+                RealtimeRecorder.stopRecording();
+                updateRecordUI(false);
+            } else {
+                // Start recording
+                var started = RealtimeRecorder.startRecording();
+                if (started) {
+                    updateRecordUI(true);
+                }
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (window.RealtimeRecorder && RealtimeRecorder.isRecording()) {
+                RealtimeRecorder.stopRecording();
+            }
+            if (window.RealtimeModule) RealtimeModule.destroy();
+        });
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'hidden' && window.RealtimeModule && RealtimeModule.state === 'active') {
+                RealtimeModule.stop();
+            }
+        });
+
+        // --- Mic Selector ---
+        var micSelector = document.getElementById('mic-selector');
+        var btnRefreshMics = document.getElementById('btn-refresh-mics');
+
+        function populateMicSelector() {
+            if (!window.RealtimeModule) return;
+            RealtimeModule.enumerateMicrophones().then(function(mics) {
+                // Keep the default option
+                micSelector.innerHTML = '<option value="">Predeterminado del sistema</option>';
+                mics.forEach(function(mic) {
+                    var opt = document.createElement('option');
+                    opt.value = mic.deviceId;
+                    opt.textContent = mic.label;
+                    micSelector.appendChild(opt);
+                });
+                // Restore selection if previously set
+                if (RealtimeModule.preferredMicId) {
+                    micSelector.value = RealtimeModule.preferredMicId;
+                }
+            });
+        }
+
+        micSelector.addEventListener('change', function() {
+            if (!window.RealtimeModule) return;
+            RealtimeModule.setMicrophone(micSelector.value || null);
+        });
+
+        btnRefreshMics.addEventListener('click', function() {
+            populateMicSelector();
+        });
+
+        // Auto-populate on page load
+        populateMicSelector();
+    })();
+    </script>
+    <script>
+    // --- Theme Toggle ---
+    (function() {
+        var toggle = document.getElementById('theme-toggle');
+        var icon = document.getElementById('theme-icon');
+        var label = document.getElementById('theme-label');
+        var html = document.documentElement;
+
+        // Restaurar tema guardado
+        var saved = localStorage.getItem('dsp-theme');
+        if (saved === 'light') {
+            html.setAttribute('data-theme', 'light');
+            icon.textContent = '🌙';
+            label.textContent = 'Oscuro';
+        }
+
+        toggle.addEventListener('click', function() {
+            var current = html.getAttribute('data-theme');
+            if (current === 'light') {
+                html.removeAttribute('data-theme');
+                icon.textContent = '☀️';
+                label.textContent = 'Claro';
+                localStorage.setItem('dsp-theme', 'dark');
+            } else {
+                html.setAttribute('data-theme', 'light');
+                icon.textContent = '🌙';
+                label.textContent = 'Oscuro';
+                localStorage.setItem('dsp-theme', 'light');
+            }
+        });
+    })();
+    </script>
+</body>
+</html>

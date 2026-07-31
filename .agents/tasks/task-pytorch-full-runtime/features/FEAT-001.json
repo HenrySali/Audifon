@@ -1,0 +1,43 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Migrate from PyTorch Lite (mobile interpreter) to PyTorch Full runtime to resolve SIGSEGV crash caused by the lite interpreter's inability to handle dynamic shapes. Changes span build.gradle, CMakeLists.txt, dnn_denoiser.cpp, dnn_denoiser.h, audio_engine.cpp, packagingOptions, and the README.",
+  "status": "completed",
+  "steps": [
+    "1. android/app/build.gradle: Change dependency from 'org.pytorch:pytorch_android_lite:2.1.0' to 'org.pytorch:pytorch_android:2.1.0'. Update the comments to reflect this is the full runtime, not lite.",
+    "2. android/app/build.gradle packagingOptions: Change pickFirsts from '**/libpytorch_jni_lite.so' to '**/libpytorch_jni.so'. Keep the libc10 and libfbjni entries.",
+    "3. android/app/src/main/cpp/CMakeLists.txt: (a) Change the PYTORCH_JNI_SO variable from libpytorch_jni_lite.so to libpytorch_jni.so. (b) Rename HAVE_PYTORCH_LITE to HAVE_PYTORCH throughout. (c) Rename the cmake imported target from 'pytorch_jni_lite' to 'pytorch_jni'. (d) Update all target_link_libraries from pytorch_jni_lite to pytorch_jni. (e) Update all comments from 'Lite' to 'Full'. (f) Keep the --no-fatal-warnings linker workaround (same issue applies to libpytorch_jni.so from the full AAR).",
+    "4. android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp: (a) Change the #if HAVE_PYTORCH_LITE to #if HAVE_PYTORCH throughout. (b) Replace torch::jit::_load_for_mobile() with torch::jit::load() (the function is declared in torch/csrc/jit/serialization/import.h which is already included via torch/script.h). (c) Replace torch::jit::mobile::Module with torch::jit::Module (the full JIT module from torch/csrc/jit/api/module.h). (d) Remove #include <torch/csrc/jit/mobile/module.h> and #include <torch/csrc/jit/mobile/import.h> (no longer needed). (e) The full module's forward() returns IValue, same API -- keep the .toTensor() pattern. (f) In the Impl struct, change 'std::unique_ptr<torch::jit::mobile::Module> torchModule' to 'std::unique_ptr<torch::jit::Module> torchModule' (or torch::jit::Module directly since it has a default constructor). (g) Update loadTorchModule: use torch::jit::load(istream) instead of _load_for_mobile(istream). The model file can stay as .ptl (the full runtime can load both .pt and .ptl formats). (h) Update all comments from 'lite interpreter' to 'full JIT interpreter'.",
+    "5. android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.h: (a) Change all references to HAVE_PYTORCH_LITE in comments. (b) Update kDnnDualBlock from kDnnHopSize (128) to 48000 to match the T used during tracing (model was traced with torch.jit.trace(model, torch.randn(1, 2, 48000))). (c) Update the dummy forward in dnn_denoiser.h documentation from [1,2,160] to [1,2,48000]. (d) Add a comment explaining the 3-second latency tradeoff (48000 samples at 16kHz = 3 seconds) and future mitigation via torch.jit.script re-export.",
+    "6. android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp loadTorchModule(): Change the dummy forward from [1,2,160] to [1,2,48000] (must match T used during tracing). Verify expected output is [1,48000]. Update kDnnDualBlock usage throughout to reflect T=48000.",
+    "7. android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.h: Update the kDnnRingCapacity from 1024 to at least 49152 (48000 + margin) since the dual path now accumulates 48000 samples before each forward. Also update related comments about buffer sizing.",
+    "8. android/app/src/main/cpp/dnn_denoiser/pytorch_lite/README.md: Update to reference pytorch_android:2.1.0 (full, not lite). Update the .so table (libpytorch_jni.so replaces libpytorch_jni_lite.so). Add instructions for extracting from the full AAR. Note that headers are compatible (same torch/script.h and import.h provide torch::jit::load and torch::jit::Module).",
+    "9. android/app/src/main/cpp/audio_engine.cpp: Verify the model path reference 'dnn_denoiser/gtcrn_dual_mobile.ptl' is still correct (the full runtime can load .ptl files). No change needed unless the file is renamed.",
+    "10. Add a MIGRATION_NOTES.md in android/app/src/main/cpp/dnn_denoiser/ documenting: (a) Why the migration was needed (SIGSEGV with lite on dynamic shapes). (b) The T=48000 requirement and 3s latency tradeoff. (c) Future path: re-trace with torch.jit.script for dynamic shapes allowing smaller T. (d) Instructions to extract libpytorch_jni.so from the full AAR."
+  ],
+  "acceptance_criteria": [
+    "build.gradle references org.pytorch:pytorch_android:2.1.0 (not lite)",
+    "CMakeLists.txt uses libpytorch_jni.so, HAVE_PYTORCH define, and pytorch_jni imported target",
+    "dnn_denoiser.cpp uses torch::jit::load() and torch::jit::Module (no mobile:: references)",
+    "dnn_denoiser.cpp dummy forward uses T=48000 matching the traced model",
+    "kDnnDualBlock is 48000 in dnn_denoiser.h",
+    "kDnnRingCapacity is large enough to hold 48000+ samples",
+    "All HAVE_PYTORCH_LITE references are changed to HAVE_PYTORCH",
+    "packagingOptions pickFirsts uses libpytorch_jni.so",
+    "README.md is updated for the full runtime",
+    "MIGRATION_NOTES.md documents the change and future re-script path"
+  ],
+  "verification": [
+    "grep -r 'HAVE_PYTORCH_LITE' android/app/src/main/cpp/ should return 0 results",
+    "grep -r 'HAVE_PYTORCH' android/app/src/main/cpp/ should return results in CMakeLists.txt and dnn_denoiser.cpp",
+    "grep 'pytorch_android_lite' android/app/build.gradle should return 0 results",
+    "grep 'pytorch_android:2.1.0' android/app/build.gradle should return 1 result",
+    "grep 'libpytorch_jni_lite' android/app/src/main/cpp/CMakeLists.txt should return 0 results",
+    "grep 'libpytorch_jni.so' android/app/src/main/cpp/CMakeLists.txt should return results",
+    "grep '_load_for_mobile' android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp should return 0 results",
+    "grep 'torch::jit::load' android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.cpp should return results",
+    "grep 'kDnnDualBlock = 48000' android/app/src/main/cpp/dnn_denoiser/dnn_denoiser.h should return 1 result"
+  ],
+  "blocked_reason": null,
+  "findings": "All changes implemented successfully. Verification checks confirm: no HAVE_PYTORCH_LITE references remain in source (only in MIGRATION_NOTES.md as documentation), torch::jit::load and torch::jit::Module used throughout, kDnnDualBlock=48000, kDnnRingCapacity=65536, packagingOptions updated, README and MIGRATION_NOTES documented. The test file test_dnn_denoiser_dual.cpp also updated for the HAVE_PYTORCH define name change. No Android SDK in sandbox so build verification is code-level only."
+}

@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Implement WPE (Weighted Prediction Error) beamformer in C++ as a header-only module, and create a new dual-channel DNN processing path (processDualFrame) that does STFT(2ch)->WPE->GTCRN_core(ONNX)->iSTFT, replacing the LibTorch-based processStereoFrame entirely.",
+  "status": "completed",
+  "steps": [
+    "Create android/app/src/main/cpp/wpe_beamformer.h as a header-only class WpeBeamformer following the pattern of mvdr_beamformer.h. WPE for 2 mics involves: (a) computing the 2x2 spatial correlation matrix of the observation in frequency domain, (b) estimating the prediction filter coefficients via matrix inversion (2x2 complex, same analytic formula as MVDR), (c) applying the prediction filter to dereverberate/enhance the target signal. The core operation is: for each freq bin k, compute w[k] = R_xx^{-1} * r_xd (Wiener-like filter), then y[k] = w^H * X[k]. Use the same FFT infrastructure (kFftSize=512, kHopSize=128/256, Hann window) as dnn_denoiser.cpp.",
+    "The WPE beamformer should: (a) accept 2 channels of complex spectra (after STFT), (b) maintain a correlation matrix per frequency bin updated with exponential smoothing (like MVDR's Rnn), (c) produce a single-channel enhanced spectrum, (d) use the existing VAD flag to switch between noise estimation and signal pass-through. For 2x2 matrix inversion use the analytic closed-form: inv(A) = adj(A)/det(A) with regularization (same as computeMvdrWeights in mvdr_beamformer.h).",
+    "Add a new method processDualFrame() to DnnDenoiser::Impl (in dnn_denoiser.cpp) that: (a) takes 2 hops of kDnnHopSize samples (ch0 and ch1, both at 16kHz), (b) computes STFT for both channels using the existing hannWin/fftRadix2, (c) calls WpeBeamformer to get enhanced single-channel spectrum, (d) feeds the enhanced spectrum into the ONNX session (same processOneFrame logic for ONNX run with caches), (e) does iSTFT/OLA and pushes result to outputRing. This reuses the existing STFT/iSTFT/OLA code from processOneFrame() with minimal duplication.",
+    "Modify the worker thread's dual-channel path (currently calling processStereoFrame which uses LibTorch): change it to drain kDnnHopSize from both inputRing and inputRingCh1, and call processDualFrame() instead of processStereoFrame(). Change kDnnDualBlock from 48000 to kDnnHopSize (128) so the dual path operates frame-by-frame like the mono path, giving 8ms latency instead of 3-second blocks.",
+    "Update initializeDual() to load an ONNX model (gtcrn_dual_core.onnx) using the SAME OnnxRuntime session/introspection infrastructure as initialize(), instead of LibTorch. The dual model has the same interface as the mono model [1,257,1,2] + caches, so introspectModel() works unchanged. Remove all #if HAVE_PYTORCH code paths from the dual-channel logic.",
+    "Update processStereo() in dnn_denoiser.cpp: remove the separate worker notification threshold (kDnnDualBlock) and use kDnnHopSize for both mono and dual paths since they now share the same frame-based architecture.",
+    "Update dnn_denoiser.h: remove kDnnDualBlock constant (no longer needed), fix the duplicate kDnnRingCapacity definition (lines 142 and 149), reduce kDnnRingCapacity back to a smaller value since we no longer need to buffer 3 seconds (use 4096 or 8192 which is plenty for frame-by-frame at 128-sample hops)."
+  ],
+  "acceptance_criteria": [
+    "android/app/src/main/cpp/wpe_beamformer.h exists as a self-contained header-only class",
+    "WpeBeamformer processes 2-channel complex spectra and produces 1-channel enhanced spectrum",
+    "processDualFrame() in dnn_denoiser.cpp follows the same STFT->ONNX->iSTFT pattern as processOneFrame()",
+    "The dual-channel worker path uses frame-by-frame processing (kDnnHopSize=128 samples = 8ms latency)",
+    "initializeDual() loads an ONNX model via OnnxRuntime (not LibTorch)",
+    "All #if HAVE_PYTORCH blocks in the dual-channel code path are removed or replaced with ONNX equivalents",
+    "The code compiles with g++ -std=c++17 (standalone header check for wpe_beamformer.h)"
+  ],
+  "verification": [
+    "Run: g++ -std=c++17 -fsyntax-only -I/projects/sandbox/Audifon/android/app/src/main/cpp android/app/src/main/cpp/wpe_beamformer.h (syntax check)",
+    "Verify dnn_denoiser.cpp has no remaining references to torch::jit, processStereoFrame using LibTorch, or kDnnDualBlock",
+    "Verify dnn_denoiser.h no longer has duplicate kDnnRingCapacity definition"
+  ],
+  "blocked_reason": null,
+  "findings": "WPE beamformer created at android/app/src/main/cpp/wpe_beamformer.h. Passes g++ -std=c++17 -fsyntax-only. processDualFrame() added to dnn_denoiser.cpp following the same STFT->ONNX->iSTFT pattern as processOneFrame(). All LibTorch code removed from dual path. kDnnDualBlock removed, kDnnRingCapacity fixed (single definition, reduced to 4096). Worker loop now uses kDnnHopSize=128 for both mono and dual paths. CMakeLists.txt still references HAVE_PYTORCH but the define simply won't be set if .so is absent - harmless. Cannot verify full Android build (no NDK in sandbox)."
+}
