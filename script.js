@@ -6,47 +6,21 @@ let rotacionActual = 0;
 const canvas = document.getElementById('ruletaCanvas');
 const ctx = canvas.getContext('2d');
 const temaInput = document.getElementById('temaInput');
+const temasTextarea = document.getElementById('temasTextarea');
 const agregarBtn = document.getElementById('agregarBtn');
+const agregarMultiplesBtn = document.getElementById('agregarMultiplesBtn');
 const jugarBtn = document.getElementById('jugarBtn');
 const limpiarBtn = document.getElementById('limpiarBtn');
 const temasContainer = document.getElementById('temasContainer');
 const resultado = document.getElementById('resultado');
-
-// ========== TEMAS PREDETERMINADOS ==========
-const temasPredeterminados = [
-    'Matemáticas',
-    'Historia',
-    'Biología',
-    'Literatura',
-    'Geografía',
-    'Física',
-    'Química',
-    'Arte',
-    'Educación Física',
-    'Música',
-    'Informática',
-    'Inglés',
-    'Filosofía',
-    'Economía',
-    'Psicología',
-    'Sociología',
-    'Derecho',
-    'Medicina',
-    'Arquitectura',
-    'Ingeniería'
-];
 
 // ========== CARGAR TEMAS DEL LOCALSTORAGE ==========
 function cargarTemas() {
     const temasGuardados = localStorage.getItem('temas');
     if (temasGuardados) {
         temas = JSON.parse(temasGuardados);
-    } else {
-        // Si no hay temas guardados, usar los predeterminados
-        temas = [...temasPredeterminados];
-        guardarTemas();
+        actualizarUI();
     }
-    actualizarUI();
 }
 
 // ========== GUARDAR TEMAS EN LOCALSTORAGE ==========
@@ -73,6 +47,52 @@ function agregarTema() {
     temaInput.value = '';
     actualizarUI();
     temaInput.focus();
+}
+
+// ========== AGREGAR MÚLTIPLES TEMAS ==========
+function agregarMultiplesTemas() {
+    const texto = temasTextarea.value.trim();
+    
+    if (texto === '') {
+        alert('Por favor ingresa al menos un tema');
+        return;
+    }
+    
+    const nuevosTemas = texto
+        .split('\n')
+        .map(tema => tema.trim())
+        .filter(tema => tema !== '');
+    
+    if (nuevosTemas.length === 0) {
+        alert('No hay temas válidos para agregar');
+        return;
+    }
+    
+    let temasAgregados = 0;
+    let temasDuplicados = 0;
+    
+    nuevosTemas.forEach(tema => {
+        if (temas.includes(tema)) {
+            temasDuplicados++;
+        } else {
+            temas.push(tema);
+            temasAgregados++;
+        }
+    });
+    
+    if (temasAgregados > 0) {
+        guardarTemas();
+        temasTextarea.value = '';
+        actualizarUI();
+        
+        let mensaje = `✅ Se agregaron ${temasAgregados} tema${temasAgregados > 1 ? 's' : ''}`;
+        if (temasDuplicados > 0) {
+            mensaje += `\n⚠️ ${temasDuplicados} tema${temasDuplicados > 1 ? 's' : ''} ya existía${temasDuplicados > 1 ? 'n' : ''}`;
+        }
+        alert(mensaje);
+    } else {
+        alert(`❌ Los ${nuevosTemas.length} tema${nuevosTemas.length > 1 ? 's' : ''} ya existen`);
+    }
 }
 
 // ========== ELIMINAR TEMA ==========
@@ -289,6 +309,7 @@ function mostrarResultado(tema) {
 
 // ========== EVENT LISTENERS ==========
 agregarBtn.addEventListener('click', agregarTema);
+agregarMultiplesBtn.addEventListener('click', agregarMultiplesTemas);
 jugarBtn.addEventListener('click', jugar);
 limpiarBtn.addEventListener('click', limpiarTodo);
 

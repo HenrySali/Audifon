@@ -14,6 +14,8 @@
             <!-- Sección de entrada de temas -->
             <div class="input-section">
                 <h2>Agregar Temas</h2>
+                
+                <!-- Opción 1: Agregar un tema a la vez -->
                 <div class="input-group">
                     <input 
                         type="text" 
@@ -22,6 +24,17 @@
                         autocomplete="off"
                     >
                     <button id="agregarBtn" class="btn btn-agregar">+ Agregar</button>
+                </div>
+
+                <!-- Opción 2: Agregar múltiples temas -->
+                <div class="textarea-section">
+                    <label for="temasTextarea">O ingresa múltiples temas (uno por línea):</label>
+                    <textarea 
+                        id="temasTextarea" 
+                        placeholder="Tema 1&#10;Tema 2&#10;Tema 3&#10;..." 
+                        rows="6"
+                    ></textarea>
+                    <button id="agregarMultiplesBtn" class="btn btn-agregar">+ Agregar Todos</button>
                 </div>
                 
                 <div class="temas-list">

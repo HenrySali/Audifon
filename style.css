@@ -66,6 +66,39 @@ h1 {
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
+/* ========== TEXTAREA SECTION ========== */
+.textarea-section {
+    margin-top: 25px;
+    padding-top: 25px;
+    border-top: 2px solid #eee;
+}
+
+.textarea-section label {
+    display: block;
+    color: #666;
+    font-size: 0.95em;
+    margin-bottom: 10px;
+    font-weight: 500;
+}
+
+#temasTextarea {
+    width: 100%;
+    padding: 12px 15px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 1em;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    resize: vertical;
+    transition: border-color 0.3s;
+    margin-bottom: 10px;
+}
+
+#temasTextarea:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
 /* ========== BOTONES ========== */
 .btn {
     padding: 12px 20px;
