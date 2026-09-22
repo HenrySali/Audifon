@@ -3,6 +3,7 @@ let temas = [];
 let girando = false;
 let rotacionActual = 0;
 
+// ========== ELEMENTOS DEL DOM ==========
 const canvas = document.getElementById('ruletaCanvas');
 const ctx = canvas.getContext('2d');
 const temasInput = document.getElementById('temasInput');
@@ -35,21 +36,15 @@ function agregarTema() {
         return;
     }
     
-    // Dividir por saltos de línea Y comas
+    // Dividir por saltos de línea
     let nuevosTemas = [];
-    
-    // Primero dividir por saltos de línea
     const porLineas = texto.split('\n');
     
     porLineas.forEach(linea => {
-        // Luego dividir cada línea por comas
-        const porComas = linea.split(',');
-        porComas.forEach(tema => {
-            const temaLimpio = tema.trim();
-            if (temaLimpio !== '') {
-                nuevosTemas.push(temaLimpio);
-            }
-        });
+        const temaLimpio = linea.trim();
+        if (temaLimpio !== '') {
+            nuevosTemas.push(temaLimpio);
+        }
     });
     
     if (nuevosTemas.length === 0) {
@@ -106,7 +101,7 @@ function limpiarTodo() {
         guardarTemas();
         actualizarUI();
         resultado.className = 'resultado';
-        resultado.innerHTML = '<p>Presiona JUGAR para seleccionar un tema</p>';
+        resultado.innerHTML = '<p>Agrega temas y presiona JUGAR</p>';
     }
 }
 
@@ -304,12 +299,11 @@ function mostrarResultado(tema) {
 
 // ========== EVENT LISTENERS ==========
 agregarBtn.addEventListener('click', agregarTema);
-agregarMultiplesBtn.addEventListener('click', agregarMultiplesTemas);
 jugarBtn.addEventListener('click', jugar);
 limpiarBtn.addEventListener('click', limpiarTodo);
 
-// Permitir agregar tema con Enter
-temaInput.addEventListener('keypress', (e) => {
+// Permitir agregar temas con Enter
+temasInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
         agregarTema();
     }
