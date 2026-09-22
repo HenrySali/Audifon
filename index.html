@@ -10,12 +10,17 @@
     <div class="container">
         <h1>🎡 Ruleta de Temas</h1>
         
-        <div class="content-wrapper">
-            <!-- Sección de entrada de temas -->
-            <div class="input-section">
-                <h2>Agregar Temas</h2>
-                
-                <!-- Opción 1: Agregar un tema a la vez -->
+        <!-- Sección de entrada de temas -->
+        <div class="input-section">
+            <h2>Agregar Temas</h2>
+            
+            <div class="input-tabs">
+                <button class="tab-btn active" data-tab="single">Un Tema</button>
+                <button class="tab-btn" data-tab="multiple">Múltiples Temas</button>
+            </div>
+
+            <!-- Pestaña 1: Un tema -->
+            <div id="single-tab" class="tab-content active">
                 <div class="input-group">
                     <input 
                         type="text" 
@@ -25,38 +30,40 @@
                     >
                     <button id="agregarBtn" class="btn btn-agregar">+ Agregar</button>
                 </div>
-
-                <!-- Opción 2: Agregar múltiples temas -->
-                <div class="textarea-section">
-                    <label for="temasTextarea">O ingresa múltiples temas (uno por línea):</label>
-                    <textarea 
-                        id="temasTextarea" 
-                        placeholder="Tema 1&#10;Tema 2&#10;Tema 3&#10;..." 
-                        rows="6"
-                    ></textarea>
-                    <button id="agregarMultiplesBtn" class="btn btn-agregar">+ Agregar Todos</button>
-                </div>
-                
-                <div class="temas-list">
-                    <h3>Temas Agregados:</h3>
-                    <div id="temasContainer" class="temas-container">
-                        <p class="vacio">No hay temas aún. ¡Agrega uno!</p>
-                    </div>
-                </div>
             </div>
 
-            <!-- Sección de la ruleta -->
-            <div class="ruleta-section">
-                <div class="ruleta-wrapper">
-                    <div class="aguja"></div>
-                    <canvas id="ruletaCanvas" width="400" height="400"></canvas>
+            <!-- Pestaña 2: Múltiples temas -->
+            <div id="multiple-tab" class="tab-content">
+                <p class="tab-info">Pega o escribe tus temas (uno por línea). Máximo 60 temas.</p>
+                <textarea 
+                    id="temasTextarea" 
+                    placeholder="Tema 1&#10;Tema 2&#10;Tema 3&#10;Tema 4&#10;..." 
+                    rows="8"
+                ></textarea>
+                <button id="agregarMultiplesBtn" class="btn btn-agregar" style="width: 100%; margin-top: 10px;">✓ Agregar Todos</button>
+            </div>
+
+            <!-- Lista de temas -->
+            <div class="temas-list">
+                <h3>Temas Agregados (<span id="temaCount">0</span>):</h3>
+                <div id="temasContainer" class="temas-container">
+                    <p class="vacio">No hay temas aún. ¡Agrega uno!</p>
                 </div>
-                
-                <button id="jugarBtn" class="btn btn-jugar" disabled>🎲 JUGAR</button>
-                
-                <div id="resultado" class="resultado">
-                    <p>Presiona JUGAR para seleccionar un tema</p>
-                </div>
+            </div>
+        </div>
+
+        <!-- Sección de la ruleta -->
+        <div class="ruleta-section">
+            <h2>Tu Ruleta</h2>
+            <div class="ruleta-wrapper">
+                <div class="aguja"></div>
+                <canvas id="ruletaCanvas" width="400" height="400"></canvas>
+            </div>
+            
+            <button id="jugarBtn" class="btn btn-jugar" disabled>🎲 JUGAR</button>
+            
+            <div id="resultado" class="resultado">
+                <p>Agrega temas y presiona JUGAR</p>
             </div>
         </div>
 

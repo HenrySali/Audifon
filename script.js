@@ -134,6 +134,9 @@ function actualizarUI() {
         jugarBtn.disabled = false;
     }
     
+    // Actualizar contador
+    document.getElementById('temaCount').textContent = temas.length;
+    
     // Redibujar ruleta
     dibujarRuleta();
 }
@@ -322,3 +325,20 @@ temaInput.addEventListener('keypress', (e) => {
 
 // ========== INICIALIZAR ==========
 cargarTemas();
+
+// ========== FUNCIONALIDAD DE TABS ==========
+const tabButtons = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+tabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        // Remover clase active de todos
+        tabButtons.forEach(b => b.classList.remove('active'));
+        tabContents.forEach(content => content.classList.remove('active'));
+        
+        // Agregar clase active al tab clickeado
+        btn.classList.add('active');
+        const tabId = btn.getAttribute('data-tab') + '-tab';
+        document.getElementById(tabId).classList.add('active');
+    });
+});

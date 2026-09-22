@@ -19,36 +19,88 @@ body {
     border-radius: 20px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
     padding: 40px;
-    max-width: 1200px;
+    max-width: 1000px;
     width: 100%;
 }
 
 h1 {
     text-align: center;
     color: #333;
-    margin-bottom: 40px;
+    margin-bottom: 30px;
     font-size: 2.5em;
     text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.content-wrapper {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 40px;
-    margin-bottom: 30px;
-}
-
-/* ========== INPUT SECTION ========== */
-.input-section h2 {
+h2 {
     color: #667eea;
     margin-bottom: 20px;
     font-size: 1.3em;
 }
 
+/* ========== INPUT SECTION ========== */
+.input-section {
+    background: #f9f9f9;
+    padding: 25px;
+    border-radius: 15px;
+    margin-bottom: 30px;
+    border: 2px solid #eee;
+}
+
+/* ========== TABS ========== */
+.input-tabs {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #ddd;
+}
+
+.tab-btn {
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    color: #999;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 1em;
+}
+
+.tab-btn:hover {
+    color: #667eea;
+}
+
+.tab-btn.active {
+    color: #667eea;
+    border-bottom-color: #667eea;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.tab-info {
+    color: #666;
+    font-size: 0.95em;
+    margin-bottom: 15px;
+    font-style: italic;
+}
+
+/* ========== INPUT GROUP ========== */
 .input-group {
     display: flex;
     gap: 10px;
-    margin-bottom: 25px;
+    margin-bottom: 20px;
 }
 
 #temaInput {
@@ -66,21 +118,6 @@ h1 {
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
-/* ========== TEXTAREA SECTION ========== */
-.textarea-section {
-    margin-top: 25px;
-    padding-top: 25px;
-    border-top: 2px solid #eee;
-}
-
-.textarea-section label {
-    display: block;
-    color: #666;
-    font-size: 0.95em;
-    margin-bottom: 10px;
-    font-weight: 500;
-}
-
 #temasTextarea {
     width: 100%;
     padding: 12px 15px;
@@ -90,7 +127,6 @@ h1 {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     resize: vertical;
     transition: border-color 0.3s;
-    margin-bottom: 10px;
 }
 
 #temasTextarea:focus {
@@ -128,8 +164,7 @@ h1 {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     font-size: 1.1em;
-    margin-top: 30px;
-    margin-bottom: 20px;
+    margin: 20px 0;
 }
 
 .btn-jugar:hover:not(:disabled) {
@@ -156,6 +191,7 @@ h1 {
     background: #ff6b6b;
     color: white;
     width: 100%;
+    padding: 12px;
 }
 
 .btn-limpiar:hover {
@@ -165,6 +201,12 @@ h1 {
 }
 
 /* ========== TEMAS LIST ========== */
+.temas-list {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 2px solid #ddd;
+}
+
 .temas-list h3 {
     color: #333;
     margin-bottom: 15px;
@@ -175,13 +217,13 @@ h1 {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-height: 300px;
+    max-height: 250px;
     overflow-y: auto;
     padding-right: 10px;
 }
 
 .tema-item {
-    background: #f5f5f5;
+    background: white;
     padding: 12px 15px;
     border-radius: 8px;
     display: flex;
@@ -189,16 +231,18 @@ h1 {
     align-items: center;
     transition: all 0.3s;
     border-left: 4px solid #667eea;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
 }
 
 .tema-item:hover {
-    background: #efefef;
+    background: #f5f5f5;
     transform: translateX(5px);
 }
 
 .tema-item span {
     color: #333;
     font-weight: 500;
+    flex: 1;
 }
 
 .tema-item button {
@@ -210,6 +254,7 @@ h1 {
     cursor: pointer;
     font-size: 0.9em;
     transition: background 0.3s;
+    flex-shrink: 0;
 }
 
 .tema-item button:hover {
@@ -228,13 +273,14 @@ h1 {
     display: flex;
     flex-direction: column;
     align-items: center;
+    margin-bottom: 30px;
 }
 
 .ruleta-wrapper {
     position: relative;
     width: 400px;
     height: 400px;
-    margin-bottom: 20px;
+    margin: 20px 0;
 }
 
 .aguja {
@@ -268,6 +314,7 @@ h1 {
     display: flex;
     align-items: center;
     justify-content: center;
+    border: 2px solid #ddd;
 }
 
 .resultado p {
@@ -280,6 +327,7 @@ h1 {
     background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
     font-weight: bold;
     font-size: 1.3em;
+    border-color: #5dd9c1;
     animation: bounce 0.6s ease-in-out;
 }
 
@@ -290,17 +338,12 @@ h1 {
 
 /* ========== RESPONSIVE ========== */
 @media (max-width: 900px) {
-    .content-wrapper {
-        grid-template-columns: 1fr;
-        gap: 30px;
+    .container {
+        padding: 20px;
     }
 
     h1 {
         font-size: 2em;
-    }
-
-    .container {
-        padding: 20px;
     }
 
     .ruleta-wrapper {
@@ -311,6 +354,10 @@ h1 {
     #ruletaCanvas {
         width: 100%;
         height: 100%;
+    }
+
+    .input-section {
+        padding: 15px;
     }
 }
 
@@ -324,6 +371,10 @@ h1 {
         margin-bottom: 20px;
     }
 
+    h2 {
+        font-size: 1.1em;
+    }
+
     .input-group {
         flex-direction: column;
     }
@@ -335,5 +386,13 @@ h1 {
     .ruleta-wrapper {
         width: 300px;
         height: 300px;
+    }
+
+    .temas-container {
+        max-height: 200px;
+    }
+
+    #temasTextarea {
+        font-size: 16px; /* Previene zoom en iOS */
     }
 }
