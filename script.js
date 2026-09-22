@@ -6,9 +6,7 @@ let rotacionActual = 0;
 const canvas = document.getElementById('ruletaCanvas');
 const ctx = canvas.getContext('2d');
 const temaInput = document.getElementById('temaInput');
-const temasTextarea = document.getElementById('temasTextarea');
 const agregarBtn = document.getElementById('agregarBtn');
-const agregarMultiplesBtn = document.getElementById('agregarMultiplesBtn');
 const jugarBtn = document.getElementById('jugarBtn');
 const limpiarBtn = document.getElementById('limpiarBtn');
 const temasContainer = document.getElementById('temasContainer');
@@ -37,6 +35,11 @@ function agregarTema() {
         return;
     }
     
+    if (temas.length >= 60) {
+        alert('Has alcanzado el máximo de 60 temas');
+        return;
+    }
+    
     if (temas.includes(tema)) {
         alert('Este tema ya existe');
         return;
@@ -47,52 +50,6 @@ function agregarTema() {
     temaInput.value = '';
     actualizarUI();
     temaInput.focus();
-}
-
-// ========== AGREGAR MÚLTIPLES TEMAS ==========
-function agregarMultiplesTemas() {
-    const texto = temasTextarea.value.trim();
-    
-    if (texto === '') {
-        alert('Por favor ingresa al menos un tema');
-        return;
-    }
-    
-    const nuevosTemas = texto
-        .split('\n')
-        .map(tema => tema.trim())
-        .filter(tema => tema !== '');
-    
-    if (nuevosTemas.length === 0) {
-        alert('No hay temas válidos para agregar');
-        return;
-    }
-    
-    let temasAgregados = 0;
-    let temasDuplicados = 0;
-    
-    nuevosTemas.forEach(tema => {
-        if (temas.includes(tema)) {
-            temasDuplicados++;
-        } else {
-            temas.push(tema);
-            temasAgregados++;
-        }
-    });
-    
-    if (temasAgregados > 0) {
-        guardarTemas();
-        temasTextarea.value = '';
-        actualizarUI();
-        
-        let mensaje = `✅ Se agregaron ${temasAgregados} tema${temasAgregados > 1 ? 's' : ''}`;
-        if (temasDuplicados > 0) {
-            mensaje += `\n⚠️ ${temasDuplicados} tema${temasDuplicados > 1 ? 's' : ''} ya existía${temasDuplicados > 1 ? 'n' : ''}`;
-        }
-        alert(mensaje);
-    } else {
-        alert(`❌ Los ${nuevosTemas.length} tema${nuevosTemas.length > 1 ? 's' : ''} ya existen`);
-    }
 }
 
 // ========== ELIMINAR TEMA ==========
@@ -325,20 +282,3 @@ temaInput.addEventListener('keypress', (e) => {
 
 // ========== INICIALIZAR ==========
 cargarTemas();
-
-// ========== FUNCIONALIDAD DE TABS ==========
-const tabButtons = document.querySelectorAll('.tab-btn');
-const tabContents = document.querySelectorAll('.tab-content');
-
-tabButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        // Remover clase active de todos
-        tabButtons.forEach(b => b.classList.remove('active'));
-        tabContents.forEach(content => content.classList.remove('active'));
-        
-        // Agregar clase active al tab clickeado
-        btn.classList.add('active');
-        const tabId = btn.getAttribute('data-tab') + '-tab';
-        document.getElementById(tabId).classList.add('active');
-    });
-});

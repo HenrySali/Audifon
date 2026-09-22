@@ -46,56 +46,6 @@ h2 {
     border: 2px solid #eee;
 }
 
-/* ========== TABS ========== */
-.input-tabs {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 20px;
-    border-bottom: 2px solid #ddd;
-}
-
-.tab-btn {
-    padding: 10px 20px;
-    background: none;
-    border: none;
-    border-bottom: 3px solid transparent;
-    color: #999;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-    font-size: 1em;
-}
-
-.tab-btn:hover {
-    color: #667eea;
-}
-
-.tab-btn.active {
-    color: #667eea;
-    border-bottom-color: #667eea;
-}
-
-.tab-content {
-    display: none;
-}
-
-.tab-content.active {
-    display: block;
-    animation: fadeIn 0.3s;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.tab-info {
-    color: #666;
-    font-size: 0.95em;
-    margin-bottom: 15px;
-    font-style: italic;
-}
-
 /* ========== INPUT GROUP ========== */
 .input-group {
     display: flex;
@@ -118,21 +68,11 @@ h2 {
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
-#temasTextarea {
-    width: 100%;
-    padding: 12px 15px;
-    border: 2px solid #ddd;
-    border-radius: 8px;
-    font-size: 1em;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    resize: vertical;
-    transition: border-color 0.3s;
-}
-
-#temasTextarea:focus {
-    outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+.input-hint {
+    color: #666;
+    font-size: 0.9em;
+    margin-bottom: 15px;
+    font-style: italic;
 }
 
 /* ========== BOTONES ========== */
