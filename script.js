@@ -12,13 +12,41 @@ const limpiarBtn = document.getElementById('limpiarBtn');
 const temasContainer = document.getElementById('temasContainer');
 const resultado = document.getElementById('resultado');
 
+// ========== TEMAS PREDETERMINADOS ==========
+const temasPredeterminados = [
+    'Matemáticas',
+    'Historia',
+    'Biología',
+    'Literatura',
+    'Geografía',
+    'Física',
+    'Química',
+    'Arte',
+    'Educación Física',
+    'Música',
+    'Informática',
+    'Inglés',
+    'Filosofía',
+    'Economía',
+    'Psicología',
+    'Sociología',
+    'Derecho',
+    'Medicina',
+    'Arquitectura',
+    'Ingeniería'
+];
+
 // ========== CARGAR TEMAS DEL LOCALSTORAGE ==========
 function cargarTemas() {
     const temasGuardados = localStorage.getItem('temas');
     if (temasGuardados) {
         temas = JSON.parse(temasGuardados);
-        actualizarUI();
+    } else {
+        // Si no hay temas guardados, usar los predeterminados
+        temas = [...temasPredeterminados];
+        guardarTemas();
     }
+    actualizarUI();
 }
 
 // ========== GUARDAR TEMAS EN LOCALSTORAGE ==========
