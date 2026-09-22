@@ -187,10 +187,12 @@ function dibujarRuleta() {
         ctx.lineWidth = 2;
         ctx.stroke();
         
-        // Dibujar texto
+        // Dibujar texto en la punta (más espacio)
         const anguloTexto = anguloInicio + anguloPorSegmento / 2;
-        const xTexto = centerX + Math.cos(anguloTexto) * (radius * 0.6);
-        const yTexto = centerY + Math.sin(anguloTexto) * (radius * 0.6);
+        // Mover el texto más hacia la punta del segmento (radius * 0.8 en lugar de 0.6)
+        const distanciaRadio = numSegmentos > 15 ? 0.75 : 0.8;
+        const xTexto = centerX + Math.cos(anguloTexto) * (radius * distanciaRadio);
+        const yTexto = centerY + Math.sin(anguloTexto) * (radius * distanciaRadio);
         
         ctx.save();
         ctx.translate(xTexto, yTexto);
