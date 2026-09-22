@@ -53,16 +53,18 @@ h2 {
     margin-bottom: 20px;
 }
 
-#temaInput {
-    flex: 1;
+#temasInput {
+    width: 100%;
     padding: 12px 15px;
     border: 2px solid #ddd;
     border-radius: 8px;
     font-size: 1em;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    resize: vertical;
     transition: border-color 0.3s;
 }
 
-#temaInput:focus {
+#temasInput:focus {
     outline: none;
     border-color: #667eea;
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -72,6 +74,7 @@ h2 {
     color: #666;
     font-size: 0.9em;
     margin-bottom: 15px;
+    margin-top: 10px;
     font-style: italic;
 }
 

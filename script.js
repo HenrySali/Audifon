@@ -5,7 +5,7 @@ let rotacionActual = 0;
 
 const canvas = document.getElementById('ruletaCanvas');
 const ctx = canvas.getContext('2d');
-const temaInput = document.getElementById('temaInput');
+const temasInput = document.getElementById('temasInput');
 const agregarBtn = document.getElementById('agregarBtn');
 const jugarBtn = document.getElementById('jugarBtn');
 const limpiarBtn = document.getElementById('limpiarBtn');
@@ -26,30 +26,65 @@ function guardarTemas() {
     localStorage.setItem('temas', JSON.stringify(temas));
 }
 
-// ========== AGREGAR TEMA ==========
+// ========== AGREGAR TEMAS ==========
 function agregarTema() {
-    const tema = temaInput.value.trim();
+    const texto = temasInput.value.trim();
     
-    if (tema === '') {
-        alert('Por favor ingresa un tema válido');
+    if (texto === '') {
+        alert('Por favor ingresa al menos un tema');
         return;
     }
     
-    if (temas.length >= 60) {
-        alert('Has alcanzado el máximo de 60 temas');
+    // Dividir por saltos de línea Y comas
+    let nuevosTemas = [];
+    
+    // Primero dividir por saltos de línea
+    const porLineas = texto.split('\n');
+    
+    porLineas.forEach(linea => {
+        // Luego dividir cada línea por comas
+        const porComas = linea.split(',');
+        porComas.forEach(tema => {
+            const temaLimpio = tema.trim();
+            if (temaLimpio !== '') {
+                nuevosTemas.push(temaLimpio);
+            }
+        });
+    });
+    
+    if (nuevosTemas.length === 0) {
+        alert('No hay temas válidos para agregar');
         return;
     }
     
-    if (temas.includes(tema)) {
-        alert('Este tema ya existe');
-        return;
-    }
+    let temasAgregados = 0;
+    let temasDuplicados = 0;
     
-    temas.push(tema);
-    guardarTemas();
-    temaInput.value = '';
-    actualizarUI();
-    temaInput.focus();
+    nuevosTemas.forEach(tema => {
+        if (temas.includes(tema)) {
+            temasDuplicados++;
+        } else if (temas.length < 60) {
+            temas.push(tema);
+            temasAgregados++;
+        }
+    });
+    
+    if (temasAgregados > 0) {
+        guardarTemas();
+        temasInput.value = '';
+        actualizarUI();
+        
+        let mensaje = `✅ Se agregaron ${temasAgregados} tema${temasAgregados > 1 ? 's' : ''}`;
+        if (temasDuplicados > 0) {
+            mensaje += `\n⚠️ ${temasDuplicados} ya existía${temasDuplicados > 1 ? 'n' : ''}`;
+        }
+        if (temas.length >= 60) {
+            mensaje += `\n⚠️ Has alcanzado el máximo de 60 temas`;
+        }
+        alert(mensaje);
+    } else {
+        alert(`❌ Todos los temas ya existen o has alcanzado el máximo`);
+    }
 }
 
 // ========== ELIMINAR TEMA ==========

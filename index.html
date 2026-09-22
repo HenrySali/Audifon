@@ -14,17 +14,15 @@
         <div class="input-section">
             <h2>Agregar Temas</h2>
             
-            <div class="input-group">
-                <input 
-                    type="text" 
-                    id="temaInput" 
-                    placeholder="Ej: Matemáticas, Historia, Biología..." 
-                    autocomplete="off"
-                >
-                <button id="agregarBtn" class="btn btn-agregar">+ Agregar</button>
-            </div>
+            <textarea 
+                id="temasInput" 
+                placeholder="Pega o escribe tus temas:&#10;- Uno por línea, O&#10;- Separados por comas&#10;&#10;Ejemplo:&#10;Enero&#10;Febrero&#10;Marzo&#10;O: Enero, Febrero, Marzo" 
+                rows="8"
+            ></textarea>
+            
+            <button id="agregarBtn" class="btn btn-agregar" style="width: 100%; margin-top: 10px;">✓ Agregar Temas</button>
 
-            <p class="input-hint">💡 Escribe cada tema y presiona "+ Agregar". Puedes agregar hasta 60 temas.</p>
+            <p class="input-hint">💡 Máximo 60 temas. Se eliminarán automáticamente los duplicados.</p>
             
             <!-- Lista de temas -->
             <div class="temas-list">
