@@ -159,6 +159,18 @@ function dibujarRuleta() {
     const anguloPorSegmento = (2 * Math.PI) / numSegmentos;
     const colores = generarColores(numSegmentos);
     
+    // Ajustar tamaño de fuente según cantidad de temas
+    let fontSize;
+    if (numSegmentos <= 6) {
+        fontSize = 14;
+    } else if (numSegmentos <= 12) {
+        fontSize = 11;
+    } else if (numSegmentos <= 20) {
+        fontSize = 9;
+    } else {
+        fontSize = 7;
+    }
+    
     // Dibujar segmentos
     for (let i = 0; i < numSegmentos; i++) {
         const anguloInicio = rotacionActual + i * anguloPorSegmento;
@@ -184,14 +196,15 @@ function dibujarRuleta() {
         ctx.translate(xTexto, yTexto);
         ctx.rotate(anguloTexto + Math.PI / 2);
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 12px Arial';
+        ctx.font = `bold ${fontSize}px Arial`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
-        // Truncar texto si es muy largo
+        // Truncar texto según cantidad de temas
         let texto = temas[i];
-        if (texto.length > 20) {
-            texto = texto.substring(0, 17) + '...';
+        let maxLength = numSegmentos > 12 ? 15 : 20;
+        if (texto.length > maxLength) {
+            texto = texto.substring(0, maxLength - 2) + '..';
         }
         ctx.fillText(texto, 0, 0);
         ctx.restore();
