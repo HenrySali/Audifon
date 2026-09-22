@@ -278,24 +278,27 @@ function determinarTemaGanador() {
     const numSegmentos = temas.length;
     const anguloPorSegmento = (2 * Math.PI) / numSegmentos;
     
-    // La aguja está en la parte superior
-    // En Canvas, 0 radianes es hacia la derecha, aumenta en sentido antihorario
-    // Así que la parte superior es π/2
-    const anguloAguja = Math.PI / 2;
+    // La aguja está en la parte superior (π/2 en Canvas)
+    // Necesitamos encontrar qué índice de tema está en esa posición
     
-    // Compensar por la rotación de la ruleta
-    let anguloSegmento = anguloAguja - rotacionActual;
+    // Partiendo de que en dibujarRuleta, el segmento i tiene ángulo:
+    // anguloInicio = rotacionActual + i * anguloPorSegmento
+    // anguloFinal = anguloInicio + anguloPorSegmento
     
-    // Normalizar entre 0 y 2π
-    while (anguloSegmento < 0) {
-        anguloSegmento += 2 * Math.PI;
+    // Entonces, si la aguja está en π/2:
+    // π/2 = rotacionActual + i * anguloPorSegmento
+    // i = (π/2 - rotacionActual) / anguloPorSegmento
+    
+    let anguloAguja = Math.PI / 2;
+    let indiceFlotante = (anguloAguja - rotacionActual) / anguloPorSegmento;
+    
+    // Normalizar indiceFlotante al rango [0, numSegmentos)
+    indiceFlotante = indiceFlotante % numSegmentos;
+    if (indiceFlotante < 0) {
+        indiceFlotante += numSegmentos;
     }
-    while (anguloSegmento >= 2 * Math.PI) {
-        anguloSegmento -= 2 * Math.PI;
-    }
     
-    // Calcular índice del segmento
-    const indice = Math.floor(anguloSegmento / anguloPorSegmento) % numSegmentos;
+    let indice = Math.floor(indiceFlotante);
     
     return temas[indice];
 }
