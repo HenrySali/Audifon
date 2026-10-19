@@ -89,7 +89,11 @@
             <section class="tabla-section">
                 <div class="tabla-header">
                     <h2>Equipos Relevados</h2>
-                    <button id="exportarBtn" class="btn-exportar">📊 Exportar a Excel</button>
+                    <div class="botones-tabla">
+                        <button id="exportarBtn" class="btn-exportar">📊 Exportar a Excel</button>
+                        <label for="importarBtn" class="btn-importar">📥 Importar Excel</label>
+                        <input type="file" id="importarBtn" accept=".xls,.xlsx" style="display: none;">
+                    </div>
                 </div>
                 
                 <div id="tablaContainer">
@@ -106,6 +110,7 @@
 
     <script src="config.js"></script>
     <script src="github-api.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

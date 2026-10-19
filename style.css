@@ -192,6 +192,26 @@ form {
     box-shadow: 0 4px 12px rgba(39, 174, 96, 0.3);
 }
 
+.btn-importar {
+    background: #9b59b6;
+    color: white;
+    padding: 12px 24px;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.3s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+}
+
+.btn-importar:hover {
+    background: #8e44ad;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(155, 89, 182, 0.3);
+}
+
 .btn-eliminar {
     background: var(--danger-color);
     color: white;
@@ -221,6 +241,12 @@ form {
 .tabla-header h2 {
     font-size: 1.3em;
     color: var(--secondary-color);
+}
+
+.botones-tabla {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 /* Table Styles */
@@ -255,6 +281,58 @@ table tbody tr:hover {
 
 table tbody tr:last-child td {
     border-bottom: none;
+}
+
+/* Tabla responsive */
+@media (max-width: 768px) {
+    table {
+        font-size: 0.9em;
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    table thead {
+        display: none;
+    }
+
+    table tbody {
+        display: block;
+    }
+
+    table tr {
+        display: block;
+        margin-bottom: 15px;
+        border: 1px solid #bdc3c7;
+        border-radius: var(--border-radius);
+        overflow: hidden;
+    }
+
+    table td {
+        display: block;
+        text-align: right;
+        padding: 10px;
+        position: relative;
+        padding-left: 50%;
+        border-bottom: 1px solid #ecf0f1;
+    }
+
+    table td:last-child {
+        border-bottom: none;
+    }
+
+    table td:before {
+        content: attr(data-label);
+        position: absolute;
+        left: 6px;
+        font-weight: bold;
+        text-align: left;
+        color: var(--secondary-color);
+    }
+
+    table tbody tr:hover {
+        background: white;
+    }
 }
 
 .certificado-si {
@@ -436,28 +514,51 @@ footer {
         font-size: 0.85em;
     }
 
+    main {
+        padding: 20px 15px;
+    }
+
+    .form-section {
+        padding: 15px;
+    }
+
     form {
         grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .form-group input,
+    .form-group select {
+        padding: 10px;
+        font-size: 16px;
     }
 
     .btn-agregar {
         grid-column: auto;
+        padding: 12px;
     }
 
     .tabla-header {
         flex-direction: column;
-        align-items: flex-start;
+        align-items: stretch;
     }
 
-    table th,
-    table td {
+    .tabla-header h2 {
+        width: 100%;
+        margin: 0;
+    }
+
+    .botones-tabla {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .btn-exportar,
+    .btn-importar {
+        flex: 1;
         padding: 10px;
-        font-size: 0.85em;
-    }
-
-    .btn-eliminar {
-        padding: 6px 10px;
-        font-size: 0.75em;
+        font-size: 0.9em;
+        min-width: 100px;
     }
 }
 
@@ -467,27 +568,95 @@ footer {
     }
 
     header {
-        padding: 20px 15px;
-    }
-
-    main {
-        padding: 20px 15px;
+        padding: 15px 12px;
     }
 
     header h1 {
         font-size: 1.2em;
     }
 
+    header p {
+        font-size: 0.9em;
+    }
+
+    main {
+        padding: 15px 12px;
+    }
+
     .form-section {
-        padding: 15px;
+        padding: 12px;
+        margin-bottom: 20px;
+    }
+
+    .form-section h2 {
+        font-size: 1.1em;
+        margin-bottom: 15px;
+    }
+
+    form {
+        gap: 10px;
+    }
+
+    .form-group label {
+        font-size: 0.9em;
+    }
+
+    .form-group input,
+    .form-group select {
+        padding: 10px;
+        font-size: 16px;
+        border: 1.5px solid #bdc3c7;
+    }
+
+    .btn-agregar {
+        padding: 12px;
+        font-size: 0.95em;
+    }
+
+    .tabla-section {
+        margin-top: 20px;
+    }
+
+    .tabla-header {
+        gap: 10px;
+    }
+
+    .tabla-header h2 {
+        font-size: 1.1em;
+    }
+
+    .botones-tabla {
+        width: 100%;
+    }
+
+    .btn-exportar,
+    .btn-importar {
+        flex: 1;
+        padding: 8px 12px;
+        font-size: 0.85em;
+        min-width: 0;
     }
 
     table {
-        font-size: 0.8em;
+        font-size: 0.85em;
     }
 
     table th,
     table td {
         padding: 8px;
+    }
+
+    .btn-eliminar {
+        padding: 6px 8px;
+        font-size: 0.75em;
+    }
+
+    .sin-datos {
+        padding: 20px 15px;
+        font-size: 0.95em;
+    }
+
+    #totalEquipos {
+        font-size: 0.9em;
     }
 }

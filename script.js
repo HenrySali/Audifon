@@ -32,6 +32,9 @@ function configurarEventos() {
     // Botón de exportar
     document.getElementById('exportarBtn').addEventListener('click', exportarExcel);
 
+    // Botón de importar
+    document.getElementById('importarBtn').addEventListener('change', importarExcel);
+
     // Modal de token
     const modal = document.getElementById('tokenModal');
     const btn = document.getElementById('tokenBtn');
@@ -153,12 +156,12 @@ function actualizarTabla() {
         const claseCertificado = equipo.certificado === 'Sí' ? 'certificado-si' : 'certificado-no';
         html += `
             <tr>
-                <td>${escaparHTML(equipo.numeroSerie)}</td>
-                <td>${escaparHTML(equipo.claseEquipo)}</td>
-                <td><span class="${claseCertificado}">${equipo.certificado}</span></td>
-                <td>${escaparHTML(equipo.piso)}</td>
-                <td>${equipo.fecha}</td>
-                <td class="acciones">
+                <td data-label="Número de Serie">${escaparHTML(equipo.numeroSerie)}</td>
+                <td data-label="Clase de Equipo">${escaparHTML(equipo.claseEquipo)}</td>
+                <td data-label="Certificado"><span class="${claseCertificado}">${equipo.certificado}</span></td>
+                <td data-label="Piso">${escaparHTML(equipo.piso)}</td>
+                <td data-label="Fecha de Ingreso">${equipo.fecha}</td>
+                <td data-label="Acciones" class="acciones">
                     <button class="btn-eliminar" onclick="eliminarEquipo(${equipo.id})">🗑️ Eliminar</button>
                 </td>
             </tr>
@@ -225,6 +228,85 @@ function verificarEstadoGitHub() {
         statusElement.classList.add('status-offline');
         btn.textContent = '🔑 Conectar GitHub';
     }
+}
+
+/**
+ * Importar archivo Excel
+ */
+function importarExcel(event) {
+    const archivo = event.target.files[0];
+    
+    if (!archivo) return;
+
+    const reader = new FileReader();
+    
+    reader.onload = function(e) {
+        try {
+            const contenido = e.target.result;
+            const workbook = XLSX.read(contenido, { type: 'binary' });
+            const nombreHoja = workbook.SheetNames[0];
+            const hoja = workbook.Sheets[nombreHoja];
+            const datos = XLSX.utils.sheet_to_json(hoja);
+
+            if (datos.length === 0) {
+                mostrarMensajeError('El archivo Excel está vacío');
+                return;
+            }
+
+            // Validar que los datos tengan las columnas correctas
+            const columnasRequeridas = ['Número de Serie', 'Clase de Equipo', 'Certificado', 'Piso'];
+            const primeraFila = datos[0];
+            const columnasPresentes = columnasRequeridas.every(col => col in primeraFila);
+
+            if (!columnasPresentes) {
+                mostrarMensajeError('El Excel no tiene el formato correcto. Verifica las columnas.');
+                return;
+            }
+
+            // Preguntar si desea reemplazar o agregar
+            const confirmacion = confirm(`Se encontraron ${datos.length} equipos. ¿Deseas reemplazar los existentes o agregarlos?`);
+            
+            if (confirmacion) {
+                // Reemplazar
+                equipos = [];
+            }
+            // Si es false, se agregan (append)
+
+            // Procesar datos
+            datos.forEach(fila => {
+                const numeroSerie = fila['Número de Serie']?.toString().trim();
+                const claseEquipo = fila['Clase de Equipo']?.toString().trim();
+                const certificado = fila['Certificado']?.toString().trim();
+                const piso = fila['Piso']?.toString().trim();
+
+                // Validar que no tenga campos vacíos
+                if (numeroSerie && claseEquipo && certificado && piso) {
+                    const equipo = {
+                        id: Date.now() + Math.random(),
+                        numeroSerie,
+                        claseEquipo,
+                        certificado: certificado === 'Sí' || certificado === 'SÍ' ? 'Sí' : 'No',
+                        piso,
+                        fecha: new Date().toLocaleDateString('es-ES')
+                    };
+                    equipos.push(equipo);
+                }
+            });
+
+            // Guardar en GitHub
+            guardarEquiposGitHub();
+            actualizarTabla();
+            mostrarMensajeExito(`✅ Se importaron ${equipos.length} equipos correctamente`);
+
+            // Limpiar input
+            event.target.value = '';
+        } catch (error) {
+            console.error('Error al importar:', error);
+            mostrarMensajeError('Error al procesar el archivo Excel: ' + error.message);
+        }
+    };
+
+    reader.readAsBinaryString(archivo);
 }
 
 /**
