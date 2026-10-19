@@ -3,53 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ruleta de Temas</title>
+    <title>Relevamiento de Equipos</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <h1>🎡 Ruleta de Temas</h1>
-        
-        <!-- Sección de entrada de temas -->
-        <div class="input-section">
-            <h2>Agregar Temas</h2>
-            
-            <textarea 
-                id="temasInput" 
-                placeholder="Un tema por línea:&#10;&#10;Enero&#10;Febrero&#10;Marzo&#10;Abril&#10;Mayo&#10;..." 
-                rows="8"
-            ></textarea>
-            
-            <button id="agregarBtn" class="btn btn-agregar" style="width: 100%; margin-top: 10px;">✓ Agregar Temas</button>
+        <header>
+            <h1>📋 Relevamiento de Equipos</h1>
+            <p>Registra los equipos con sus certificados</p>
+        </header>
 
-            <p class="input-hint">💡 Escribe un tema por línea. Máximo 60 temas.</p>
-            
-            <!-- Lista de temas -->
-            <div class="temas-list">
-                <h3>Temas Agregados (<span id="temaCount">0</span>/60):</h3>
-                <div id="temasContainer" class="temas-container">
-                    <p class="vacio">No hay temas aún. ¡Agrega uno!</p>
+        <main>
+            <!-- Formulario de ingreso -->
+            <section class="form-section">
+                <h2>Ingresar Nuevo Equipo</h2>
+                <form id="equipoForm">
+                    <div class="form-group">
+                        <label for="numeroSerie">Número de Serie:</label>
+                        <input type="text" id="numeroSerie" placeholder="Ej: SN123456789" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="claseEquipo">Clase de Equipo:</label>
+                        <input type="text" id="claseEquipo" placeholder="Ej: Monitor, CPU, Teclado, etc." required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="certificado">¿Tiene Certificado?</label>
+                        <select id="certificado" required>
+                            <option value="">-- Selecciona --</option>
+                            <option value="Sí">Sí</option>
+                            <option value="No">No</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn-agregar">✏️ Agregar Equipo</button>
+                </form>
+            </section>
+
+            <!-- Tabla de equipos -->
+            <section class="tabla-section">
+                <div class="tabla-header">
+                    <h2>Equipos Relevados</h2>
+                    <button id="exportarBtn" class="btn-exportar">📊 Exportar a Excel</button>
                 </div>
-            </div>
-        </div>
+                
+                <div id="tablaContainer">
+                    <p class="sin-datos">No hay equipos cargados aún</p>
+                </div>
+            </section>
+        </main>
 
-        <!-- Sección de la ruleta -->
-        <div class="ruleta-section">
-            <h2>Tu Ruleta</h2>
-            <div class="ruleta-wrapper">
-                <div class="aguja"></div>
-                <canvas id="ruletaCanvas" width="400" height="400"></canvas>
-            </div>
-            
-            <button id="jugarBtn" class="btn btn-jugar" disabled>🎲 JUGAR</button>
-            
-            <div id="resultado" class="resultado">
-                <p>Agrega temas y presiona JUGAR</p>
-            </div>
-        </div>
-
-        <!-- Botón para limpiar todo -->
-        <button id="limpiarBtn" class="btn btn-limpiar">🗑️ Limpiar Todo</button>
+        <footer>
+            <p>© 2024 Sistema de Relevamiento de Equipos</p>
+        </footer>
     </div>
 
     <script src="script.js"></script>
