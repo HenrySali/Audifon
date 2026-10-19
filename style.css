@@ -199,11 +199,15 @@ form {
     border-radius: var(--border-radius);
     cursor: pointer;
     font-weight: 600;
+    font-size: 1em;
     transition: all 0.3s;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
     border: none;
+    text-decoration: none;
+    white-space: nowrap;
 }
 
 .btn-importar:hover {
