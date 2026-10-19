@@ -1,20 +1,85 @@
 // Array para almacenar los equipos
 let equipos = [];
+let sincronizandoGitHub = false;
 
-// Cargar equipos del localStorage al iniciar
+// Cargar equipos al iniciar
 document.addEventListener('DOMContentLoaded', () => {
-    cargarEquipos();
-    actualizarTabla();
+    inicializarApp();
+    configurarEventos();
 });
 
-// Manejar el envío del formulario
-document.getElementById('equipoForm').addEventListener('submit', (e) => {
-    e.preventDefault();
-    agregarEquipo();
-});
+/**
+ * Inicializar la aplicación
+ */
+function inicializarApp() {
+    cargarEquiposGitHub();
+    verificarEstadoGitHub();
+    
+    // Verificar estado cada 30 segundos
+    setInterval(verificarEstadoGitHub, 30000);
+}
 
-// Botón de exportar
-document.getElementById('exportarBtn').addEventListener('click', exportarExcel);
+/**
+ * Configurar eventos
+ */
+function configurarEventos() {
+    // Formulario
+    document.getElementById('equipoForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        agregarEquipo();
+    });
+
+    // Botón de exportar
+    document.getElementById('exportarBtn').addEventListener('click', exportarExcel);
+
+    // Modal de token
+    const modal = document.getElementById('tokenModal');
+    const btn = document.getElementById('tokenBtn');
+    const span = document.querySelector('.close');
+
+    btn.addEventListener('click', () => {
+        modal.style.display = 'block';
+    });
+
+    span.addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+
+    window.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.style.display = 'none';
+        }
+    });
+
+    // Formulario de token
+    document.getElementById('tokenForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const token = document.getElementById('githubToken').value.trim();
+        
+        if (!token) {
+            alert('Por favor ingresa un token');
+            return;
+        }
+
+        // Verificar token
+        const resultado = await verificarConexionGitHub(token);
+        const messageDiv = document.getElementById('tokenMessage');
+
+        if (resultado.valido) {
+            guardarToken(token);
+            messageDiv.innerHTML = `<p class="success">✅ Conectado como: ${resultado.usuario}</p>`;
+            setTimeout(() => {
+                document.getElementById('tokenModal').style.display = 'none';
+                document.getElementById('tokenForm').reset();
+                messageDiv.innerHTML = '';
+                cargarEquiposGitHub();
+                verificarEstadoGitHub();
+            }, 1500);
+        } else {
+            messageDiv.innerHTML = `<p class="error">❌ Error: ${resultado.error}</p>`;
+        }
+    });
+}
 
 /**
  * Agregar un nuevo equipo
@@ -44,8 +109,8 @@ function agregarEquipo() {
     // Agregar al array
     equipos.push(equipo);
 
-    // Guardar en localStorage
-    guardarEquipos();
+    // Guardar en GitHub
+    guardarEquiposGitHub();
 
     // Limpiar formulario
     document.getElementById('equipoForm').reset();
@@ -117,26 +182,48 @@ function actualizarTabla() {
 function eliminarEquipo(id) {
     if (confirm('¿Estás seguro de que deseas eliminar este equipo?')) {
         equipos = equipos.filter(eq => eq.id !== id);
-        guardarEquipos();
+        guardarEquiposGitHub();
         actualizarTabla();
         mostrarMensajeExito('Equipo eliminado correctamente');
     }
 }
 
 /**
- * Guardar equipos en localStorage
+ * Guardar equipos localmente (fallback)
  */
-function guardarEquipos() {
+function guardarEquiposLocal() {
     localStorage.setItem('equipos', JSON.stringify(equipos));
 }
 
 /**
- * Cargar equipos del localStorage
+ * Cargar equipos locales (fallback)
  */
-function cargarEquipos() {
+function cargarEquiposLocal() {
     const datos = localStorage.getItem('equipos');
     if (datos) {
         equipos = JSON.parse(datos);
+    }
+    actualizarTabla();
+}
+
+/**
+ * Verificar estado de conexión con GitHub
+ */
+function verificarEstadoGitHub() {
+    const token = obtenerToken();
+    const statusElement = document.getElementById('statusGitHub');
+    const btn = document.getElementById('tokenBtn');
+
+    if (token) {
+        statusElement.textContent = '🟢 Online';
+        statusElement.classList.remove('status-offline');
+        statusElement.classList.add('status-online');
+        btn.textContent = '🔑 Cambiar Token';
+    } else {
+        statusElement.textContent = '⚫ Offline';
+        statusElement.classList.remove('status-online');
+        statusElement.classList.add('status-offline');
+        btn.textContent = '🔑 Conectar GitHub';
     }
 }
 
@@ -149,14 +236,7 @@ function exportarExcel() {
         return;
     }
 
-    // Crear contenido CSV
-    let csv = 'Número de Serie,Clase de Equipo,Certificado,Fecha de Ingreso\n';
-
-    equipos.forEach(equipo => {
-        csv += `"${equipo.numeroSerie}","${equipo.claseEquipo}","${equipo.certificado}","${equipo.fecha}"\n`;
-    });
-
-    // Convertir CSV a datos de Excel (usando HTML)
+    // Generar tabla HTML para Excel
     const hojaExcel = generarHojaExcel(equipos);
 
     // Crear blob y descargar
@@ -269,6 +349,33 @@ function mostrarMensajeExito(mensaje) {
         alerta.style.animation = 'slideOut 0.3s ease';
         setTimeout(() => alerta.remove(), 300);
     }, 2000);
+}
+
+/**
+ * Mostrar mensaje de error temporal
+ */
+function mostrarMensajeError(mensaje) {
+    const alerta = document.createElement('div');
+    alerta.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #e74c3c;
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
+        z-index: 1000;
+        animation: slideIn 0.3s ease;
+    `;
+    alerta.textContent = mensaje;
+
+    document.body.appendChild(alerta);
+
+    setTimeout(() => {
+        alerta.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => alerta.remove(), 300);
+    }, 3000);
 }
 
 /**

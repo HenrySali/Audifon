@@ -11,7 +11,41 @@
         <header>
             <h1>📋 Relevamiento de Equipos</h1>
             <p>Registra los equipos con sus certificados</p>
+            <div class="header-actions">
+                <button id="tokenBtn" class="btn-token">🔑 Conectar GitHub</button>
+                <span id="statusGitHub" class="status-offline">Offline</span>
+            </div>
         </header>
+
+        <!-- Modal de Token -->
+        <div id="tokenModal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <h2>Conectar con GitHub</h2>
+                <p>Para sincronizar datos entre dispositivos, necesitas un Personal Access Token de GitHub.</p>
+                
+                <div class="token-info">
+                    <h3>¿Cómo obtener tu token?</h3>
+                    <ol>
+                        <li>Ve a <a href="https://github.com/settings/tokens" target="_blank">GitHub Settings → Tokens</a></li>
+                        <li>Haz clic en "Generate new token" (Personal access tokens)</li>
+                        <li>Dale el nombre "Audifon"</li>
+                        <li>Selecciona solo el permiso <strong>repo</strong></li>
+                        <li>Copia el token generado</li>
+                    </ol>
+                </div>
+
+                <form id="tokenForm">
+                    <div class="form-group">
+                        <label for="githubToken">Token de GitHub:</label>
+                        <input type="password" id="githubToken" placeholder="Pega tu token aquí" required>
+                    </div>
+                    <button type="submit" class="btn-agregar">Conectar</button>
+                </form>
+
+                <div id="tokenMessage"></div>
+            </div>
+        </div>
 
         <main>
             <!-- Formulario de ingreso -->
@@ -70,6 +104,8 @@
         </footer>
     </div>
 
+    <script src="config.js"></script>
+    <script src="github-api.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
