@@ -32,7 +32,12 @@ function configurarEventos() {
     // Botón de exportar
     document.getElementById('exportarBtn').addEventListener('click', exportarExcel);
 
-    // Botón de importar
+    // Botón de importar visible
+    document.getElementById('importarBtnVisible').addEventListener('click', () => {
+        document.getElementById('importarBtn').click();
+    });
+
+    // Input de importar
     document.getElementById('importarBtn').addEventListener('change', importarExcel);
 
     // Modal de token
