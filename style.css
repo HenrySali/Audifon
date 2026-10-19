@@ -251,6 +251,8 @@ form {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
+    width: 100%;
+    justify-content: space-between;
 }
 
 /* Table Styles */
@@ -622,23 +624,31 @@ footer {
     }
 
     .tabla-header {
-        gap: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: stretch;
     }
 
     .tabla-header h2 {
         font-size: 1.1em;
+        margin: 0;
     }
 
     .botones-tabla {
         width: 100%;
+        display: flex;
+        flex-direction: row;
+        gap: 8px;
+        flex-wrap: wrap;
     }
 
     .btn-exportar,
     .btn-importar {
         flex: 1;
-        padding: 8px 12px;
-        font-size: 0.85em;
-        min-width: 0;
+        min-width: calc(50% - 4px);
+        padding: 10px 8px;
+        font-size: 0.8em;
     }
 
     table {
