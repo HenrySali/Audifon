@@ -37,6 +37,16 @@
                         </select>
                     </div>
 
+                    <div class="form-group">
+                        <label for="piso">Número de Piso:</label>
+                        <select id="piso" required>
+                            <option value="">-- Selecciona --</option>
+                            <option value="Piso 1">Piso 1</option>
+                            <option value="Piso 2">Piso 2</option>
+                            <option value="Piso 3">Piso 3</option>
+                        </select>
+                    </div>
+
                     <button type="submit" class="btn-agregar">✏️ Agregar Equipo</button>
                 </form>
             </section>
@@ -51,6 +61,7 @@
                 <div id="tablaContainer">
                     <p class="sin-datos">No hay equipos cargados aún</p>
                 </div>
+                <p id="totalEquipos" style="margin-top: 15px; text-align: right; color: #7f8c8d; font-weight: 600;"></p>
             </section>
         </main>
 

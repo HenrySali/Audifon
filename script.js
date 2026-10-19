@@ -23,9 +23,10 @@ function agregarEquipo() {
     const numeroSerie = document.getElementById('numeroSerie').value.trim();
     const claseEquipo = document.getElementById('claseEquipo').value.trim();
     const certificado = document.getElementById('certificado').value;
+    const piso = document.getElementById('piso').value;
 
     // Validación
-    if (!numeroSerie || !claseEquipo || !certificado) {
+    if (!numeroSerie || !claseEquipo || !certificado || !piso) {
         alert('Por favor completa todos los campos');
         return;
     }
@@ -36,6 +37,7 @@ function agregarEquipo() {
         numeroSerie,
         claseEquipo,
         certificado,
+        piso,
         fecha: new Date().toLocaleDateString('es-ES')
     };
 
@@ -63,6 +65,7 @@ function actualizarTabla() {
 
     if (equipos.length === 0) {
         container.innerHTML = '<p class="sin-datos">No hay equipos cargados aún</p>';
+        document.getElementById('totalEquipos').textContent = '';
         return;
     }
 
@@ -73,6 +76,7 @@ function actualizarTabla() {
                     <th>Número de Serie</th>
                     <th>Clase de Equipo</th>
                     <th>Certificado</th>
+                    <th>Piso</th>
                     <th>Fecha de Ingreso</th>
                     <th>Acciones</th>
                 </tr>
@@ -87,6 +91,7 @@ function actualizarTabla() {
                 <td>${escaparHTML(equipo.numeroSerie)}</td>
                 <td>${escaparHTML(equipo.claseEquipo)}</td>
                 <td><span class="${claseCertificado}">${equipo.certificado}</span></td>
+                <td>${escaparHTML(equipo.piso)}</td>
                 <td>${equipo.fecha}</td>
                 <td class="acciones">
                     <button class="btn-eliminar" onclick="eliminarEquipo(${equipo.id})">🗑️ Eliminar</button>
@@ -101,6 +106,9 @@ function actualizarTabla() {
     `;
 
     container.innerHTML = html;
+    
+    // Mostrar total de equipos
+    document.getElementById('totalEquipos').textContent = `Total de equipos registrados: ${equipos.length}`;
 }
 
 /**
@@ -207,6 +215,7 @@ function generarHojaExcel(datos) {
                         <th>Número de Serie</th>
                         <th>Clase de Equipo</th>
                         <th>Certificado</th>
+                        <th>Piso</th>
                         <th>Fecha de Ingreso</th>
                     </tr>
                 </thead>
@@ -219,6 +228,7 @@ function generarHojaExcel(datos) {
                 <td>${escaparHTML(equipo.numeroSerie)}</td>
                 <td>${escaparHTML(equipo.claseEquipo)}</td>
                 <td>${equipo.certificado}</td>
+                <td>${escaparHTML(equipo.piso)}</td>
                 <td>${equipo.fecha}</td>
             </tr>
         `;
